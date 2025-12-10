@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  vue-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ai-db
+    ports:
+      - "80:80"
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+    networks:
+      - app-network
+    labels:
+      - "com.example.description=AI-DB"
+      - "com.example.version=1.0.0"
+
+networks:
+  app-network:
+    driver: bridge

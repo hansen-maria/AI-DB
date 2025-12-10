@@ -1,0 +1,40 @@
+# Dependencies
+node_modules
+npm-debug.log
+yarn-error.log
+
+# Build outputs
+dist
+dist-ssr
+*.local
+
+# Git
+.git
+.gitignore
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*.swn
+.DS_Store
+
+# Documentation
+README.md
+DEPLOYMENT.md
+*.md
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Tests
+coverage
+.nyc_output
+
+# Misc
+.env
+.env.local
+.env.*.local
