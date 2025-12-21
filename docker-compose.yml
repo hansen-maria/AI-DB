@@ -8,14 +8,28 @@ services:
     container_name: ai-db
     ports:
       - "80:80"
+      - "443:443"
+    volumes:
+      - certbot-webroot:/var/www/certbot:ro
+      - certbot-certs:/etc/letsencrypt:ro
     restart: unless-stopped
-    environment:
-      - NODE_ENV=production
     networks:
       - app-network
-    labels:
-      - "com.example.description=AI-DB"
-      - "com.example.version=1.0.0"
+
+  certbot:
+    image: certbot/certbot
+    container_name: certbot
+    volumes:
+      - certbot-webroot:/var/www/certbot
+      - certbot-certs:/etc/letsencrypt
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
+    restart: unless-stopped
+    networks:
+      - app-network
+
+volumes:
+  certbot-webroot:
+  certbot-certs:
 
 networks:
   app-network:
