@@ -44,9 +44,8 @@ onMounted(() => {
     <header class="header">
       <div class="logo">
         <div class="logo-image">
-          <div class="logo-placeholder">
-            <span>LOGO</span>
-          </div>
+          <img v-if="isDarkMode" src="@/assets/logo-dark.png" alt="AI-DB Logo" class="logo-img" />
+          <img v-else src="@/assets/logo-light.png" alt="AI-DB Logo" class="logo-img" />
         </div>
         <div class="logo-text">
           <h1>AI-DB</h1>
@@ -265,26 +264,16 @@ onMounted(() => {
   flex-shrink: 0;
 }
 
-.logo-placeholder {
-  width: 50px;
-  height: 50px;
-  aspect-ratio: 1 / 1;
-  background: linear-gradient(135deg, hsla(160, 100%, 37%, 1) 0%, hsla(160, 100%, 27%, 1) 100%);
+.logo-img {
+  width: 75px;
+  height: 75px;
+  object-fit: contain;
   border-radius: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: white;
-  font-weight: 600;
-  font-size: 0.7rem;
-  letter-spacing: 0.5px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
   transition: transform 0.3s, box-shadow 0.3s;
 }
 
-.logo-placeholder:hover {
+.logo-img:hover {
   transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 
 .logo-text {
