@@ -1,9 +1,10 @@
 version: '3.8'
 
 services:
+  # Vue.js frontend (configured with nginx)
   vue-app:
     build:
-      context: ..
+      context: ./frontend
       dockerfile: Dockerfile
     container_name: ai-db
     ports:
@@ -16,6 +17,21 @@ services:
     networks:
       - app-network
 
+  # Rust backend
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ai-db-api
+    expose:
+      - "8000"
+    environment:
+      - RUST_LOG=info
+    restart: unless-stopped
+    networks:
+      - app-network
+
+  # Certbot
   certbot:
     image: certbot/certbot
     container_name: certbot
