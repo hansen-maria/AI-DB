@@ -12,7 +12,7 @@ COPY package*.json ./
 RUN npm ci --include=dev
 
 # Copy source code
-COPY . .
+COPY .. .
 
 # Build production
 RUN npm run build
