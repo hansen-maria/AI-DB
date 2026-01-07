@@ -45,7 +45,7 @@ const router = createRouter({
             component: HomeView // Placeholder, will redirect
         }
     ],
-    scrollBehavior(to, from, savedPosition) {
+    scrollBehavior(to, _from, savedPosition) {
         if (savedPosition) {
             return savedPosition
         } else if (to.hash) {
@@ -57,7 +57,7 @@ const router = createRouter({
 })
 
 // Update page title
-router.beforeEach((to, from, next) => {
+router.beforeEach((to, _from, next) => {
     document.title = (to.meta.title as string) || 'AI-DB'
     next()
 })

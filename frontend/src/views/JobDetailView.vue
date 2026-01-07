@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRoute, useRouter, RouterLink } from 'vue-router'
-import { getJob, pollJobUntilComplete, deleteJob, type JobResponse, type JobStatus } from '../api/jobs.ts'
+import { getJob, deleteJob, type JobResponse, type JobStatus } from '../api/jobs.ts'
 
 const route = useRoute()
 const router = useRouter()
