@@ -108,7 +108,7 @@ onMounted(() => {
 
     <!-- Footer -->
     <footer class="global-footer">
-      <p>&copy; 2025 AI-DB Project. Built for the genomics research community.</p>
+      <p>&copy; 2026 AI-DB Project. Built for the genomics research community.</p>
     </footer>
   </div>
 </template>
