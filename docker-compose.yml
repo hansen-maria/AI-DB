@@ -27,8 +27,12 @@ services:
     container_name: ai-db-api
     expose:
       - "8000"
+    volumes:
+      # Bakta DB read only
+      - /mnt/bakta-db/db-full:/bakta-db:ro
     environment:
       - RUST_LOG=info
+      - BAKTA_DB=/bakta-db
     restart: unless-stopped
     networks:
       - app-network
