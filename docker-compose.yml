@@ -29,7 +29,7 @@ services:
       - "8000"
     volumes:
       # Bakta DB read only
-      - /mnt/bakta-db/db-full:/bakta-db:ro
+      - /mnt/bakta-db/db:/bakta-db:ro
     environment:
       - RUST_LOG=info
       - BAKTA_DB=/bakta-db
