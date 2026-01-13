@@ -72,7 +72,7 @@ async function handleDelete() {
   deleting.value = true
   try {
     await deleteJob(jobId.value)
-    router.push({ name: 'jobs' })
+    await router.push({name: 'jobs'})
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Failed to delete job'
     deleting.value = false
@@ -81,6 +81,24 @@ async function handleDelete() {
 
 function formatDate(dateStr: string) {
   return new Date(dateStr).toLocaleString()
+}
+
+// Database URL generators
+function getUniRef100Url(id: string): string {
+  return `https://www.uniprot.org/uniref/UniRef100_${id}`
+}
+
+function getUniParcUrl(id: string): string {
+  return `https://www.uniprot.org/uniparc/${id}`
+}
+
+function getNcbiUrl(id: string): string {
+  return `https://www.ncbi.nlm.nih.gov/protein/${id}`
+}
+
+// Check if sequence has any database IDs
+function hasAnnotationLinks(seq: { uniparc_id?: string | null; ncbi_nrp_id?: string | null; uniref100_id?: string | null }): boolean {
+  return !!(seq.uniparc_id || seq.ncbi_nrp_id || seq.uniref100_id)
 }
 
 onMounted(loadJob)
@@ -223,7 +241,58 @@ onUnmounted(stopPolling)
                 <td class="seq-id">{{ seq.id }}</td>
                 <td>{{ seq.length }}</td>
                 <td class="hash">{{ seq.md5_hash.substring(0, 12) }}...</td>
-                <td>{{ seq.annotation || '-' }}</td>
+                <td class="annotation-cell">
+                  <template v-if="hasAnnotationLinks(seq)">
+                    <div class="annotation-links">
+                      <a
+                          v-if="seq.uniref100_id"
+                          :href="getUniRef100Url(seq.uniref100_id)"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          class="db-link uniref"
+                      >
+                        <span class="db-badge">UniRef100</span>
+                        <span class="db-id">{{ seq.uniref100_id }}</span>
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+                          <polyline points="15 3 21 3 21 9"/>
+                          <line x1="10" y1="14" x2="21" y2="3"/>
+                        </svg>
+                      </a>
+                      <a
+                          v-if="seq.uniparc_id"
+                          :href="getUniParcUrl(seq.uniparc_id)"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          class="db-link uniparc"
+                      >
+                        <span class="db-badge">UniParc</span>
+                        <span class="db-id">{{ seq.uniparc_id }}</span>
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+                          <polyline points="15 3 21 3 21 9"/>
+                          <line x1="10" y1="14" x2="21" y2="3"/>
+                        </svg>
+                      </a>
+                      <a
+                          v-if="seq.ncbi_nrp_id"
+                          :href="getNcbiUrl(seq.ncbi_nrp_id)"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          class="db-link ncbi"
+                      >
+                        <span class="db-badge">NCBI</span>
+                        <span class="db-id">{{ seq.ncbi_nrp_id }}</span>
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+                          <polyline points="15 3 21 3 21 9"/>
+                          <line x1="10" y1="14" x2="21" y2="3"/>
+                        </svg>
+                      </a>
+                    </div>
+                  </template>
+                  <span v-else class="no-annotation">-</span>
+                </td>
                 <td>
                     <span v-if="seq.annotation_source" :class="['source-badge', seq.annotation_source]">
                       {{ seq.annotation_source === 'hash_match' ? 'Hash' : 'Alignment' }}
@@ -600,6 +669,102 @@ tr:last-child td {
 .source-badge.none {
   background: rgba(158, 158, 158, 0.15);
   color: #9e9e9e;
+}
+
+/* Annotation Links */
+.annotation-cell {
+  min-width: 200px;
+}
+
+.annotation-links {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.db-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  text-decoration: none;
+  font-size: 0.8rem;
+  transition: all 0.2s;
+  width: fit-content;
+}
+
+.db-link:hover {
+  transform: translateX(2px);
+}
+
+.db-link svg {
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+
+.db-link:hover svg {
+  opacity: 1;
+}
+
+.db-badge {
+  font-weight: 600;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  padding: 0.1rem 0.3rem;
+  border-radius: 3px;
+}
+
+.db-id {
+  font-family: monospace;
+  font-size: 0.8rem;
+}
+
+/* UniRef100 */
+.db-link.uniref {
+  background: rgba(156, 39, 176, 0.1);
+  color: #9c27b0;
+}
+
+.db-link.uniref:hover {
+  background: rgba(156, 39, 176, 0.2);
+}
+
+.db-link.uniref .db-badge {
+  background: rgba(156, 39, 176, 0.2);
+}
+
+/* UniParc */
+.db-link.uniparc {
+  background: rgba(33, 150, 243, 0.1);
+  color: #2196f3;
+}
+
+.db-link.uniparc:hover {
+  background: rgba(33, 150, 243, 0.2);
+}
+
+.db-link.uniparc .db-badge {
+  background: rgba(33, 150, 243, 0.2);
+}
+
+/* NCBI */
+.db-link.ncbi {
+  background: rgba(76, 175, 80, 0.1);
+  color: #4caf50;
+}
+
+.db-link.ncbi:hover {
+  background: rgba(76, 175, 80, 0.2);
+}
+
+.db-link.ncbi .db-badge {
+  background: rgba(76, 175, 80, 0.2);
+}
+
+.no-annotation {
+  color: var(--color-text);
+  opacity: 0.5;
 }
 
 /* Error Section */

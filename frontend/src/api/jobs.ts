@@ -17,6 +17,9 @@ export interface SequenceInfo {
     length: number;
     annotation: string | null;
     annotation_source: string | null;
+    uniparc_id: string | null;
+    ncbi_nrp_id: string | null;
+    uniref100_id: string | null;
 }
 
 export interface JobResponse {
