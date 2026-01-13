@@ -67,6 +67,7 @@ export async function createJobWithFile(
     const response = await fetch(`${API_BASE}/job/`, {
         method: 'POST',
         body: formData,
+        credentials: 'include', // Include cookies
     });
 
     // Check content type to avoid parsing HTML as JSON
@@ -103,6 +104,7 @@ export async function createJobWithContent(
     const response = await fetch(`${API_BASE}/job/`, {
         method: 'POST',
         body: formData,
+        credentials: 'include', // Include cookies
     });
 
     // Check content type to avoid parsing HTML as JSON
@@ -127,7 +129,9 @@ export async function createJobWithContent(
  * Get job status and results
  */
 export async function getJob(jobId: string): Promise<JobResponse> {
-    const response = await fetch(`${API_BASE}/job/${jobId}`);
+    const response = await fetch(`${API_BASE}/job/${jobId}`, {
+        credentials: 'include', // Include cookies
+    });
 
     // Check content type to avoid parsing HTML as JSON
     const contentType = response.headers.get('content-type');
@@ -154,7 +158,9 @@ export async function getJob(jobId: string): Promise<JobResponse> {
  * List all jobs
  */
 export async function listJobs(limit = 100): Promise<JobResponse[]> {
-    const response = await fetch(`${API_BASE}/jobs/?limit=${limit}`);
+    const response = await fetch(`${API_BASE}/jobs/?limit=${limit}`, {
+        credentials: 'include', // Include cookies
+    });
 
     // Check content type to avoid parsing HTML as JSON
     const contentType = response.headers.get('content-type');
@@ -182,6 +188,7 @@ export async function listJobs(limit = 100): Promise<JobResponse[]> {
 export async function deleteJob(jobId: string): Promise<void> {
     const response = await fetch(`${API_BASE}/job/${jobId}`, {
         method: 'DELETE',
+        credentials: 'include', // Include cookies
     });
 
     if (!response.ok) {

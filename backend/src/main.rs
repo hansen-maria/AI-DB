@@ -8,12 +8,14 @@ use axum::{
     routing::{delete, get, post},
     Json, Router,
 };
+use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use chrono::{DateTime, Utc};
 use md5::{Digest, Md5};
 use parking_lot::RwLock;
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, env, net::SocketAddr, path::PathBuf, sync::Arc};
+use axum::http::{header, Method};
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use utoipa::{OpenApi, ToSchema};
@@ -80,6 +82,9 @@ pub struct JobResponse {
     pub sequences: Option<Vec<SequenceInfo>>,
     /// Error messages (if an error occurred)
     pub error_message: Option<String>,
+    /// Owner ID (from cookie, not serialized to client)
+    #[serde(skip_serializing)]
+    pub owner_id: Option<String>,
 }
 
 /// Response after job creation
@@ -175,8 +180,67 @@ impl AppState {
 }
 
 // ============================================================================
+// Constants
+// ============================================================================
+
+const OWNER_COOKIE_NAME: &str = "ai_db_user";
+const COOKIE_MAX_AGE_DAYS: i64 = 365; // 1 year
+
+// ============================================================================
 // Helper Functions
 // ============================================================================
+
+/// Generates or retrieves an owner identifier stored in a cookie.
+///
+/// This function checks if a cookie matching the owner's identifier exists
+/// within the provided `CookieJar`. If it exists, the function retrieves
+/// the value of the cookie and returns it along with the unchanged `CookieJar`.
+/// If the owner's cookie does not exist, a new unique identifier is generated,
+/// stored in a cookie, and added to the `CookieJar`.
+///
+/// # Parameters
+/// - `jar`: A `CookieJar` containing cookies for the client request. It is
+///   used to check for an existing owner cookie or to store a new one.
+///
+/// # Returns
+/// A tuple containing:
+/// - `String`: The owner identifier, either retrieved from an existing cookie
+///   or newly generated.
+/// - `CookieJar`: The updated `CookieJar` that contains the new owner cookie
+///   if one was created.
+///
+/// # Behavior
+/// - If the cookie with the name `OWNER_COOKIE_NAME` exists, its value is
+///   extracted and returned.
+/// - If the cookie does not exist:
+///   - A new identifier is generated using `Uuid::new_v4`.
+///   - The new identifier is stored in a cookie with the following properties:
+///     - Path set to the root directory (`"/"`).
+///     - HTTP-only flag is set (`http_only(true)`).
+///     - SameSite protection is set to `Lax`.
+///     - Maximum age of the cookie is defined by `COOKIE_MAX_AGE_DAYS`.
+///   - The new cookie is added to the `CookieJar`.
+///
+/// # Example
+/// ```rust
+/// let jar = CookieJar::new();
+/// let (owner_id, updated_jar) = get_or_create_owner(jar);
+/// println!("Owner ID: {}", owner_id);
+/// ```
+fn get_or_create_owner(jar: CookieJar) -> (String, CookieJar) {
+    if let Some(cookie) = jar.get(OWNER_COOKIE_NAME) {
+        (cookie.value().to_string(), jar)
+    } else {
+        let new_id = Uuid::new_v4().to_string();
+        let cookie = Cookie::build((OWNER_COOKIE_NAME, new_id.clone()))
+            .path("/")
+            .http_only(true)
+            .same_site(SameSite::Lax)
+            .max_age(time::Duration::days(COOKIE_MAX_AGE_DAYS))
+            .build();
+        (new_id, jar.add(cookie))
+    }
+}
 
 /// Parses a FASTA-formatted string and returns a vector of tuples, where each tuple contains a
 /// sequence identifier (header) and its corresponding sequence.
@@ -775,11 +839,15 @@ async fn get_job(
 ///   - Type: `Multipart`
 ///   - Represents the parsed multipart form containing the input data.
 ///
+/// - `jar`:
+///   - Type: `CookieJar`
+///   - Cookie jar containing the session cookie.
+///
 /// # Behavior
 /// 1. Processes the multipart form to extract required fields.
 /// 2. Validates the input, ensuring either `file` or `fasta_content` is provided.
 /// 3. Parses the FASTA content into sequences and validates them.
-/// 4. Creates a unique job ID and stores the job with an initial `Pending` status in a shared job store.
+/// 4. Creates a unique job ID associate to the user via a session cookie and stores the job with an initial `Pending` status in a shared job store.
 /// 5. Spawns a background task to process the job further asynchronously.
 ///
 /// # Errors
@@ -815,8 +883,12 @@ async fn get_job(
 )]
 async fn create_job(
     State(state): State<AppState>,
+    jar: CookieJar,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
+    // Get or create owner ID from cookie
+    let (owner_id, jar) = get_or_create_owner(jar);
+
     let mut fasta_content: Option<String> = None;
     let mut filename: Option<String> = None;
     let mut job_name: Option<String> = None;
@@ -908,6 +980,7 @@ async fn create_job(
         alignment_matches: 0,
         sequences: None,
         error_message: None,
+        owner_id: Some(owner_id.clone()),
     };
 
     // Store job
@@ -925,21 +998,22 @@ async fn create_job(
         process_job(&state_clone, &job_id_clone, sequences);
     });
 
+    // Return response with cookie jar
     (
         StatusCode::CREATED,
+        jar,
         Json(JobCreateResponse {
             job_id,
             status: JobStatus::Pending,
             message: "Job successfully created. Processing started.".to_string(),
             sequence_count,
         }),
-    )
-        .into_response()
+    ).into_response()
 }
 
-/// `list_jobs` is an HTTP GET endpoint to retrieve a list of jobs.
+/// `list_jobs` is an HTTP GET endpoint to retrieve a list of jobs created by the user.
 ///
-/// This endpoint is part of the "Jobs" API and provides a paginated list of jobs
+/// This endpoint is part of the "Jobs" API and provides a paginated list of jobs created by the user
 /// with an optional limit parameter to specify the maximum number of jobs to return.
 /// By default, the limit is set to 100 if not provided in the query parameters.
 ///
@@ -961,6 +1035,7 @@ async fn create_job(
 ///
 /// - `State<AppState>`: Application state containing shared resources, such as the in-memory jobs store.
 ///     - Used to access the current list of jobs.
+/// - `CookieJar`: Cookie jar containing the session cookie.
 /// - `Query<ListJobsQuery>`: Query parameters passed to the endpoint, including the optional `limit`.
 ///
 /// # Returns
@@ -1016,12 +1091,28 @@ async fn create_job(
 )]
 async fn list_jobs(
     State(state): State<AppState>,
+    jar: CookieJar,
     Query(query): Query<ListJobsQuery>,
 ) -> impl IntoResponse {
     let limit = query.limit.unwrap_or(100);
 
+    // Get owner ID from cookie
+    let owner_id = jar.get(OWNER_COOKIE_NAME).map(|c| c.value().to_string());
+
     let jobs = state.jobs.read();
-    let mut job_list: Vec<JobResponse> = jobs.values().cloned().collect();
+
+    // Filter jobs by owner_id
+    let mut job_list: Vec<JobResponse> = jobs
+        .values()
+        .filter(|job| {
+            // Only show jobs that belong to this owner
+            match (&job.owner_id, &owner_id) {
+                (Some(job_owner), Some(cookie_owner)) => job_owner == cookie_owner,
+                _ => false, // Don't show jobs without owner or if no cookie
+            }
+        })
+        .cloned()
+        .collect();
 
     // Sort by created_at descending
     job_list.sort_by(|a, b| b.created_at.cmp(&a.created_at));
@@ -1045,9 +1136,11 @@ async fn list_jobs(
 /// # Parameters
 /// - `job_id` (path parameter): A `String` representing the unique ID of the job to be deleted.
 ///   The `job_id` is expected to be in the UUID format.
+/// - `jar`: Cookie jar containing the session cookie.
 ///
 /// # Responses
 /// - **204 No Content:** The job was successfully deleted.
+/// - **403 Forbidden:** The job cannot be deleted by the user with the `jar` session cookie.
 /// - **404 Not Found:** The job with the specified `job_id` was not found.
 ///   The response includes an `ErrorResponse` with details.
 ///
@@ -1077,11 +1170,6 @@ async fn list_jobs(
 /// - The `AppState` is used to access a shared, thread-safe state which contains the jobs.
 /// - The jobs are stored in a `RwLock` to enable concurrent access.
 /// - The `ErrorResponse` struct must be implemented to contain the `detail` field for error messages.
-///
-/// # Implementation
-/// This function acquires a write lock on the `jobs` map in `AppState` to remove the specified job.
-/// If the job is found, it is deleted, and the function returns a `204 No Content` response.
-/// If the job is not found, a `404 Not Found` response is returned with an appropriate error message.
 #[utoipa::path(
     delete,
     path = "/api/job/{job_id}",
@@ -1091,14 +1179,36 @@ async fn list_jobs(
     ),
     responses(
         (status = 204, description = "Job deleted"),
+        (status = 403, description = "Forbidden", body = ErrorResponse),
         (status = 404, description = "Job not found", body = ErrorResponse)
     )
 )]
 async fn delete_job(
     State(state): State<AppState>,
+    jar: CookieJar,
     Path(job_id): Path<String>,
 ) -> impl IntoResponse {
+    let owner_id = jar.get(OWNER_COOKIE_NAME).map(|c| c.value().to_string());
+
     let mut jobs = state.jobs.write();
+
+    // First check if job exists and belongs to owner
+    if let Some(job) = jobs.get(&job_id) {
+        // Check ownership
+        let is_owner = match (&job.owner_id, &owner_id) {
+            (Some(job_owner), Some(cookie_owner)) => job_owner == cookie_owner,
+            _ => false,
+        };
+
+        if !is_owner {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(ErrorResponse {
+                    detail: "No permission to delete this job".to_string(),
+                }),
+            ).into_response();
+        }
+    }
 
     match jobs.remove(&job_id) {
         Some(_) => StatusCode::NO_CONTENT.into_response(),
@@ -1326,9 +1436,10 @@ async fn main() {
 
     // CORS configuration
     let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+        .allow_origin(tower_http::cors::AllowOrigin::mirror_request())
+        .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::OPTIONS])
+        .allow_headers([header::CONTENT_TYPE, header::ACCEPT, header::AUTHORIZATION])
+        .allow_credentials(true);
 
     // Build router
     let app = Router::new()
