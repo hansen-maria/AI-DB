@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # Vue.js frontend (configured with nginx)
   vue-app:
