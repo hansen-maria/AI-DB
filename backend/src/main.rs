@@ -10,11 +10,13 @@ use axum::{
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use chrono::{DateTime, Utc};
+use flate2::read::GzDecoder;
 use md5::{Digest, Md5};
 use parking_lot::RwLock;
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, env, net::SocketAddr, path::PathBuf, sync::Arc};
+use std::io::Read;
 use axum::http::{header, Method};
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
@@ -239,6 +241,27 @@ fn get_or_create_owner(jar: CookieJar) -> (String, CookieJar) {
             .max_age(time::Duration::days(COOKIE_MAX_AGE_DAYS))
             .build();
         (new_id, jar.add(cookie))
+    }
+}
+
+// ============================================================================
+// FASTA Parsing
+// ============================================================================
+
+/// Checks if data is gzip compressed (magic bytes: 0x1f 0x8b)
+fn is_gzip(data: &[u8]) -> bool {
+    data.len() >= 2 && data[0] == 0x1f && data[1] == 0x8b
+}
+
+/// Decompresses gzip data, returns original data if not compressed
+fn decompress_if_gzip(data: &[u8]) -> Result<Vec<u8>, std::io::Error> {
+    if is_gzip(data) {
+        let mut decoder = GzDecoder::new(data);
+        let mut decompressed = Vec::new();
+        decoder.read_to_end(&mut decompressed)?;
+        Ok(decompressed)
+    } else {
+        Ok(data.to_vec())
     }
 }
 
@@ -799,83 +822,128 @@ async fn get_job(
     }
 }
 
-/// Asynchronous handler to create a new job based on uploaded FASTA data via a
-/// multipart form submission. The endpoint accepts a file, FASTA content, or
-/// additional optional metadata like job name, processes it, and stores it for
-/// background processing.
+/// Handles the creation of a new bioinformatics job based on user-provided FASTA input.
 ///
-/// # Endpoint
-/// **POST** `/api/job/`
+/// ## Endpoint
+/// - **Method**: POST
+/// - **Path**: `/api/job/`
+/// - **Tag**: `Jobs`
 ///
-/// # Tags
-/// - **Jobs**
+/// ## Request
+/// This endpoint supports `multipart/form-data` content type for uploading either a FASTA file
+/// or raw FASTA content. Additionally, an optional job name can be provided.
+/// - **Fields**:
+///   - `file` (optional): A FASTA file. Gzipped files are supported and will be decompressed.
+///   - `fasta_content` (optional): Raw FASTA content in the request body. Gzipped content is also supported.
+///   - `job_name` (optional): A name for the job to be created.
 ///
-/// # Request Body
-/// Accepts `multipart/form-data` with the following fields:
-/// - `file` (optional): An uploaded FASTA file.
-/// - `fasta_content` (optional): Plain FASTA text content.
-/// - `job_name` (optional): A custom name for the job.
+/// ## Responses
+/// - **201 Created**: Returns upon successful job creation.
+///   - **Body**: [`JobCreateResponse`]
+///   - Details:
+///     - `job_id`: Unique identifier of the created job.
+///     - `status`: Initial status of the job (always "Pending").
+///     - `message`: A success message indicating the job has started processing.
+///     - `sequence_count`: The number of valid sequences present in the provided FASTA content.
+/// - **400 Bad Request**: Returned in one of the following cases:
+///   - Input is invalid or missing (e.g., no FASTA data provided).
+///   - An error occurred while processing the request (e.g., malformed data).
+///   - **Body**: [`ErrorResponse`]
+///   - Details:
+///     - `detail`: Human-readable error explanation.
 ///
-/// At least one of the fields, either `file` or `fasta_content`, is required for
-/// successful job creation.
+/// ## Behavior
+/// - Extracts an owner ID from the cookie or generates a new one if not present.
+/// - Reads the request's multipart content to handle either a file upload or raw FASTA content.
+/// - Attempts to decompress Gzipped files and content as needed.
+/// - Parses the FASTA data to extract valid sequences.
+/// - Creates a job entry with an initial status of `Pending`.
+/// - Stores the job in the application's state and triggers asynchronous background processing of the job.
 ///
-/// # Responses
+/// ## Error Handling
+/// - If no valid FASTA content is found in the request, returns a `400 Bad Request` with an error message.
+/// - Any errors during the multipart data read or decompression are logged and result in a failure response.
 ///
-/// - **201 Created**:
-///   Returns the created job details if the input is valid and processing begins successfully.
-///   Response body: [`JobCreateResponse`](#jobcreateresponse)
+/// ## Background Processing
+/// - After job creation, processing of FASTA sequences occurs asynchronously using a separate task.
+/// - The processing involves computation tasks, alignment, and hashing, which update the job's status.
 ///
-/// - **400 Bad Request**:
-///   Error response if the input is invalid (e.g., missing fields, unreadable content).
-///   Response body: [`ErrorResponse`](#errorresponse)
+/// ## Security
+/// - Owner IDs are managed within cookies to associate jobs with specific users.
+/// - No sensitive data is exposed in the request or response bodies.
 ///
-/// # Parameters
+/// ## Example
 ///
-/// - `state`:
-///   - Type: `State<AppState>`
-///   - Incoming shared application state including the runtime job store.
-///
-/// - `multipart`:
-///   - Type: `Multipart`
-///   - Represents the parsed multipart form containing the input data.
-///
-/// - `jar`:
-///   - Type: `CookieJar`
-///   - Cookie jar containing the session cookie.
-///
-/// # Behavior
-/// 1. Processes the multipart form to extract required fields.
-/// 2. Validates the input, ensuring either `file` or `fasta_content` is provided.
-/// 3. Parses the FASTA content into sequences and validates them.
-/// 4. Creates a unique job ID associate to the user via a session cookie and stores the job with an initial `Pending` status in a shared job store.
-/// 5. Spawns a background task to process the job further asynchronously.
-///
-/// # Errors
-/// This handler may return a `400 Bad Request` response in the following scenarios:
-/// - Missing input (`fasta_content` or `file` not provided).
-/// - Invalid or empty FASTA content.
-/// - Error reading multipart data.
-///
-/// # Background Processing
-/// Once the job is created and stored, a background task is spawned to process the sequences.
-/// Background processing updates the job's status and results, which can be queried using
-/// separate endpoints.
-///
-/// # Example Request
-/// **POST** `/api/job/`
-///
-/// **Headers**:
+/// ### Request (file upload):
 /// ```http
+/// POST /api/job/
 /// Content-Type: multipart/form-data
+///
+/// --boundary
+/// Content-Disposition: form-data; name="file"; filename="example.fasta"
+/// Content-Type: application/octet-stream
+///
+/// >ACTG...
+/// --boundary--
 /// ```
 ///
-/// **Body (multipart/form-data)**:
+/// ### Request (raw FASTA content):
+/// ```http
+/// POST /api/job/
+/// Content-Type: multipart/form-data
+///
+/// --boundary
+/// Content-Disposition: form-data; name="fasta_content"
+///
+/// >sequence1
+/// ATCG
+/// >sequence2
+/// TAGC
+/// --boundary--
 /// ```
+///
+/// ### Response (201 Created):
+/// ```json
+/// {
+///   "job_id": "123e4567-e89b-12d3-a456-426614174000",
+///   "status": "Pending",
+///   "message": "Job successfully created. Processing started.",
+///   "sequence_count": 2
+/// }
+/// ```
+///
+/// ### Response (400 Bad Request):
+/// ```json
+/// {
+///   "detail": "No input received. Please upload FASTA file or send FASTA content."
+/// }
+/// ```
+///
+/// ## Dependencies
+/// - This function relies on the following components:
+///   - `AppState`: Shared application state for storing jobs.
+///   - `CookieJar`: Used for managing owner IDs.
+///   - `Multipart`: For handling multipart form data.
+///   - `parse_fasta`: To parse and extract sequences from FASTA content.
+///   - `decompress_if_gzip`: To support Gzipped file or content uploads.
+///   - `process_job`: Background task handler for processing the job asynchronously.
+///
+/// ## Notes
+/// - The job creation process ensures idempotent and asynchronous handling to avoid blocking the request/response lifecycle.
+/// - Errors related to malformed input or file handling are logged with appropriate warnings for debugging.
+///
+/// ## Parameters
+/// - `State(state)`: Extracted application-wide state (`AppState`) used for storing and accessing jobs.
+/// - `jar`: A `CookieJar` for handling owner tracking and managing session-scoped cookies.
+/// - `multipart`: A `Multipart` instance to process and read multipart request data.
+///
+/// ## Returns
+/// - A type implementing `IntoResponse`, containing either success or error HTTP responses (201 or 400).
 #[utoipa::path(
     post,
     path = "/api/job/",
     tag = "Jobs",
-    request_body(content_type = "multipart/form-data", content = String, description = "FASTA file or FASTA content"),
+    request_body(content_type = "multipart/form-data", description = "FASTA file or FASTA content"),
     responses(
         (status = 201, description = "Job created", body = JobCreateResponse),
         (status = 400, description = "Invalid input", body = ErrorResponse)
@@ -902,14 +970,27 @@ async fn create_job(
             Ok(data) => match field_name.as_str() {
                 "file" => {
                     filename = file_name;
-                    if let Ok(content) = String::from_utf8(data.to_vec()) {
+                    // Try to decompress if gzip, otherwise use raw data
+                    let raw_data = match decompress_if_gzip(&data) {
+                        Ok(decompressed) => decompressed,
+                        Err(e) => {
+                            tracing::warn!("Gzip decompression failed: {}, using raw data", e);
+                            data.to_vec()
+                        }
+                    };
+                    if let Ok(content) = String::from_utf8(raw_data) {
                         if !content.is_empty() {
                             fasta_content = Some(content);
                         }
                     }
                 }
                 "fasta_content" => {
-                    if let Ok(content) = String::from_utf8(data.to_vec()) {
+                    // Also support gzip for direct content
+                    let raw_data = match decompress_if_gzip(&data) {
+                        Ok(decompressed) => decompressed,
+                        Err(_) => data.to_vec()
+                    };
+                    if let Ok(content) = String::from_utf8(raw_data) {
                         if !content.is_empty() {
                             fasta_content = Some(content);
                         }
@@ -925,11 +1006,11 @@ async fn create_job(
             Err(e) => {
                 return (
                     StatusCode::BAD_REQUEST,
+                    jar,
                     Json(ErrorResponse {
-                        detail: format!("Error reading data: {}", e),
+                        detail: format!("Fehler beim Lesen der Daten: {}", e),
                     }),
-                )
-                    .into_response()
+                ).into_response()
             }
         }
     }
@@ -940,11 +1021,11 @@ async fn create_job(
         None => {
             return (
                 StatusCode::BAD_REQUEST,
+                jar,
                 Json(ErrorResponse {
                     detail: "No input received. Please upload FASTA file or send FASTA content.".to_string(),
                 }),
-            )
-                .into_response()
+            ).into_response()
         }
     };
 
@@ -954,11 +1035,11 @@ async fn create_job(
     if sequences.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
+            jar,
             Json(ErrorResponse {
                 detail: "No valid sequences found in the input.".to_string(),
             }),
-        )
-            .into_response();
+        ).into_response();
     }
 
     // Create job
@@ -993,7 +1074,7 @@ async fn create_job(
     let state_clone = state.clone();
     let job_id_clone = job_id.clone();
     tokio::spawn(async move {
-        // Simulate some processing delay
+        // Small delay to ensure job is stored
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         process_job(&state_clone, &job_id_clone, sequences);
     });
@@ -1437,8 +1518,17 @@ async fn main() {
     // CORS configuration
     let cors = CorsLayer::new()
         .allow_origin(tower_http::cors::AllowOrigin::mirror_request())
-        .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::OPTIONS])
-        .allow_headers([header::CONTENT_TYPE, header::ACCEPT, header::AUTHORIZATION])
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::DELETE,
+            Method::OPTIONS
+        ])
+        .allow_headers([
+            header::CONTENT_TYPE,
+            header::ACCEPT,
+            header::AUTHORIZATION
+        ])
         .allow_credentials(true);
 
     // Build router
@@ -1450,7 +1540,7 @@ async fn main() {
         .route("/api/job/{job_id}", get(get_job).delete(delete_job))
         .route("/api/jobs/", get(list_jobs))
         // Swagger UI
-        .merge(SwaggerUi::new("/api/docs").url("/api/openapi.json", ApiDoc::openapi()))
+        .merge(SwaggerUi::new("/api/docs/").url("/api/openapi.json", ApiDoc::openapi()))
         // Middleware
         .layer(cors)
         .layer(TraceLayer::new_for_http())

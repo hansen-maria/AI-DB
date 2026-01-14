@@ -51,13 +51,13 @@ function handleFileSelect(event: Event) {
 }
 
 function selectFile(file: File) {
-  const validExtensions = ['.fasta', '.fa', '.fna', '.faa', '.txt']
+  const validExtensions = ['.fasta', '.fa', '.fna', '.faa', '.txt', '.gz']
   const hasValidExtension = validExtensions.some(ext =>
       file.name.toLowerCase().endsWith(ext)
   )
 
   if (!hasValidExtension) {
-    errorMessage.value = 'Invalid file format.\nSupported formats: .fasta, .fa, .fna, .faa, .txt'
+    errorMessage.value = 'Invalid file format. Allowed: .fasta, .fa, .fna, .faa, .txt, .gz'
     return
   }
 
@@ -108,7 +108,7 @@ async function submitJob() {
     // Navigate to job detail page
     router.push({ name: 'job', params: { id: response.job_id } })
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : 'An error occurred'
+    errorMessage.value = error instanceof Error ? error.message : 'Ein Fehler ist aufgetreten'
   } finally {
     isSubmitting.value = false
   }
@@ -167,10 +167,10 @@ async function submitJob() {
             Drag & Drop your FASTA file here<br>
             <span>or click to browse</span>
           </p>
-          <p class="dropzone-hint">Supported formats: .fasta, .fa, .fna, .faa, .txt</p>
+          <p class="dropzone-hint">Supported formats: .fasta, .fa, .fna, .faa, .txt, .gz (gzip compressed)</p>
           <input
               type="file"
-              accept=".fasta,.fa,.fna,.faa,.txt"
+              accept=".fasta,.fa,.fna,.faa,.txt,.gz,.fasta.gz,.fa.gz,.fna.gz,.faa.gz"
               @change="handleFileSelect"
               class="file-input"
           >
