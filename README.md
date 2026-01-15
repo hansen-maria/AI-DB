@@ -5,7 +5,6 @@ Hash-Based Annotation Service for Microbial Sequencing Data
 AI-DB accelerates the analysis of microbial sequencing data through cryptographic hash-based annotations 
 using the [Bakta](https://github.com/oschwengers/bakta) database (~350 million protein sequences).
 
-
 ## Features
 
 - **Fast**: Hash-based annotations in seconds instead of hours
@@ -13,7 +12,6 @@ using the [Bakta](https://github.com/oschwengers/bakta) database (~350 million p
 - **Comprehensive**: Access to UniRef100, UniParc, and NCBI protein annotations
 - **User-friendly**: Jobs are associated with users via cookies
 - **Shareable**: Jobs can be shared via Job-ID
-
 
 ## Project Structure
 
@@ -35,8 +33,8 @@ ai-db-web/
 │   │   ├── views/                 # Pages
 │   │   │   ├── HomeView.vue       # Landing page
 │   │   │   ├── SubmitJobView.vue  # FASTA upload
-│   │   │   ├── JobDetailView.vue  # Job details
-│   │   │   └── JobListView.vue    # Jobs list
+│   │   │   ├── JobDetailView.vue  # Job details with annotation links
+│   │   │   └── JobListView.vue    # Jobs list (own jobs)
 │   │   └── assets/
 │   │       └── main.css
 │   └── public/
@@ -97,12 +95,6 @@ npm install
 npm run dev
 ```
 
-### Production with Docker
-
-```bash
-docker-compose up -d --build
-```
-
 ## REST API Endpoints
 
 | Method   | Endpoint        | Description                 | Authentication       |
@@ -127,7 +119,7 @@ The complete OpenAPI/Swagger documentation is available at:
 - **Swagger UI**: `https://ai-db.computational.bio/api/docs/`
 - **OpenAPI JSON**: `https://ai-db.computational.bio/api/openapi.json`
 
-### Example: Create job
+### Example: Create Job
 
 **With file upload:**
 ```bash
@@ -155,7 +147,7 @@ MKFLILLFNILCLFPVLAADNHGVGPQGASGVDPITFDINSNQTGV" \
 }
 ```
 
-### Example: Retrieve job status
+### Example: Get Job Status
 
 ```bash
 curl "https://ai-db.computational.bio/api/job/550e8400-e29b-41d4-a716-446655440000"
@@ -228,17 +220,19 @@ Found annotations are displayed as clickable links to the respective databases:
 
 The backend uses the following crates:
 
-| Crate           | Purpose                               |
-|-----------------|---------------------------------------|
-| **axum**        | Ergonomic web framework               |
-| **axum-extra**  | Cookie handling                       |
-| **rusqlite**    | SQLite access for Bakta-DB            |
-| **utoipa**      | OpenAPI/Swagger documentation         |
-| **tower-http**  | HTTP middleware (CORS, Tracing)       |
-| **serde**       | JSON serialization                    |
-| **tokio**       | Async runtime                         |
-| **parking_lot** | Efficient locks for in-memory storage |
-| **md-5**        | MD5 hash computation                  |
+| Crate           | Purpose                                   |
+|-----------------|-------------------------------------------|
+| **axum**        | Ergonomic web framework                   |
+| **axum-extra**  | Cookie handling                           |
+| **rusqlite**    | SQLite access for Bakta-DB                |
+| **flate2**      | Gzip decompression                        |
+| **tempfile**    | Temporary file handling for large uploads |
+| **utoipa**      | OpenAPI/Swagger documentation             |
+| **tower-http**  | HTTP middleware (CORS, Tracing)           |
+| **serde**       | JSON serialization                        |
+| **tokio**       | Async runtime                             |
+| **parking_lot** | Efficient locks for in-memory storage     |
+| **md-5**        | MD5 hash computation                      |
 
 ### Build
 
@@ -247,18 +241,19 @@ cd backend
 cargo build --release
 ```
 
-The release binary is located in `target/release/ai-db-api`.
+The release binary is located at `target/release/ai-db-api`.
 
 ## Configuration
 
-### Environment variables
+### Environment Variables
 
 **Backend:**
 
-| Variable   | Description                                 | Default     |
-|------------|---------------------------------------------|-------------|
-| `RUST_LOG` | Log level (trace, debug, info, warn, error) | `info`      |
-| `BAKTA_DB` | Path to Bakta database                      | `/bakta-db` |
+| Variable         | Description                                 | Default     |
+|------------------|---------------------------------------------|-------------|
+| `RUST_LOG`       | Log level (trace, debug, info, warn, error) | `info`      |
+| `BAKTA_DB`       | Path to Bakta database                      | `/bakta-db` |
+| `AI_DB_TEMP_DIR` | Directory for temporary upload files        | `/tmp`      |
 
 ### Docker-Compose Volume Configuration
 
@@ -266,16 +261,39 @@ The release binary is located in `target/release/ai-db-api`.
 services:
   api:
     volumes:
-      - /mnt/bakta-db/db:/bakta-db:ro
+      - /mnt/bakta-db/db:/bakta-db:ro      # Bakta database (read-only)
+      - /mnt/ai-db-tmp:/tmp-data           # Temp storage for uploads
     environment:
       - BAKTA_DB=/bakta-db
+      - AI_DB_TEMP_DIR=/tmp-data
 ```
 
-### Logo files
+### Logo Files
 
 - `frontend/src/assets/logo-light.png` - Logo for light mode
 - `frontend/src/assets/logo-dark.png` - Logo for dark mode
 - `frontend/public/favicon.png` - Browser favicon
+
+## FASTA Format
+
+Expected input format (protein sequences):
+```
+>sequence_id_1 optional description
+MKFLILLFNILCLFPVLAADNHGVGPQGASGVDPITFDINSNQTGV
+ASLLNFLGGTTVGSLQGKPLGQLACNPNQVKRKGDHIIYPGQQYTP
+>sequence_id_2
+MRYILAAVLLPMFAQSYKVDQTGSGPKNTFFINSNQTGVPEQYGDL
+```
+
+### Supported File Formats
+
+| Extension                       | Description                                        |
+|---------------------------------|----------------------------------------------------|
+| `.fasta`, `.fa`, `.fna`, `.faa` | Standard FASTA files                               |
+| `.txt`                          | Plain text FASTA                                   |
+| `.gz`                           | Gzip compressed FASTA (e.g., `sequences.fasta.gz`) |
+
+Compressed files are automatically detected and decompressed based on their magic bytes, regardless of file extension.
 
 ## Bakta Database
 
@@ -288,27 +306,6 @@ Set up a daily update job:
 0 3 * * * root /usr/local/bin/bakta-db-update.sh >> /var/log/bakta-db-update.log 2>&1
 ```
 
-### SSL certificates
-
-For the first certificate issuance:
-```bash
-docker-compose run --rm certbot certonly \
-  --webroot \
-  --webroot-path=/var/www/certbot \
-  -d ai-db.computational.bio
-```
-
-## FASTA Format
-
-The expected input format:
-```
->sequence_id_1 optional description
-MKFLILLFNILCLFPVLAADNHGVGPQGASGVDPITFDINSNQTGV
-ASLLNFLGGTTVGSLQGKPLGQLACNPNQVKRKGDHIIYPGQQYTP
->sequence_id_2
-MRYILAAVLLPMFAQSYKVDQTGSGPKNTFFINSNQTGVPEQYGDL
-```
-
 ## Security
 
 - HTTPS with Let's Encrypt
@@ -318,6 +315,38 @@ MRYILAAVLLPMFAQSYKVDQTGSGPKNTFFINSNQTGVPEQYGDL
 - Non-root user in backend container
 - Memory-safe backend through Rust
 - Read-only Bakta-DB mount
+
+## Performance & Memory Management
+
+AI-DB is designed to handle large FASTA files efficiently:
+
+- **Streaming Upload**: Files are streamed directly to a temporary file on a dedicated volume
+- **No RAM Bottleneck**: Large files (up to 10 GB) are stored on disk during processing
+- **Iterator-based Parsing**: Sequences are processed one at a time from the temp file
+- **Batch Progress Updates**: Job progress is updated every 1,000 sequences
+- **Automatic Cleanup**: Temporary files are deleted after processing
+- **Memory Limits**:
+    - Maximum 1 million results stored per job (larger files show truncation warning)
+    - Maximum 5 MB per individual sequence
+    - 64 KB buffer size for file reading
+- **Gzip Support**: Compressed files are decompressed on-the-fly during processing
+
+### Temp Volume Setup
+
+A dedicated volume is required for temporary file storage:
+
+```bash
+# Format and mount temp volume
+sudo mkfs.ext4 <path/to/dest/partition>
+sudo mkdir -p /mnt/ai-db-tmp
+sudo mount <path/to/dest/partition> /mnt/ai-db-tmp
+sudo chmod 1777 /mnt/ai-db-tmp
+
+# Add to /etc/fstab for persistence
+echo '<path/to/dest/partition> /mnt/ai-db-tmp ext4 defaults 0 2' | sudo tee -a /etc/fstab
+```
+
+This architecture allows processing of multi-gigabyte FASTA files without running out of memory.
 
 ## License
 

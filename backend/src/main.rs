@@ -1,6 +1,7 @@
 //! AI-DB REST API Backend
 //! Hash-Based Annotation Service for Microbial Sequencing Data
 
+use axum::http::{header, Method};
 use axum::{
     extract::{Multipart, Path, Query, State},
     http::StatusCode,
@@ -15,10 +16,17 @@ use md5::{Digest, Md5};
 use parking_lot::RwLock;
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, env, net::SocketAddr, path::PathBuf, sync::Arc};
-use std::io::Read;
-use axum::http::{header, Method};
-use tower_http::cors::{Any, CorsLayer};
+use std::{
+    collections::HashMap,
+    env,
+    fs::File,
+    io::{BufRead, BufReader, Read, Write},
+    net::SocketAddr,
+    path::PathBuf,
+    sync::Arc,
+};
+use tempfile::{Builder as TempFileBuilder, NamedTempFile};
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
 use utoipa::{OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
@@ -155,7 +163,10 @@ impl AppState {
             if path.exists() {
                 tracing::info!("Bakta database found at: {:?}", path);
             } else {
-                tracing::warn!("Bakta database path configured but file not found: {:?}", path);
+                tracing::warn!(
+                    "Bakta database path configured but file not found: {:?}",
+                    path
+                );
             }
         } else {
             tracing::warn!("No Bakta database configured. Set BAKTA_DB environment variable.");
@@ -248,114 +259,90 @@ fn get_or_create_owner(jar: CookieJar) -> (String, CookieJar) {
 // FASTA Parsing
 // ============================================================================
 
-/// Checks if data is gzip compressed (magic bytes: 0x1f 0x8b)
-fn is_gzip(data: &[u8]) -> bool {
-    data.len() >= 2 && data[0] == 0x1f && data[1] == 0x8b
+/// Batch size for processing sequences
+const BATCH_SIZE: usize = 1000;
+
+/// Maximum sequence length to prevent memory issues
+const MAX_SEQUENCE_LENGTH: usize = 5_000_000; // 5 MB
+
+/// Streaming FASTA parser that yields sequences one at a time
+struct FastaIterator<R: BufRead> {
+    reader: R,
+    current_header: Option<String>,
+    current_sequence: String,
+    line_buffer: String,
+    finished: bool,
 }
 
-/// Decompresses gzip data, returns original data if not compressed
-fn decompress_if_gzip(data: &[u8]) -> Result<Vec<u8>, std::io::Error> {
-    if is_gzip(data) {
-        let mut decoder = GzDecoder::new(data);
-        let mut decompressed = Vec::new();
-        decoder.read_to_end(&mut decompressed)?;
-        Ok(decompressed)
-    } else {
-        Ok(data.to_vec())
+impl<R: BufRead> FastaIterator<R> {
+    fn new(reader: R) -> Self {
+        Self {
+            reader,
+            current_header: None,
+            current_sequence: String::new(),
+            line_buffer: String::new(),
+            finished: false,
+        }
     }
 }
 
-/// Parses a FASTA-formatted string and returns a vector of tuples, where each tuple contains a
-/// sequence identifier (header) and its corresponding sequence.
-///
-/// FASTA format is a widely used text-based format for representing nucleotide or protein sequences.
-/// Each sequence in the FASTA file starts with a line beginning with the `>` character, followed by
-/// an identifier for the sequence (header). Subsequent lines contain the sequence data, while empty
-/// lines are ignored.
-///
-/// # Arguments
-///
-/// * `content` - A string slice representing the FASTA-formatted input.
-///
-/// # Returns
-///
-/// A `Vec` of tuples, where:
-/// - The first element of the tuple is a `String` containing the sequence identifier (header).
-/// - The second element of the tuple is a `String` containing the nucleotide or protein sequence in uppercase.
-///
-/// # Behavior
-///
-/// - Sequence headers are extracted from lines starting with `>` and are trimmed to the first word (separated by whitespace).
-/// - Sequence data accumulates until a new header is encountered or the content ends.
-/// - All sequences are converted to uppercase.
-/// - Empty lines are ignored.
-/// - If duplicate headers are present, only the most recent sequence associated with that header is stored.
-///
-/// # Example
-///
-/// ```
-/// let fasta_data = ">seq1
-/// ATGCGT
-/// AACGT
-/// >seq2
-/// GGATA
-/// ";
-/// let result = parse_fasta(fasta_data);
-/// assert_eq!(
-///     result,
-///     vec![
-///         ("seq1".to_string(), "ATGCGTAACGT".to_string()),
-///         ("seq2".to_string(), "GGATA".to_string())
-///     ]
-/// );
-/// ```
-///
-/// # Edge Cases
-///
-/// - If the input string is empty, the function returns an empty vector.
-/// - If a header is present but no sequence data appears below it, the header is ignored.
-/// - If sequence data exists without a preceding header, it will not be included in the output.
-///
-/// # Notes
-///
-/// This function assumes valid FASTA input and does not perform extensive validation.
-fn parse_fasta(content: &str) -> Vec<(String, String)> {
-    let mut sequences = Vec::new();
-    let mut current_header: Option<String> = None;
-    let mut current_sequence = String::new();
+impl<R: BufRead> Iterator for FastaIterator<R> {
+    type Item = (String, String);
 
-    for line in content.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.finished {
+            return None;
         }
-
-        if line.starts_with('>') {
-            if let Some(header) = current_header.take() {
-                if !current_sequence.is_empty() {
-                    sequences.push((header, current_sequence.clone()));
+        loop {
+            self.line_buffer.clear();
+            match self.reader.read_line(&mut self.line_buffer) {
+                Ok(0) => {
+                    // EOF reached
+                    self.finished = true;
+                    if let Some(header) = self.current_header.take() {
+                        if !self.current_sequence.is_empty() {
+                            let seq = std::mem::take(&mut self.current_sequence);
+                            return Some((header, seq));
+                        }
+                    }
+                    return None;
+                }
+                Ok(_) => {
+                    let line = self.line_buffer.trim();
+                    if line.is_empty() {
+                        continue;
+                    }
+                    if line.starts_with('>') {
+                        // New sequence header
+                        let new_header = line[1..]
+                            .split_whitespace()
+                            .next()
+                            .unwrap_or("")
+                            .to_string();
+                        if let Some(header) = self.current_header.take() {
+                            if !self.current_sequence.is_empty() {
+                                let seq = std::mem::take(&mut self.current_sequence);
+                                self.current_header = Some(new_header);
+                                return Some((header, seq));
+                            }
+                        }
+                        self.current_header = Some(new_header);
+                        self.current_sequence.clear();
+                    } else {
+                        // Sequence line - append (with length limit)
+                        if self.current_sequence.len() < MAX_SEQUENCE_LENGTH {
+                            self.current_sequence.push_str(&line.to_uppercase());
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Error reading FASTA: {}", e);
+                    self.finished = true;
+                    return None;
                 }
             }
-            current_header = Some(
-                line[1..]
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or("")
-                    .to_string(),
-            );
-            current_sequence.clear();
-        } else {
-            current_sequence.push_str(&line.to_uppercase());
         }
     }
-
-    if let Some(header) = current_header {
-        if !current_sequence.is_empty() {
-            sequences.push((header, current_sequence));
-        }
-    }
-
-    sequences
 }
 
 /// Computes the MD5 hash of an input string and returns both its hexadecimal
@@ -461,7 +448,11 @@ fn compute_md5(sequence: &str) -> (String, Vec<u8>) {
 /// );
 /// ```
 /// Ensure this table is correctly set up before using the function.
-fn lookup_hash_in_bakta(conn: &Connection, hash_bytes: &[u8], seq_length: usize) -> HashLookupResult {
+fn lookup_hash_in_bakta(
+    conn: &Connection,
+    hash_bytes: &[u8],
+    seq_length: usize,
+) -> HashLookupResult {
     // Query the ups table - hash is stored as BLOB
     let query = "SELECT length, uniparc_id, ncbi_nrp_id, uniref100_id FROM ups WHERE hash = ?";
 
@@ -474,7 +465,7 @@ fn lookup_hash_in_bakta(conn: &Connection, hash_bytes: &[u8], seq_length: usize)
             uniref100_id: row.get(3).ok(),
         })
     }) {
-        Ok(mut result) => {
+        Ok(result) => {
             // Verify length matches (optional sanity check)
             if let Some(db_len) = result.db_length {
                 if db_len as usize != seq_length {
@@ -595,61 +586,63 @@ fn format_annotation(result: &HashLookupResult) -> Option<String> {
     }
 }
 
-/// Processes a job by analyzing and annotating sequences, optionally utilizing
-/// a database for sequence hash lookup.
+/// Processes a job, reading sequences from a file, optionally decompressing gzip files, performing MD5 hashing, and optionally looking up sequences in a database.
 ///
 /// # Parameters
-/// - `state`: A reference to the shared application state (`AppState`) containing job tracking
-///   information and database connection management.
-/// - `job_id`: A string slice representing the unique identifier of the job to process.
-/// - `sequences`: A vector of tuples containing sequence headers and sequence strings for processing.
+/// - `state`: A shared application state (`AppState`) containing job metadata and configurations.
+/// - `job_id`: A string slice representing the unique identifier of the job.
+/// - `file_path`: A `Path` reference specifying the location of the file containing sequences to process.
+/// - `is_gzip`: A boolean indicating whether the file is in gzip-compressed format.
 ///
 /// # Description
-/// This function performs the following steps:
-/// 1. Updates the job status to `Processing` in the application state and records the current time.
-/// 2. Attempts to create a database connection to enable sequence hash lookups in the Bakta database.
-/// 3. Iterates over the provided sequences:
-///    - Computes the MD5 hash of each sequence.
-///    - If a database connection is available, performs a hash lookup to retrieve metadata
-///      and annotations for the sequence.
-///    - Records the sequence information, annotation, and any metadata retrieved (such as UniProt
-///      identifiers) in a `SequenceInfo` structure.
-///    - Tracks the number of hash matches and alignment matches.
-/// 4. Updates the job's status to `Completed` in the application state, along with the processed
-///    results, including sequence count, hash match count, alignment match count, and the annotated
-///    sequences.
-/// 5. Logs the processing results, including the number of sequences and hash matches.
+/// 1. The job status is set to `Processing`, and the job's metadata (such as timestamp) in `AppState` is updated accordingly.
+/// 2. If a database connection can be established based on the shared application state, it logs a message indicating database support; otherwise, it proceeds without database lookup.
+/// 3. The input file is opened for reading. If file reading fails, the job is marked as `Failed`, and an error message is logged and stored.
+/// 4. The file is processed for sequences using a streaming approach. If `is_gzip` is true, the file is decompressed using `GzDecoder`. Sequences are iterated through using a `FastaIterator`, avoiding preallocation to handle larger files.
+/// 5. For each sequence:
+///    - The MD5 hash is computed, and sequence length is determined.
+///    - If a database connection is available, a lookup is performed in the database using the hash value. Annotations are added to the result if a match is found.
+///    - Results for sequences are stored (up to `MAX_RESULTS`) to avoid memory overflows.
+/// 6. During processing:
+///    - Progress is updated every `BATCH_SIZE` sequences by modifying the job metadata stored in `AppState`.
+/// 7. After processing all sequences:
+///    - Memory for unused space in the results vector is released.
+///    - Final job statuses are set: either `Completed` if any sequences are processed, or `Failed` if none are successfully processed.
+///    - Additional warnings may be added, such as indication of truncated results if the sequence count exceeds `MAX_RESULTS`, or no valid sequences found.
+/// 8. Logs detailing the job's completion status, the number of sequences processed, and hash matches are created.
+///
+/// # Constants
+/// - `MAX_RESULTS`: Maximum number of results (`1_000_000`) that can be stored to prevent excessive memory usage.
+/// - `BATCH_SIZE`: Used to determine how often to report progress during the process.
 ///
 /// # Behavior
-/// - If the database connection is unavailable, the function proceeds with processing but skips the
-///   hash lookup step, logging a warning that no matches are possible.
-/// - Sequence annotations are sourced from either database matches (`hash_match`) or left empty if
-///   no match is found.
+/// The process is robust, handling errors related to:
+/// - File access (e.g., file not found, read errors).
+/// - Null or missing database connections.
 ///
-/// # Notes
-/// - The `state` parameter provides thread-safe access to shared state using an internal read-write
-///   lock, ensuring consistent updates to job details.
-/// - The final results, including job status and sequence information, are stored in the application
-///   state to ensure that downstream systems can retrieve the processed data.
+/// # Thread Safety
+/// The method uses a write lock (`AppState.jobs.write`) to safely update shared job states across threads.
 ///
-/// # Example
+/// # Error Handling
+/// - If the file cannot be read, the job is marked `Failed` with a corresponding error message.
+/// - If the sequence count exceeds `MAX_RESULTS`, warnings about truncated results are added to the job metadata.
+///
+/// # Examples
 /// ```rust
-/// let state = AppState::new(); // Initialize application state
-/// let job_id = "job_12345";
-/// let sequences = vec![
-///     ("seq1".to_string(), "ATGC".to_string()),
-///     ("seq2".to_string(), "GGTA".to_string()),
-/// ];
+/// // Example usage:
+/// let state = AppState::new();
+/// let job_id = "job123";
+/// let file_path = Path::new("/path/to/file.fasta");
+/// let is_gzip = false;
 ///
-/// process_job(&state, job_id, sequences);
+/// process_job_from_file(&state, job_id, file_path, is_gzip);
 /// ```
-///
-/// # See Also
-/// - `AppState`: Manages shared application state and database connections.
-/// - `compute_md5`: Computes the MD5 hash for a given sequence string.
-/// - `lookup_hash_in_bakta`: Executes a database query to match sequences using their MD5 hashes.
-/// - `SequenceInfo`: Stores details of a processed sequence, including annotations and metadata.
-fn process_job(state: &AppState, job_id: &str, sequences: Vec<(String, String)>) {
+fn process_job_from_file(
+    state: &AppState,
+    job_id: &str,
+    file_path: &std::path::Path,
+    is_gzip: bool,
+) {
     // Set status to processing
     {
         let mut jobs = state.jobs.write();
@@ -659,22 +652,53 @@ fn process_job(state: &AppState, job_id: &str, sequences: Vec<(String, String)>)
         }
     }
 
-    // Try to open a database connection
+    // Try to open database connection
     let db_conn = state.open_db_connection();
     let db_available = db_conn.is_some();
 
     if db_available {
         tracing::info!("Processing job {} with Bakta database lookup", job_id);
     } else {
-        tracing::warn!("Processing job {} without database (no matches possible)", job_id);
+        tracing::warn!("Processing job {} without database", job_id);
     }
 
+    // Open file for streaming
+    let file = match File::open(file_path) {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::error!("Failed to open temp file for job {}: {}", job_id, e);
+            let mut jobs = state.jobs.write();
+            if let Some(job) = jobs.get_mut(job_id) {
+                job.status = JobStatus::Failed;
+                job.error_message = Some(format!("Failed to read uploaded file: {}", e));
+                job.updated_at = Utc::now();
+            }
+            return;
+        }
+    };
+
+    // Create streaming reader (with gzip support)
+    let reader: Box<dyn BufRead + Send> = if is_gzip {
+        Box::new(BufReader::with_capacity(64 * 1024, GzDecoder::new(file)))
+    } else {
+        Box::new(BufReader::with_capacity(64 * 1024, file))
+    };
+
+    let fasta_iter = FastaIterator::new(reader);
+
+    // Process without pre-allocation (we don't know the count)
     let mut sequence_infos = Vec::new();
     let mut hash_matches = 0;
-    let mut alignment_matches = 0;
+    let alignment_matches = 0;
+    let mut processed_count = 0;
+    let mut batch_count = 0;
 
-    for (header, seq) in &sequences {
-        let (hash_hex, hash_bytes) = compute_md5(seq);
+    // Maximum results to store (prevent OOM)
+    const MAX_RESULTS: usize = 1_000_000;
+
+    // Process sequences one at a time (streaming)
+    for (header, seq) in fasta_iter {
+        let (hash_hex, hash_bytes) = compute_md5(&seq);
         let seq_length = seq.len();
 
         // Perform database lookup if available
@@ -692,40 +716,87 @@ fn process_job(state: &AppState, job_id: &str, sequences: Vec<(String, String)>)
 
         let (annotation, annotation_source) = if lookup_result.found {
             hash_matches += 1;
-            (format_annotation(&lookup_result), Some("hash_match".to_string()))
+            (
+                format_annotation(&lookup_result),
+                Some("hash_match".to_string()),
+            )
         } else {
             (None, None)
         };
 
-        sequence_infos.push(SequenceInfo {
-            id: header.clone(),
-            md5_hash: hash_hex,
-            length: seq_length,
-            annotation,
-            annotation_source,
-            uniparc_id: lookup_result.uniparc_id,
-            ncbi_nrp_id: lookup_result.ncbi_nrp_id,
-            uniref100_id: lookup_result.uniref100_id,
-        });
+        // Only store results if we haven't hit the limit
+        if sequence_infos.len() < MAX_RESULTS {
+            sequence_infos.push(SequenceInfo {
+                id: header,
+                md5_hash: hash_hex,
+                length: seq_length,
+                annotation,
+                annotation_source,
+                uniparc_id: lookup_result.uniparc_id,
+                ncbi_nrp_id: lookup_result.ncbi_nrp_id,
+                uniref100_id: lookup_result.uniref100_id,
+            });
+        }
+
+        processed_count += 1;
+        batch_count += 1;
+
+        // Update progress every BATCH_SIZE sequences
+        if batch_count >= BATCH_SIZE {
+            batch_count = 0;
+            {
+                let mut jobs = state.jobs.write();
+                if let Some(job) = jobs.get_mut(job_id) {
+                    job.sequence_count = processed_count; // Update count as we go
+                    job.processed_count = processed_count;
+                    job.hash_matches = hash_matches;
+                    job.updated_at = Utc::now();
+                }
+            }
+            tracing::debug!(
+                "Job {} progress: {} sequences processed",
+                job_id,
+                processed_count
+            );
+        }
     }
 
-    // Update job with results
+    // Shrink to fit to release unused memory
+    sequence_infos.shrink_to_fit();
+
+    // Final update with results
     {
         let mut jobs = state.jobs.write();
         if let Some(job) = jobs.get_mut(job_id) {
-            job.status = JobStatus::Completed;
+            job.status = if processed_count > 0 {
+                JobStatus::Completed
+            } else {
+                JobStatus::Failed
+            };
             job.updated_at = Utc::now();
-            job.processed_count = sequences.len();
+            job.sequence_count = processed_count;
+            job.processed_count = processed_count;
             job.hash_matches = hash_matches;
             job.alignment_matches = alignment_matches;
+
+            // Add warning if results were truncated
+            if processed_count > MAX_RESULTS {
+                job.error_message = Some(format!(
+                    "Results truncated: showing first {} of {} sequences",
+                    MAX_RESULTS, processed_count
+                ));
+            } else if processed_count == 0 {
+                job.error_message = Some("No valid sequences found in input.".to_string());
+            }
+
             job.sequences = Some(sequence_infos);
         }
     }
 
     tracing::info!(
-        "Job {} completed: {} sequences, {} hash matches",
+        "Job {} completed: {} sequences processed, {} hash matches",
         job_id,
-        sequences.len(),
+        processed_count,
         hash_matches
     );
 }
@@ -804,10 +875,7 @@ fn process_job(state: &AppState, job_id: &str, sequences: Vec<(String, String)>)
         (status = 404, description = "Job not found", body = ErrorResponse)
     )
 )]
-async fn get_job(
-    State(state): State<AppState>,
-    Path(job_id): Path<String>,
-) -> impl IntoResponse {
+async fn get_job(State(state): State<AppState>, Path(job_id): Path<String>) -> impl IntoResponse {
     let jobs = state.jobs.read();
 
     match jobs.get(&job_id) {
@@ -822,123 +890,122 @@ async fn get_job(
     }
 }
 
-/// Handles the creation of a new bioinformatics job based on user-provided FASTA input.
+/// Maximum upload size (unlimited when using temp files but set to a reasonable limit)
+const MAX_UPLOAD_SIZE: usize = 10 * 1024 * 1024 * 1024; // 10 GB
+
+/// Get temp directory from environment or use default
+fn get_temp_dir() -> PathBuf {
+    env::var("AI_DB_TEMP_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/tmp"))
+}
+
+/// # Create Job Endpoint
+///
+/// This async function handles the creation of a "job" by processing multipart form submissions. It takes in
+/// a FASTA file (as a file upload or raw FASTA content) and prepares it for further processing. The function
+/// validates the input, streams the file directly to a temporary location on disk, and starts processing the job
+/// in the background while responding synchronously to the client.
 ///
 /// ## Endpoint
-/// - **Method**: POST
-/// - **Path**: `/api/job/`
-/// - **Tag**: `Jobs`
+/// - **Method:** POST
+/// - **Path:** `/api/job/`
+/// - **Tag:** Jobs
 ///
-/// ## Request
-/// This endpoint supports `multipart/form-data` content type for uploading either a FASTA file
-/// or raw FASTA content. Additionally, an optional job name can be provided.
-/// - **Fields**:
-///   - `file` (optional): A FASTA file. Gzipped files are supported and will be decompressed.
-///   - `fasta_content` (optional): Raw FASTA content in the request body. Gzipped content is also supported.
-///   - `job_name` (optional): A name for the job to be created.
+/// ## Request Body
+/// Multipart form data:
+/// - **file**: Optionally upload a FASTA file as a file input.
+/// - **fasta_content**: Paste FASTA content directly as an alternative to file upload.
+/// - **job_name**: (Optional) Provide a name for the job.
+///
+/// - **Content-Type:** `multipart/form-data`
+/// - **FASTA Data Requirements:** Input can either be a standard FASTA file or raw FASTA content.
+/// - **Size Limit:** The file size is capped at `MAX_UPLOAD_SIZE` with appropriate error handling triggered for larger files.
 ///
 /// ## Responses
-/// - **201 Created**: Returns upon successful job creation.
-///   - **Body**: [`JobCreateResponse`]
-///   - Details:
-///     - `job_id`: Unique identifier of the created job.
-///     - `status`: Initial status of the job (always "Pending").
-///     - `message`: A success message indicating the job has started processing.
-///     - `sequence_count`: The number of valid sequences present in the provided FASTA content.
-/// - **400 Bad Request**: Returned in one of the following cases:
-///   - Input is invalid or missing (e.g., no FASTA data provided).
-///   - An error occurred while processing the request (e.g., malformed data).
-///   - **Body**: [`ErrorResponse`]
-///   - Details:
-///     - `detail`: Human-readable error explanation.
+/// - **201 Created:** Job successfully created. Returns a JSON body of type `JobCreateResponse`.
+/// - **400 Bad Request:**
+///   - Invalid input, e.g., no file/content received.
+///   - File exceeds the maximum allowed size. Returns a JSON body of type `ErrorResponse`.
+/// - **500 Internal Server Error:** An error occurred on the server while handling the request or writing the temp file. Returns an `ErrorResponse`.
 ///
-/// ## Behavior
-/// - Extracts an owner ID from the cookie or generates a new one if not present.
-/// - Reads the request's multipart content to handle either a file upload or raw FASTA content.
-/// - Attempts to decompress Gzipped files and content as needed.
-/// - Parses the FASTA data to extract valid sequences.
-/// - Creates a job entry with an initial status of `Pending`.
-/// - Stores the job in the application's state and triggers asynchronous background processing of the job.
+/// ## Workflow
+/// 1. **Owner ID Management:**
+///    - Extracts or creates an owner ID from cookies.
 ///
-/// ## Error Handling
-/// - If no valid FASTA content is found in the request, returns a `400 Bad Request` with an error message.
-/// - Any errors during the multipart data read or decompression are logged and result in a failure response.
+/// 2. **Multipart Form Handling:**
+///    - Handles file uploads or directly provided content via multipart streams.
+///    - Writes file chunks directly to a temporary file on disk.
+///    - Validates the gzip format by examining magic bytes in the first data chunk.
 ///
-/// ## Background Processing
-/// - After job creation, processing of FASTA sequences occurs asynchronously using a separate task.
-/// - The processing involves computation tasks, alignment, and hashing, which update the job's status.
+/// 3. **Validation:**
+///    - Ensures that a valid file or content was uploaded.
+///    - Verifies file size constraints against `MAX_UPLOAD_SIZE`.
 ///
-/// ## Security
-/// - Owner IDs are managed within cookies to associate jobs with specific users.
-/// - No sensitive data is exposed in the request or response bodies.
+/// 4. **Temporary File Management:**
+///    - Uses a temporary directory configured via the `get_temp_dir` function.
+///    - Streams multipart form data directly into the temporary file for optimized memory usage.
+///    - Automatically cleans up temporary files after successful or failed processing.
 ///
-/// ## Example
+/// 5. **Job Creation:**
+///    - Creates a job in the system with a unique UUID, setting its initial state to `Pending`.
+///    - Updates the job state in the application's in-memory `jobs` storage for further reference.
 ///
-/// ### Request (file upload):
-/// ```http
-/// POST /api/job/
-/// Content-Type: multipart/form-data
+/// 6. **Background Processing:**
+///    - Schedules the background job processing using `tokio::task::spawn_blocking`.
+///    - Processes the uploaded data, handles any errors, and removes temporary files upon completion.
 ///
-/// --boundary
-/// Content-Disposition: form-data; name="file"; filename="example.fasta"
-/// Content-Type: application/octet-stream
-///
-/// >ACTG...
-/// --boundary--
-/// ```
-///
-/// ### Request (raw FASTA content):
-/// ```http
-/// POST /api/job/
-/// Content-Type: multipart/form-data
-///
-/// --boundary
-/// Content-Disposition: form-data; name="fasta_content"
-///
-/// >sequence1
-/// ATCG
-/// >sequence2
-/// TAGC
-/// --boundary--
-/// ```
-///
-/// ### Response (201 Created):
+/// ## Example Response
 /// ```json
 /// {
-///   "job_id": "123e4567-e89b-12d3-a456-426614174000",
+///   "job_id": "uuid-v4-string",
 ///   "status": "Pending",
-///   "message": "Job successfully created. Processing started.",
-///   "sequence_count": 2
+///   "created_at": "2023-03-25T18:35:12.345Z",
+///   "updated_at": "2023-03-25T18:35:12.345Z",
+///   "filename": "user_uploaded_file.fasta",
+///   "sequence_count": 0,
+///   "processed_count": 0,
+///   "hash_matches": 0,
+///   "alignment_matches": 0,
+///   "sequences": null,
+///   "error_message": null,
+///   "owner_id": "owner-id-stored-in-cookie"
 /// }
 /// ```
 ///
-/// ### Response (400 Bad Request):
+/// ## Error Responses
+/// - **400 Bad Request:**
 /// ```json
 /// {
-///   "detail": "No input received. Please upload FASTA file or send FASTA content."
+///   "detail": "File too large. Maximum size is 5 GB."
 /// }
 /// ```
-///
-/// ## Dependencies
-/// - This function relies on the following components:
-///   - `AppState`: Shared application state for storing jobs.
-///   - `CookieJar`: Used for managing owner IDs.
-///   - `Multipart`: For handling multipart form data.
-///   - `parse_fasta`: To parse and extract sequences from FASTA content.
-///   - `decompress_if_gzip`: To support Gzipped file or content uploads.
-///   - `process_job`: Background task handler for processing the job asynchronously.
+/// - **500 Internal Server Error:**
+/// ```json
+/// {
+///   "detail": "Failed to create temporary file for upload."
+/// }
+/// ```
 ///
 /// ## Notes
-/// - The job creation process ensures idempotent and asynchronous handling to avoid blocking the request/response lifecycle.
-/// - Errors related to malformed input or file handling are logged with appropriate warnings for debugging.
+/// - Gzip files are detected by checking the first two bytes (gzip magic numbers 0x1F and 0x8B).
+/// - Background job execution delays include a short sleep to ensure synchronization before processing begins.
 ///
 /// ## Parameters
-/// - `State(state)`: Extracted application-wide state (`AppState`) used for storing and accessing jobs.
-/// - `jar`: A `CookieJar` for handling owner tracking and managing session-scoped cookies.
-/// - `multipart`: A `Multipart` instance to process and read multipart request data.
+/// - `State(state): State<AppState>`: Shared application state containing context for processing.
+/// - `jar: CookieJar`: Cookie management for identifying ownership of the job.
+/// - `multipart: Multipart`: Handles multipart body uploads for files and form fields.
 ///
-/// ## Returns
-/// - A type implementing `IntoResponse`, containing either success or error HTTP responses (201 or 400).
+/// ## Internal Functions Used
+/// - `get_or_create_owner(jar)`: Retrieves or generates an owner ID from the provided cookies.
+/// - `get_temp_dir()`: Returns the path to the temporary directory for job processing.
+/// - `process_job_from_file`: Handles the sequence processing logic for the uploaded data.
+///
+/// ## Important Constants
+/// - `MAX_UPLOAD_SIZE`: Maximum uploaded file size allowed (in bytes).
+///
+/// ## Usage
+/// Call this endpoint by submitting a valid multipart form containing a FASTA file or content to initiate a job.
 #[utoipa::path(
     post,
     path = "/api/job/",
@@ -957,95 +1024,151 @@ async fn create_job(
     // Get or create owner ID from cookie
     let (owner_id, jar) = get_or_create_owner(jar);
 
-    let mut fasta_content: Option<String> = None;
+    let mut temp_file: Option<NamedTempFile> = None;
     let mut filename: Option<String> = None;
     let mut job_name: Option<String> = None;
+    let mut is_gzip_data = false;
+    let mut total_bytes = 0usize;
 
-    // Process multipart form data
+    // Get temp directory
+    let temp_dir = get_temp_dir();
+
+    // Process multipart form data - stream directly to temp file
     while let Some(field) = multipart.next_field().await.unwrap_or(None) {
         let field_name = field.name().unwrap_or("").to_string();
         let file_name = field.file_name().map(|s| s.to_string());
 
-        match field.bytes().await {
-            Ok(data) => match field_name.as_str() {
-                "file" => {
+        match field_name.as_str() {
+            "file" | "fasta_content" => {
+                if field_name == "file" {
                     filename = file_name;
-                    // Try to decompress if gzip, otherwise use raw data
-                    let raw_data = match decompress_if_gzip(&data) {
-                        Ok(decompressed) => decompressed,
+                }
+
+                // Create temp file in configured directory
+                let tf = match TempFileBuilder::new()
+                    .prefix("ai-db-upload-")
+                    .suffix(".fasta")
+                    .tempfile_in(&temp_dir)
+                {
+                    Ok(tf) => tf,
+                    Err(e) => {
+                        tracing::error!("Failed to create temp file in {:?}: {}", temp_dir, e);
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            jar,
+                            Json(ErrorResponse {
+                                detail: "Failed to create temporary file for upload.".to_string(),
+                            }),
+                        )
+                            .into_response();
+                    }
+                };
+
+                let mut file = tf;
+                let mut first_chunk = true;
+
+                // Stream chunks directly to temp file
+                let mut stream = field;
+                loop {
+                    match stream.chunk().await {
+                        Ok(Some(chunk)) => {
+                            // Check for gzip magic bytes in first chunk
+                            if first_chunk && chunk.len() >= 2 {
+                                is_gzip_data = chunk[0] == 0x1f && chunk[1] == 0x8b;
+                                first_chunk = false;
+                            }
+
+                            // Check size limit
+                            if total_bytes + chunk.len() > MAX_UPLOAD_SIZE {
+                                return (
+                                    StatusCode::BAD_REQUEST,
+                                    jar,
+                                    Json(ErrorResponse {
+                                        detail: format!(
+                                            "File too large. Maximum size is {} GB.",
+                                            MAX_UPLOAD_SIZE / (1024 * 1024 * 1024)
+                                        ),
+                                    }),
+                                )
+                                    .into_response();
+                            }
+
+                            // Write chunk to temp file
+                            if let Err(e) = file.write_all(&chunk) {
+                                tracing::error!("Failed to write to temp file: {}", e);
+                                return (
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    jar,
+                                    Json(ErrorResponse {
+                                        detail: "Failed to save uploaded data.".to_string(),
+                                    }),
+                                )
+                                    .into_response();
+                            }
+
+                            total_bytes += chunk.len();
+                        }
+                        Ok(None) => break,
                         Err(e) => {
-                            tracing::warn!("Gzip decompression failed: {}, using raw data", e);
-                            data.to_vec()
-                        }
-                    };
-                    if let Ok(content) = String::from_utf8(raw_data) {
-                        if !content.is_empty() {
-                            fasta_content = Some(content);
-                        }
-                    }
-                }
-                "fasta_content" => {
-                    // Also support gzip for direct content
-                    let raw_data = match decompress_if_gzip(&data) {
-                        Ok(decompressed) => decompressed,
-                        Err(_) => data.to_vec()
-                    };
-                    if let Ok(content) = String::from_utf8(raw_data) {
-                        if !content.is_empty() {
-                            fasta_content = Some(content);
+                            return (
+                                StatusCode::BAD_REQUEST,
+                                jar,
+                                Json(ErrorResponse {
+                                    detail: format!("Error reading upload: {}", e),
+                                }),
+                            )
+                                .into_response();
                         }
                     }
                 }
-                "job_name" => {
+
+                // Flush and save the temp file
+                if total_bytes > 0 {
+                    if let Err(e) = file.flush() {
+                        tracing::warn!("Failed to flush temp file: {}", e);
+                    }
+                    temp_file = Some(file);
+                }
+            }
+            "job_name" => {
+                if let Ok(data) = field.bytes().await {
                     if let Ok(name) = String::from_utf8(data.to_vec()) {
                         job_name = Some(name);
                     }
                 }
-                _ => {}
-            },
-            Err(e) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    jar,
-                    Json(ErrorResponse {
-                        detail: format!("Fehler beim Lesen der Daten: {}", e),
-                    }),
-                ).into_response()
+            }
+            _ => {
+                // Consume and discard unknown fields
+                let _ = field.bytes().await;
             }
         }
     }
 
     // Validate input
-    let content = match fasta_content {
-        Some(c) => c,
+    let tf = match temp_file {
+        Some(tf) => tf,
         None => {
             return (
                 StatusCode::BAD_REQUEST,
                 jar,
                 Json(ErrorResponse {
-                    detail: "No input received. Please upload FASTA file or send FASTA content.".to_string(),
+                    detail: "No input received. Please upload a FASTA file or paste FASTA content."
+                        .to_string(),
                 }),
-            ).into_response()
+            )
+                .into_response()
         }
     };
 
-    // Parse FASTA
-    let sequences = parse_fasta(&content);
+    tracing::info!(
+        "Received upload: {} bytes, gzip: {}",
+        total_bytes,
+        is_gzip_data
+    );
 
-    if sequences.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            jar,
-            Json(ErrorResponse {
-                detail: "No valid sequences found in the input.".to_string(),
-            }),
-        ).into_response();
-    }
-
-    // Create job
+    // Create job (sequence_count will be determined during processing)
     let job_id = Uuid::new_v4().to_string();
     let now = Utc::now();
-    let sequence_count = sequences.len();
 
     let job = JobResponse {
         job_id: job_id.clone(),
@@ -1055,7 +1178,7 @@ async fn create_job(
         filename: filename
             .or(job_name.clone())
             .or(Some("direct_input".to_string())),
-        sequence_count,
+        sequence_count: 0,
         processed_count: 0,
         hash_matches: 0,
         alignment_matches: 0,
@@ -1070,13 +1193,39 @@ async fn create_job(
         jobs.insert(job_id.clone(), job);
     }
 
+    // Keep temp file path for background processing
+    let temp_path = tf.into_temp_path();
+
     // Process job in background
     let state_clone = state.clone();
     let job_id_clone = job_id.clone();
     tokio::spawn(async move {
         // Small delay to ensure job is stored
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        process_job(&state_clone, &job_id_clone, sequences);
+
+        // Use blocking task for CPU-intensive work
+        let state_for_blocking = state_clone.clone();
+        let job_id_for_blocking = job_id_clone.clone();
+        let path_clone = temp_path.to_path_buf();
+
+        let result = tokio::task::spawn_blocking(move || {
+            process_job_from_file(
+                &state_for_blocking,
+                &job_id_for_blocking,
+                &path_clone,
+                is_gzip_data,
+            );
+        })
+        .await;
+
+        // Clean up temp file
+        if let Err(e) = temp_path.close() {
+            tracing::warn!("Failed to clean up temp file: {}", e);
+        }
+
+        if let Err(e) = result {
+            tracing::error!("Job processing panicked: {}", e);
+        }
     });
 
     // Return response with cookie jar
@@ -1087,9 +1236,10 @@ async fn create_job(
             job_id,
             status: JobStatus::Pending,
             message: "Job successfully created. Processing started.".to_string(),
-            sequence_count,
+            sequence_count: 0, // Unknown until processing starts
         }),
-    ).into_response()
+    )
+        .into_response()
 }
 
 /// `list_jobs` is an HTTP GET endpoint to retrieve a list of jobs created by the user.
@@ -1287,7 +1437,8 @@ async fn delete_job(
                 Json(ErrorResponse {
                     detail: "No permission to delete this job".to_string(),
                 }),
-            ).into_response();
+            )
+                .into_response();
         }
     }
 
@@ -1435,18 +1586,17 @@ async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
 async fn db_info(State(state): State<AppState>) -> impl IntoResponse {
     let db_info = if let Some(conn) = state.open_db_connection() {
         // Get row count from ups table
-        let ups_count: Result<i64, _> = conn.query_row(
-            "SELECT COUNT(*) FROM ups",
-            [],
-            |row| row.get(0)
-        );
+        let ups_count: Result<i64, _> =
+            conn.query_row("SELECT COUNT(*) FROM ups", [], |row| row.get(0));
 
         // Try to get version info if available
-        let version: Option<String> = conn.query_row(
-            "SELECT json_extract(info, '$.version') FROM version LIMIT 1",
-            [],
-            |row| row.get(0)
-        ).ok();
+        let version: Option<String> = conn
+            .query_row(
+                "SELECT json_extract(info, '$.version') FROM version LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .ok();
 
         serde_json::json!({
             "available": true,
@@ -1508,8 +1658,7 @@ async fn main() {
     // Initialize tracing
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 
@@ -1517,18 +1666,9 @@ async fn main() {
 
     // CORS configuration
     let cors = CorsLayer::new()
-        .allow_origin(tower_http::cors::AllowOrigin::mirror_request())
-        .allow_methods([
-            Method::GET,
-            Method::POST,
-            Method::DELETE,
-            Method::OPTIONS
-        ])
-        .allow_headers([
-            header::CONTENT_TYPE,
-            header::ACCEPT,
-            header::AUTHORIZATION
-        ])
+        .allow_origin(AllowOrigin::mirror_request())
+        .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::OPTIONS])
+        .allow_headers([header::CONTENT_TYPE, header::ACCEPT, header::AUTHORIZATION])
         .allow_credentials(true);
 
     // Build router

@@ -4,7 +4,7 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    container_name: ai-db
+    container_name: ai-db-frontend
     ports:
       - "80:80"
       - "443:443"
@@ -17,7 +17,7 @@ services:
     networks:
       - app-network
 
-  # Rust backend
+  # Rust/Axum Backend
   api:
     build:
       context: ./backend
@@ -25,12 +25,13 @@ services:
     container_name: ai-db-api
     expose:
       - "8000"
-    volumes:
-      # Bakta DB read only
-      - /mnt/bakta-db/db:/bakta-db:ro
     environment:
       - RUST_LOG=info
       - BAKTA_DB=/bakta-db
+      - AI_DB_TEMP_DIR=/tmp-data
+    volumes:
+      - /mnt/bakta-db/db:/bakta-db:ro
+      - /mnt/ai-db-tmp:/tmp-data
     restart: unless-stopped
     networks:
       - app-network

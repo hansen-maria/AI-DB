@@ -11,6 +11,11 @@ axum = { version = "0.8.8", features = ["multipart"] }
 tower = "0.5.3"
 tower-http = { version = "0.6.8", features = ["cors", "trace"] }
 
+# Cookie handling
+axum-extra = { version = "0.12.5", features = ["cookie"] }
+cookie = "0.18"
+time = "0.3"
+
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 
@@ -34,13 +39,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Gzip decompression
 flate2 = "1.0"
 
+# Temporary files for streaming
+tempfile = "3.10"
+
 # SQLite for Bakta DB
 rusqlite = { version = "0.38.0", features = ["bundled"] }
-
-# Cookie handling
-axum-extra = { version = "0.12.5", features = ["cookie"] }
-cookie = "0.18"
-time = "0.3.45"
 
 [profile.release]
 lto = true
