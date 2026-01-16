@@ -22,6 +22,47 @@ export interface SequenceInfo {
     uniref100_id: string | null;
 }
 
+export interface PaginationInfo {
+    page: number;
+    per_page: number;
+    total_items: number;
+    total_pages: number;
+    has_next: boolean;
+    has_prev: boolean;
+}
+
+export interface JobSummary {
+    job_id: string;
+    status: JobStatus;
+    created_at: string;
+    updated_at: string;
+    filename: string | null;
+    sequence_count: number;
+    processed_count: number;
+    hash_matches: number;
+    error_message: string | null;
+}
+
+export interface PaginatedJobsResponse {
+    jobs: JobSummary[];
+    pagination: PaginationInfo;
+}
+
+export interface PaginatedJobResponse {
+    job_id: string;
+    status: JobStatus;
+    created_at: string;
+    updated_at: string;
+    filename: string | null;
+    sequence_count: number;
+    processed_count: number;
+    hash_matches: number;
+    alignment_matches: number;
+    error_message: string | null;
+    sequences: SequenceInfo[];
+    pagination: PaginationInfo;
+}
+
 export interface JobResponse {
     job_id: string;
     status: JobStatus;
@@ -126,10 +167,19 @@ export async function createJobWithContent(
 }
 
 /**
- * Get job status and results
+ * Get job status and results with pagination
  */
-export async function getJob(jobId: string): Promise<JobResponse> {
-    const response = await fetch(`${API_BASE}/job/${jobId}`, {
+export async function getJob(
+    jobId: string,
+    page = 1,
+    perPage = 20
+): Promise<PaginatedJobResponse> {
+    const params = new URLSearchParams({
+        page: page.toString(),
+        per_page: perPage.toString(),
+    });
+
+    const response = await fetch(`${API_BASE}/job/${jobId}?${params}`, {
         credentials: 'include', // Include cookies
     });
 
@@ -155,10 +205,18 @@ export async function getJob(jobId: string): Promise<JobResponse> {
 }
 
 /**
- * List all jobs
+ * List all jobs with pagination
  */
-export async function listJobs(limit = 100): Promise<JobResponse[]> {
-    const response = await fetch(`${API_BASE}/jobs/?limit=${limit}`, {
+export async function listJobs(
+    page = 1,
+    perPage = 20
+): Promise<PaginatedJobsResponse> {
+    const params = new URLSearchParams({
+        page: page.toString(),
+        per_page: perPage.toString(),
+    });
+
+    const response = await fetch(`${API_BASE}/jobs/?${params}`, {
         credentials: 'include', // Include cookies
     });
 
@@ -167,7 +225,17 @@ export async function listJobs(limit = 100): Promise<JobResponse[]> {
     if (!contentType || !contentType.includes('application/json')) {
         // API not available or returned HTML (e.g., 404 page)
         console.warn('API returned non-JSON response, returning empty list');
-        return [];
+        return {
+            jobs: [],
+            pagination: {
+                page: 1,
+                per_page: perPage,
+                total_items: 0,
+                total_pages: 0,
+                has_next: false,
+                has_prev: false,
+            },
+        };
     }
 
     if (!response.ok) {

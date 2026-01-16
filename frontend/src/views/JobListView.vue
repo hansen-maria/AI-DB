@@ -1,11 +1,14 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { RouterLink } from 'vue-router'
-import { listJobs, type JobResponse, type JobStatus } from '../api/jobs.ts'
+import { listJobs, type JobSummary, type JobStatus, type PaginationInfo } from '../api/jobs.ts'
 
-const jobs = ref<JobResponse[]>([])
+const jobs = ref<JobSummary[]>([])
+const pagination = ref<PaginationInfo | null>(null)
 const loading = ref(true)
 const error = ref('')
+const currentPage = ref(1)
+const perPage = 20
 
 const statusColors: Record<JobStatus, string> = {
   pending: '#ff9800',
@@ -21,16 +24,44 @@ const statusLabels: Record<JobStatus, string> = {
   failed: 'Failed'
 }
 
-async function loadJobs() {
+// Generate page numbers to display
+const pageNumbers = computed(() => {
+  if (!pagination.value) return []
+  const total = pagination.value.total_pages
+  const current = pagination.value.page
+  const pages: number[] = []
+
+  // Show max 5 pages around current
+  let start = Math.max(1, current - 2)
+  let end = Math.min(total, current + 2)
+
+  // Adjust if near edges
+  if (current <= 3) {
+    end = Math.min(5, total)
+  }
+  if (current >= total - 2) {
+    start = Math.max(1, total - 4)
+  }
+
+  for (let i = start; i <= end; i++) {
+    pages.push(i)
+  }
+  return pages
+})
+
+async function loadJobs(page = 1) {
   loading.value = true
   error.value = ''
+  currentPage.value = page
 
   try {
-    jobs.value = await listJobs()
+    const response = await listJobs(page, perPage)
+    jobs.value = response.jobs
+    pagination.value = response.pagination
   } catch (e) {
-    // Don't show error for empty results, just show empty state
     if (e instanceof Error && e.message === 'API not available') {
       jobs.value = []
+      pagination.value = null
     } else {
       error.value = e instanceof Error ? e.message : 'Failed to load jobs'
     }
@@ -39,33 +70,30 @@ async function loadJobs() {
   }
 }
 
+function goToPage(page: number) {
+  if (page >= 1 && (!pagination.value || page <= pagination.value.total_pages)) {
+    loadJobs(page)
+  }
+}
+
 function formatDate(dateStr: string) {
   const date = new Date(dateStr)
   const now = new Date()
   const diff = now.getTime() - date.getTime()
 
-  // Less than 1 minute
-  if (diff < 60000) {
-    return 'Just now'
-  }
-
-  // Less than 1 hour
+  if (diff < 60000) return 'Just now'
   if (diff < 3600000) {
     const mins = Math.floor(diff / 60000)
     return `${mins} min${mins > 1 ? 's' : ''} ago`
   }
-
-  // Less than 24 hours
   if (diff < 86400000) {
     const hours = Math.floor(diff / 3600000)
     return `${hours} hour${hours > 1 ? 's' : ''} ago`
   }
-
-  // Otherwise show date
   return date.toLocaleDateString()
 }
 
-onMounted(loadJobs)
+onMounted(() => loadJobs())
 </script>
 
 <template>
@@ -98,7 +126,7 @@ onMounted(loadJobs)
         <line x1="12" y1="16" x2="12.01" y2="16"/>
       </svg>
       <p>{{ error }}</p>
-      <button @click="loadJobs" class="btn btn-secondary">Try Again</button>
+      <button @click="loadJobs(currentPage)" class="btn btn-secondary">Try Again</button>
     </div>
 
     <!-- Empty State -->
@@ -115,62 +143,113 @@ onMounted(loadJobs)
     </div>
 
     <!-- Jobs List -->
-    <div v-else class="jobs-list">
-      <RouterLink
-          v-for="job in jobs"
-          :key="job.job_id"
-          :to="{ name: 'job', params: { id: job.job_id } }"
-          class="job-card"
-      >
-        <div class="job-status">
-          <span class="status-dot" :style="{ backgroundColor: statusColors[job.status] }">
-            <span v-if="job.status === 'processing'" class="pulse"></span>
-          </span>
-          <span class="status-text">{{ statusLabels[job.status] }}</span>
-        </div>
+    <template v-else>
+      <div class="jobs-list">
+        <RouterLink
+            v-for="job in jobs"
+            :key="job.job_id"
+            :to="{ name: 'job', params: { id: job.job_id } }"
+            class="job-card"
+        >
+          <div class="job-status">
+            <span class="status-dot" :style="{ backgroundColor: statusColors[job.status] }">
+              <span v-if="job.status === 'processing'" class="pulse"></span>
+            </span>
+            <span class="status-text">{{ statusLabels[job.status] }}</span>
+          </div>
 
-        <div class="job-info">
-          <span class="job-name">{{ job.filename || 'Direct Input' }}</span>
-          <span class="job-id">{{ job.job_id.substring(0, 8) }}...</span>
-        </div>
+          <div class="job-info">
+            <span class="job-name">{{ job.filename || 'Direct Input' }}</span>
+            <span class="job-id">{{ job.job_id.substring(0, 8) }}...</span>
+          </div>
 
-        <div class="job-stats">
-          <span class="stat">
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-              <polyline points="14 2 14 8 20 8"/>
-            </svg>
-            {{ job.sequence_count }} seq
-          </span>
-          <span v-if="job.status === 'completed'" class="stat success">
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="20 6 9 17 4 12"/>
-            </svg>
-            {{ job.hash_matches }} matches
-          </span>
-        </div>
+          <div class="job-stats">
+            <span class="stat">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+              </svg>
+              {{ job.sequence_count }} seq
+            </span>
+            <span v-if="job.status === 'completed'" class="stat success">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="20 6 9 17 4 12"/>
+              </svg>
+              {{ job.hash_matches }} matches
+            </span>
+          </div>
 
-        <div class="job-time">
-          {{ formatDate(job.updated_at) }}
-        </div>
+          <div class="job-time">
+            {{ formatDate(job.updated_at) }}
+          </div>
 
-        <svg class="arrow" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <polyline points="9 18 15 12 9 6"/>
-        </svg>
-      </RouterLink>
-    </div>
+          <svg class="arrow" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="9 18 15 12 9 6"/>
+          </svg>
+        </RouterLink>
+      </div>
 
-    <!-- Refresh Button -->
-    <div v-if="jobs.length > 0" class="refresh-section">
-      <button @click="loadJobs" class="refresh-btn">
-        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <polyline points="23 4 23 10 17 10"/>
-          <polyline points="1 20 1 14 7 14"/>
-          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
-        </svg>
-        Refresh
-      </button>
-    </div>
+      <!-- Pagination -->
+      <div v-if="pagination && pagination.total_pages > 1" class="pagination">
+        <button
+            class="page-btn"
+            :disabled="!pagination.has_prev"
+            @click="goToPage(pagination.page - 1)"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="15 18 9 12 15 6"/>
+          </svg>
+        </button>
+
+        <button
+            v-if="pageNumbers[0] > 1"
+            class="page-btn"
+            @click="goToPage(1)"
+        >1</button>
+        <span v-if="pageNumbers[0] > 2" class="page-ellipsis">...</span>
+
+        <button
+            v-for="page in pageNumbers"
+            :key="page"
+            class="page-btn"
+            :class="{ active: page === pagination.page }"
+            @click="goToPage(page)"
+        >{{ page }}</button>
+
+        <span v-if="pageNumbers[pageNumbers.length - 1] < pagination.total_pages - 1" class="page-ellipsis">...</span>
+        <button
+            v-if="pageNumbers[pageNumbers.length - 1] < pagination.total_pages"
+            class="page-btn"
+            @click="goToPage(pagination.total_pages)"
+        >{{ pagination.total_pages }}</button>
+
+        <button
+            class="page-btn"
+            :disabled="!pagination.has_next"
+            @click="goToPage(pagination.page + 1)"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="9 18 15 12 9 6"/>
+          </svg>
+        </button>
+
+        <span class="page-info">
+          {{ pagination.total_items }} total jobs
+        </span>
+      </div>
+
+      <!-- Refresh Button -->
+      <div class="refresh-section">
+        <button @click="loadJobs(currentPage)" class="refresh-btn">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="23 4 23 10 17 10"/>
+            <polyline points="1 20 1 14 7 14"/>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+          </svg>
+          Refresh
+        </button>
+      </div>
+    </template>
   </div>
 </template>
 
@@ -447,6 +526,80 @@ onMounted(loadJobs)
 
   .arrow {
     display: none;
+  }
+}
+
+/* Pagination */
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-top: 2rem;
+  flex-wrap: wrap;
+}
+
+.page-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 36px;
+  height: 36px;
+  padding: 0 0.75rem;
+  font-size: 0.9rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-background);
+  color: var(--color-text);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.page-btn:hover:not(:disabled) {
+  background: var(--color-background-soft);
+  border-color: var(--color-border-hover);
+}
+
+.page-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.page-btn.active {
+  background: hsla(160, 100%, 37%, 1);
+  border-color: hsla(160, 100%, 37%, 1);
+  color: white;
+}
+
+.page-ellipsis {
+  color: var(--color-text);
+  opacity: 0.6;
+  padding: 0 0.25rem;
+}
+
+.page-info {
+  margin-left: 1rem;
+  font-size: 0.85rem;
+  color: var(--color-text);
+  opacity: 0.7;
+}
+
+@media (max-width: 600px) {
+  .pagination {
+    gap: 0.25rem;
+  }
+
+  .page-btn {
+    min-width: 32px;
+    height: 32px;
+    padding: 0 0.5rem;
+    font-size: 0.85rem;
+  }
+
+  .page-info {
+    width: 100%;
+    text-align: center;
+    margin: 0.5rem 0 0 0;
   }
 }
 </style>

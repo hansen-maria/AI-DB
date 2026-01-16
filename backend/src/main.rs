@@ -1,8 +1,8 @@
 //! AI-DB REST API Backend
 //! Hash-Based Annotation Service for Microbial Sequencing Data
 
-use axum::http::{header, Method};
 use axum::extract::DefaultBodyLimit;
+use axum::http::{header, Method};
 use axum::{
     extract::{Multipart, Path, Query, State},
     http::StatusCode,
@@ -118,10 +118,130 @@ pub struct ErrorResponse {
     pub detail: String,
 }
 
-/// Query parameters for job lists
+/// Pagination information
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct PaginationInfo {
+    /// Current page (1-indexed)
+    pub page: usize,
+    /// Items per page
+    pub per_page: usize,
+    /// Total number of items
+    pub total_items: usize,
+    /// Total number of pages
+    pub total_pages: usize,
+    /// Has next page
+    pub has_next: bool,
+    /// Has previous page
+    pub has_prev: bool,
+}
+
+impl PaginationInfo {
+    pub fn new(page: usize, per_page: usize, total_items: usize) -> Self {
+        let total_pages = (total_items + per_page - 1) / per_page; // Ceiling division
+        Self {
+            page,
+            per_page,
+            total_items,
+            total_pages,
+            has_next: page < total_pages,
+            has_prev: page > 1,
+        }
+    }
+}
+
+/// Paginated response for job list
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct PaginatedJobsResponse {
+    /// List of jobs (without sequences for performance)
+    pub jobs: Vec<JobSummary>,
+    /// Pagination information
+    pub pagination: PaginationInfo,
+}
+
+/// Job summary (without sequences for list view)
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct JobSummary {
+    /// Unique job ID
+    pub job_id: String,
+    /// Current job status
+    pub status: JobStatus,
+    /// Creation timestamp
+    pub created_at: DateTime<Utc>,
+    /// Last update timestamp
+    pub updated_at: DateTime<Utc>,
+    /// Uploaded filename
+    pub filename: Option<String>,
+    /// Total sequence count
+    pub sequence_count: usize,
+    /// Processed sequence count
+    pub processed_count: usize,
+    /// Hash match count
+    pub hash_matches: usize,
+    /// Error message (if failed)
+    pub error_message: Option<String>,
+}
+
+impl From<&JobResponse> for JobSummary {
+    fn from(job: &JobResponse) -> Self {
+        Self {
+            job_id: job.job_id.clone(),
+            status: job.status.clone(),
+            created_at: job.created_at,
+            updated_at: job.updated_at,
+            filename: job.filename.clone(),
+            sequence_count: job.sequence_count,
+            processed_count: job.processed_count,
+            hash_matches: job.hash_matches,
+            error_message: job.error_message.clone(),
+        }
+    }
+}
+
+/// Paginated job details response
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct PaginatedJobResponse {
+    /// Job ID
+    pub job_id: String,
+    /// Current job status
+    pub status: JobStatus,
+    /// Creation timestamp
+    pub created_at: DateTime<Utc>,
+    /// Last update timestamp
+    pub updated_at: DateTime<Utc>,
+    /// Uploaded filename
+    pub filename: Option<String>,
+    /// Total sequence count
+    pub sequence_count: usize,
+    /// Processed sequence count
+    pub processed_count: usize,
+    /// Hash match count
+    pub hash_matches: usize,
+    /// Alignment match count
+    pub alignment_matches: usize,
+    /// Error message (if failed)
+    pub error_message: Option<String>,
+    /// Paginated sequences
+    pub sequences: Vec<SequenceInfo>,
+    /// Pagination information for sequences
+    pub pagination: PaginationInfo,
+}
+
+/// Query parameters for job list
 #[derive(Debug, Deserialize)]
 pub struct ListJobsQuery {
-    limit: Option<usize>,
+    /// Page number (1-indexed, default: 1)
+    pub page: Option<usize>,
+    /// Items per page (default: 20, max: 100)
+    pub per_page: Option<usize>,
+}
+
+/// Query parameters for job details
+#[derive(Debug, Deserialize)]
+pub struct GetJobQuery {
+    /// Page number for sequences (1-indexed, default: 1)
+    pub page: Option<usize>,
+    /// Sequences per page (default: 20, max: 100)
+    pub per_page: Option<usize>,
 }
 
 /// Bakta Hash Lookup Result
@@ -806,81 +926,153 @@ fn process_job_from_file(
 // API Handlers
 // ============================================================================
 
-/// API Handler and Documentation for the `get_job` function.
+/// Default items per page
+const DEFAULT_PER_PAGE: usize = 20;
+/// Maximum items per page
+const MAX_PER_PAGE: usize = 100;
+
+/// Retrieves information about a specific job using its unique job ID.
 ///
-/// This function defines a REST API endpoint to fetch details of a job based on the provided job ID.
-/// It is accessible via a `GET` request to the `/api/job/{job_id}` route.
+/// This endpoint allows clients to fetch details about a job, including its status, metadata,
+/// and associated sequences. The sequences can be paginated using optional query parameters.
 ///
-/// # Attributes
-///
-/// - `#[utoipa::path]`:
-///   - **HTTP Method**: `GET`
-///   - **Path**: `/api/job/{job_id}`
-///   - **Tag**: `Jobs`
-///   - **Parameters**:
-///     - `job_id` (Path - String): A unique identifier for the job (UUID).
-///   - **Responses**:
-///     - `200 OK`: Returned when the job is found. The body contains a JSON serialized `JobResponse`.
-///     - `404 NOT FOUND`: Returned when the job is not found. The body contains an `ErrorResponse` with a descriptive error message.
+/// # Endpoint
+/// `GET /api/job/{job_id}`
 ///
 /// # Parameters
 ///
-/// - `State(state)`: Shared application state (`AppState`) passed to the handler. This includes a read lock on the `jobs` store, which holds all job data.
-/// - `Path(job_id)`: The unique ID of the job retrieved from the request path.
+/// **Path Parameters:**
+/// - `job_id` (String): The unique identifier (UUID) of the job to retrieve.
 ///
-/// # Returns
+/// **Query Parameters (optional):**
+/// - `page` (Option<usize>): The page number of sequences to retrieve (default: 1, indexed from 1).
+/// - `per_page` (Option<usize>): The number of sequences per page (default: 20, maximum: 100).
 ///
-/// This function returns a response that implements the `IntoResponse` trait. The response can be one of the following:
-/// - **Status 200 OK**: If the job is found, it includes a JSON representation of the job in the response body.
-/// - **Status 404 NOT FOUND**: If the job is not found, it includes an error message in the response body.
+/// # Responses
 ///
-/// # Examples
+/// - **200 OK**: The job was found, and its details (including sequences, if available) are returned in the response body.
+///   - Response Body: [`PaginatedJobResponse`](PaginatedJobResponse)
+///   - Includes pagination information and the sequences data if available.
 ///
-/// ## Request
-/// ```http
-/// GET /api/job/123e4567-e89b-12d3-a456-426614174000 HTTP/1.1
-/// Host: example.com
-/// ```
-///
-/// ## Response (200 OK)
-/// ```json
-/// {
-///   "id": "123e4567-e89b-12d3-a456-426614174000",
-///   "name": "Job Name",
-///   "status": "In Progress"
-/// }
-/// ```
-///
-/// ## Response (404 NOT FOUND)
-/// ```json
-/// {
-///   "detail": "Job with ID '123e4567-e89b-12d3-a456-426614174000' not found"
-/// }
-/// ```
+/// - **404 Not Found**: The job with the specified ID does not exist.
+///   - Response Body: [`ErrorResponse`](ErrorResponse)
 ///
 /// # Implementation Details
 ///
-/// - The function uses a read-lock (`state.jobs.read()`) to access the `jobs` store from `AppState`.
-/// - It attempts to fetch the job corresponding to the given `job_id` from the `jobs` map.
-/// - If the job exists, its data is serialized to JSON and returned with a `200 OK` status.
-/// - If the job is not found, an `ErrorResponse` with a descriptive error message is created and returned with a `404 NOT FOUND` status.
+/// - The job data is retrieved from a shared `jobs` resource in the application state.
+/// - The sequences associated with the job are paginated based on the `page` and `per_page` parameters:
+///   - Defaults: `page` = 1, `per_page` = 20.
+///   - Constraints: `page` must be at least 1, and `per_page` is capped at 100 with a minimum value of 1.
+/// - If the job does not have any sequences, an empty list will be returned for the sequences field.
+///
+/// # Errors
+///
+/// - If the `job_id` does not exist, a `404 Not Found` response is returned, including an error message
+///   in the response body.
+///
+/// # Example Usage
+///
+/// ## Request:
+/// ```http
+/// GET /api/job/48a7b1ad-67d1-4cc1-aad6-63ed0a2b5e12?page=2&per_page=10 HTTP/1.1
+/// Host: example.com
+/// ```
+///
+/// ## Successful Response (200):
+/// ```json
+/// {
+///   "job_id": "48a7b1ad-67d1-4cc1-aad6-63ed0a2b5e12",
+///   "status": "completed",
+///   "created_at": "2023-09-20T12:00:00Z",
+///   "updated_at": "2023-09-21T15:30:00Z",
+///   "filename": "example_file.fasta",
+///   "sequence_count": 50,
+///   "processed_count": 50,
+///   "hash_matches": 25,
+///   "alignment_matches": 20,
+///   "error_message": null,
+///   "sequences": [ ... ], // Paginated sequence data
+///   "pagination": {
+///     "page": 2,
+///     "per_page": 10,
+///     "total_items": 50,
+///     "total_pages": 5
+///   }
+/// }
+/// ```
+///
+/// ## Error Response (404):
+/// ```json
+/// {
+///   "detail": "Job with ID '48a7b1ad-67d1-4cc1-aad6-63ed0a2b5e12' not found"
+/// }
+/// ```
 #[utoipa::path(
     get,
     path = "/api/job/{job_id}",
     tag = "Jobs",
     params(
-        ("job_id" = String, Path, description = "Unique job ID (UUID)")
+        ("job_id" = String, Path, description = "Unique job ID (UUID)"),
+        ("page" = Option<usize>, Query, description = "Sequence page (indexed from 1, default: 1)"),
+        ("per_page" = Option<usize>, Query, description = "Sequences per page (default: 20, max: 100)")
     ),
     responses(
         (status = 200, description = "Job found", body = JobResponse),
         (status = 404, description = "Job not found", body = ErrorResponse)
     )
 )]
-async fn get_job(State(state): State<AppState>, Path(job_id): Path<String>) -> impl IntoResponse {
+async fn get_job(
+    State(state): State<AppState>,
+    Path(job_id): Path<String>,
+    Query(query): Query<GetJobQuery>,
+) -> impl IntoResponse {
+    let page = query.page.unwrap_or(1).max(1);
+    let per_page = query
+        .per_page
+        .unwrap_or(DEFAULT_PER_PAGE)
+        .min(MAX_PER_PAGE)
+        .max(1);
+
     let jobs = state.jobs.read();
 
     match jobs.get(&job_id) {
-        Some(job) => (StatusCode::OK, Json(serde_json::to_value(job).unwrap())).into_response(),
+        Some(job) => {
+            let sequences = job.sequences.as_ref();
+            let total_items = sequences.map(|s| s.len()).unwrap_or(0);
+
+            // Calculate pagination
+            let pagination = PaginationInfo::new(page, per_page, total_items);
+
+            // Get paginated sequences
+            let paginated_sequences: Vec<SequenceInfo> = if let Some(seqs) = sequences {
+                let start = (page - 1) * per_page;
+                let end = (start + per_page).min(seqs.len());
+                if start < seqs.len() {
+                    seqs[start..end].to_vec()
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            };
+
+            let response = PaginatedJobResponse {
+                job_id: job.job_id.clone(),
+                status: job.status.clone(),
+                created_at: job.created_at,
+                updated_at: job.updated_at,
+                filename: job.filename.clone(),
+                sequence_count: job.sequence_count,
+                processed_count: job.processed_count,
+                hash_matches: job.hash_matches,
+                alignment_matches: job.alignment_matches,
+                error_message: job.error_message.clone(),
+                sequences: paginated_sequences,
+                pagination,
+            };
+
+            (StatusCode::OK, Json(response)).into_response()
+        }
         None => (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
@@ -1243,79 +1435,93 @@ async fn create_job(
         .into_response()
 }
 
-/// `list_jobs` is an HTTP GET endpoint to retrieve a list of jobs created by the user.
-///
-/// This endpoint is part of the "Jobs" API and provides a paginated list of jobs created by the user
-/// with an optional limit parameter to specify the maximum number of jobs to return.
-/// By default, the limit is set to 100 if not provided in the query parameters.
+/// Fetches a paginated list of jobs for the authenticated owner.
 ///
 /// # Endpoint
-/// `/api/jobs/`
+/// GET `/api/jobs/`
+///
+/// # Query Parameters
+/// - `page` (optional): The page number of the results, 1-indexed. Defaults to `1`.
+/// - `per_page` (optional): The number of jobs to return per page. Defaults to `20`, with a maximum of `100`.
+///
+/// # Behavior
+/// - Only jobs that belong to the authenticated owner are returned, determined by the `OWNER_COOKIE_NAME` cookie.
+/// - Jobs are sorted by their `created_at` field in descending order (newest first).
+/// - Pagination is applied to the filtered and sorted job list based on the provided or default `page` and `per_page` values.
+///
+/// # Response
+/// - **Status 200**: Returns a JSON object containing the paginated list of jobs and pagination information.
+///   - Body: `Vec<JobResponse>`
+///     ```json
+///     {
+///       "jobs": [
+///         {
+///           "id": "string",
+///           "name": "string",
+///           "created_at": "datetime",
+///           ...
+///         }
+///       ],
+///       "pagination": {
+///         "page": 1,
+///         "per_page": 20,
+///         "total_items": 100,
+///         "total_pages": 5
+///       }
+///     }
+///     ```
 ///
 /// # Parameters
+/// - `State<AppState>`: Application-wide shared state that contains references to the job repository.
+/// - `jar: CookieJar`: Allows fetching cookies, which are used to determine the authenticated owner's ID.
+/// - `Query<ListJobsQuery>`: Captures optional query parameters (`page`, `per_page`) for pagination settings.
 ///
-/// - `limit` (optional): `Option<usize>`
-///     - Query parameter that specifies the maximum number of job entries to return.
-///     - Default value: 100.
+/// # Internal Logic
+/// - Defaults are applied for `page` and `per_page` if not provided.
+/// - Jobs are filtered to include only those belonging to the authenticated owner (matched by cookie).
+/// - The filtered jobs are converted into summaries and sorted by creation time.
+/// - Pagination is calculated based on the `page` and `per_page` settings and applied to the sorted job list.
+/// - The result, along with pagination metadata, is returned as a JSON response.
 ///
-/// # Responses
+/// # Notes
+/// - If the `OWNER_COOKIE_NAME` does not exist or is invalid, no jobs are returned.
+/// - If the requested page exceeds the total number of pages, an empty list of jobs is returned.
 ///
-/// - **200 OK**: Returns a JSON array of jobs (`Vec<JobResponse>`), sorted by their
-///   `created_at` property in descending order.
-///
-/// # Arguments
-///
-/// - `State<AppState>`: Application state containing shared resources, such as the in-memory jobs store.
-///     - Used to access the current list of jobs.
-/// - `CookieJar`: Cookie jar containing the session cookie.
-/// - `Query<ListJobsQuery>`: Query parameters passed to the endpoint, including the optional `limit`.
-///
-/// # Returns
-///
-/// A JSON response containing a list of jobs (`JobResponse`) limited to the specified number
-/// and sorted by the most recently created jobs.
-///
-/// # Implementation Details
-/// 1. Extracts the `limit` parameter from the query parameters, defaulting to 100 if not specified.
-/// 2. Reads the current list of jobs from the application's state.
-/// 3. Converts the jobs into a vector (`Vec<JobResponse>`) and sorts them in descending order by their `created_at` timestamp.
-/// 4. Truncates the list of jobs to the specified `limit`.
-/// 5. Returns the resulting list as a JSON response.
-///
-/// # Examples
-///
-/// **Request:**
+/// # Example
 /// ```http
-/// GET /api/jobs/?limit=10
+/// GET /api/jobs/?page=2&per_page=10
+///
+/// HTTP/1.1 200 OK
+/// Content-Type: application/json
+///
+/// {
+///   "jobs": [
+///     {
+///       "id": "abc123",
+///       "name": "Job A",
+///       "created_at": "2023-10-01T12:34:56Z"
+///     },
+///     {
+///       "id": "def456",
+///       "name": "Job B",
+///       "created_at": "2023-09-25T14:20:30Z"
+///     }
+///   ],
+///   "pagination": {
+///     "page": 2,
+///     "per_page": 10,
+///     "total_items": 100,
+///     "total_pages": 10
+///   }
+/// }
 /// ```
-///
-/// **Response:**
-/// ```json
-/// [
-///   {
-///     "id": "job1",
-///     "name": "Example Job",
-///     "created_at": "2023-10-01T12:00:00Z"
-///   },
-///   ...
-/// ]
-/// ```
-///
-/// **Request with Default Limit:**
-/// ```http
-/// GET /api/jobs/
-/// ```
-///
-/// **Response:**
-/// Same as above, but returns up to 100 jobs by default.
-///
-/// Note: The function ensures thread-safe read access to the shared job list using the `RwLock`.
 #[utoipa::path(
     get,
     path = "/api/jobs/",
     tag = "Jobs",
     params(
-        ("limit" = Option<usize>, Query, description = "Maximum number of jobs")
+        ("page" = Option<usize>, Query, description = "Seite (1-indiziert, Standard: 1)"),
+        ("per_page" = Option<usize>, Query, description = "Jobs pro Seite (Standard: 20, Max: 100)")
     ),
     responses(
         (status = 200, description = "List of jobs", body = Vec<JobResponse>)
@@ -1326,33 +1532,51 @@ async fn list_jobs(
     jar: CookieJar,
     Query(query): Query<ListJobsQuery>,
 ) -> impl IntoResponse {
-    let limit = query.limit.unwrap_or(100);
+    let page = query.page.unwrap_or(1).max(1);
+    let per_page = query
+        .per_page
+        .unwrap_or(DEFAULT_PER_PAGE)
+        .min(MAX_PER_PAGE)
+        .max(1);
 
     // Get owner ID from cookie
     let owner_id = jar.get(OWNER_COOKIE_NAME).map(|c| c.value().to_string());
 
     let jobs = state.jobs.read();
 
-    // Filter jobs by owner_id
-    let mut job_list: Vec<JobResponse> = jobs
+    // Filter jobs by owner_id and collect as summaries (without sequences)
+    let mut job_list: Vec<JobSummary> = jobs
         .values()
         .filter(|job| {
             // Only show jobs that belong to this owner
             match (&job.owner_id, &owner_id) {
                 (Some(job_owner), Some(cookie_owner)) => job_owner == cookie_owner,
-                _ => false, // Don't show jobs without owner or if no cookie
+                _ => false,
             }
         })
-        .cloned()
+        .map(JobSummary::from)
         .collect();
 
     // Sort by created_at descending
     job_list.sort_by(|a, b| b.created_at.cmp(&a.created_at));
 
-    // Apply limit
-    job_list.truncate(limit);
+    // Calculate pagination
+    let total_items = job_list.len();
+    let pagination = PaginationInfo::new(page, per_page, total_items);
 
-    Json(job_list)
+    // Apply pagination
+    let start = (page - 1) * per_page;
+    let paginated_jobs: Vec<JobSummary> = if start < job_list.len() {
+        let end = (start + per_page).min(job_list.len());
+        job_list[start..end].to_vec()
+    } else {
+        Vec::new()
+    };
+
+    Json(PaginatedJobsResponse {
+        jobs: paginated_jobs,
+        pagination,
+    })
 }
 
 /// Deletes a job with the specified ID.
@@ -1645,7 +1869,11 @@ async fn db_info(State(state): State<AppState>) -> impl IntoResponse {
         SequenceInfo,
         JobResponse,
         JobCreateResponse,
-        ErrorResponse
+        ErrorResponse,
+        PaginationInfo,
+        PaginatedJobsResponse,
+        JobSummary,
+        PaginatedJobResponse
     ))
 )]
 struct ApiDoc;

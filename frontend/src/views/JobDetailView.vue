@@ -1,15 +1,19 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRoute, useRouter, RouterLink } from 'vue-router'
-import { getJob, deleteJob, type JobResponse, type JobStatus } from '../api/jobs.ts'
+import { getJob, deleteJob, type PaginatedJobResponse, type JobStatus, type PaginationInfo } from '../api/jobs.ts'
 
 const route = useRoute()
 const router = useRouter()
 
-const job = ref<JobResponse | null>(null)
+const job = ref<PaginatedJobResponse | null>(null)
+const pagination = ref<PaginationInfo | null>(null)
 const loading = ref(true)
+const loadingSequences = ref(false)
 const error = ref('')
 const deleting = ref(false)
+const currentPage = ref(1)
+const perPage = 20
 let pollInterval: number | null = null
 
 const jobId = computed(() => route.params.id as string)
@@ -28,18 +32,49 @@ const statusLabels: Record<JobStatus, string> = {
   failed: 'Failed'
 }
 
-async function loadJob() {
+// Generate page numbers to display
+const pageNumbers = computed(() => {
+  if (!pagination.value) return []
+  const total = pagination.value.total_pages
+  const current = pagination.value.page
+  const pages: number[] = []
+
+  let start = Math.max(1, current - 2)
+  let end = Math.min(total, current + 2)
+
+  if (current <= 3) end = Math.min(5, total)
+  if (current >= total - 2) start = Math.max(1, total - 4)
+
+  for (let i = start; i <= end; i++) pages.push(i)
+  return pages
+})
+
+async function loadJob(page = 1) {
+  if (page !== 1) loadingSequences.value = true
+  else loading.value = true
+
+  currentPage.value = page
+
   try {
-    job.value = await getJob(jobId.value)
+    const response = await getJob(jobId.value, page, perPage)
+    job.value = response
+    pagination.value = response.pagination
 
     // Start polling if job is not complete
-    if (job.value.status === 'pending' || job.value.status === 'processing') {
+    if (response.status === 'pending' || response.status === 'processing') {
       startPolling()
     }
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Failed to load job'
   } finally {
     loading.value = false
+    loadingSequences.value = false
+  }
+}
+
+function goToPage(page: number) {
+  if (page >= 1 && (!pagination.value || page <= pagination.value.total_pages)) {
+    loadJob(page)
   }
 }
 
@@ -48,9 +83,11 @@ function startPolling() {
 
   pollInterval = window.setInterval(async () => {
     try {
-      job.value = await getJob(jobId.value)
+      const response = await getJob(jobId.value, currentPage.value, perPage)
+      job.value = response
+      pagination.value = response.pagination
 
-      if (job.value.status === 'completed' || job.value.status === 'failed') {
+      if (response.status === 'completed' || response.status === 'failed') {
         stopPolling()
       }
     } catch (e) {
@@ -72,7 +109,7 @@ async function handleDelete() {
   deleting.value = true
   try {
     await deleteJob(jobId.value)
-    await router.push({name: 'jobs'})
+    router.push({ name: 'jobs' })
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Failed to delete job'
     deleting.value = false
@@ -101,7 +138,7 @@ function hasAnnotationLinks(seq: { uniparc_id?: string | null; ncbi_nrp_id?: str
   return !!(seq.uniparc_id || seq.ncbi_nrp_id || seq.uniref100_id)
 }
 
-onMounted(loadJob)
+onMounted(() => loadJob())
 onUnmounted(stopPolling)
 </script>
 
@@ -196,7 +233,7 @@ onUnmounted(stopPolling)
           ></div>
         </div>
         <span class="progress-text">
-          {{ job.processed_count }} sequences processed
+          {{ job.processed_count }} / {{ job.sequence_count }} sequences processed
         </span>
       </div>
 
@@ -302,6 +339,64 @@ onUnmounted(stopPolling)
               </tr>
               </tbody>
             </table>
+          </div>
+
+          <!-- Loading overlay for sequence pagination -->
+          <div v-if="loadingSequences" class="sequences-loading">
+            <div class="spinner"></div>
+            Loading sequences...
+          </div>
+
+          <!-- Sequence Pagination -->
+          <div v-if="pagination && pagination.total_pages > 1" class="sequences-pagination">
+            <button
+                class="page-btn"
+                :disabled="!pagination.has_prev || loadingSequences"
+                @click="goToPage(pagination.page - 1)"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="15 18 9 12 15 6"/>
+              </svg>
+            </button>
+
+            <button
+                v-if="pageNumbers[0] > 1"
+                class="page-btn"
+                :disabled="loadingSequences"
+                @click="goToPage(1)"
+            >1</button>
+            <span v-if="pageNumbers[0] > 2" class="page-ellipsis">...</span>
+
+            <button
+                v-for="page in pageNumbers"
+                :key="page"
+                class="page-btn"
+                :class="{ active: page === pagination.page }"
+                :disabled="loadingSequences"
+                @click="goToPage(page)"
+            >{{ page }}</button>
+
+            <span v-if="pageNumbers[pageNumbers.length - 1] < pagination.total_pages - 1" class="page-ellipsis">...</span>
+            <button
+                v-if="pageNumbers[pageNumbers.length - 1] < pagination.total_pages"
+                class="page-btn"
+                :disabled="loadingSequences"
+                @click="goToPage(pagination.total_pages)"
+            >{{ pagination.total_pages }}</button>
+
+            <button
+                class="page-btn"
+                :disabled="!pagination.has_next || loadingSequences"
+                @click="goToPage(pagination.page + 1)"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="9 18 15 12 9 6"/>
+              </svg>
+            </button>
+
+            <span class="page-info">
+              Showing {{ (pagination.page - 1) * pagination.per_page + 1 }}-{{ Math.min(pagination.page * pagination.per_page, pagination.total_items) }} of {{ pagination.total_items }}
+            </span>
           </div>
         </div>
       </div>
@@ -839,6 +934,101 @@ tr:last-child td {
 
   .results-stats {
     grid-template-columns: 1fr;
+  }
+}
+
+/* Sequences Pagination */
+.sequences-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-top: 1.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--color-border);
+  flex-wrap: wrap;
+}
+
+.sequences-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 1rem;
+  color: var(--color-text);
+  opacity: 0.8;
+}
+
+.sequences-loading .spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--color-border);
+  border-top-color: hsla(160, 100%, 37%, 1);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.page-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 36px;
+  height: 36px;
+  padding: 0 0.75rem;
+  font-size: 0.9rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-background);
+  color: var(--color-text);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.page-btn:hover:not(:disabled) {
+  background: var(--color-background-soft);
+  border-color: var(--color-border-hover);
+}
+
+.page-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.page-btn.active {
+  background: hsla(160, 100%, 37%, 1);
+  border-color: hsla(160, 100%, 37%, 1);
+  color: white;
+}
+
+.page-ellipsis {
+  color: var(--color-text);
+  opacity: 0.6;
+  padding: 0 0.25rem;
+}
+
+.page-info {
+  margin-left: 1rem;
+  font-size: 0.85rem;
+  color: var(--color-text);
+  opacity: 0.7;
+}
+
+@media (max-width: 600px) {
+  .sequences-pagination {
+    gap: 0.25rem;
+  }
+
+  .page-btn {
+    min-width: 32px;
+    height: 32px;
+    padding: 0 0.5rem;
+    font-size: 0.85rem;
+  }
+
+  .page-info {
+    width: 100%;
+    text-align: center;
+    margin: 0.5rem 0 0 0;
   }
 }
 </style>
