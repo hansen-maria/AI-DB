@@ -108,7 +108,7 @@ async function submitJob() {
     // Navigate to job detail page
     router.push({ name: 'job', params: { id: response.job_id } })
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : 'Ein Fehler ist aufgetreten'
+    errorMessage.value = error instanceof Error ? error.message : 'An error occured.'
   } finally {
     isSubmitting.value = false
   }
@@ -167,7 +167,7 @@ async function submitJob() {
             Drag & Drop your FASTA file here<br>
             <span>or click to browse</span>
           </p>
-          <p class="dropzone-hint">Supported formats: .fasta, .fa, .fna, .faa, .txt, .gz (gzip compressed)</p>
+          <p class="dropzone-hint">Supported formats: .fasta, .fa, .fna, .faa, .txt, .gz (gzip compressed)<br>Max 100 MB allowed</p>
           <input
               type="file"
               accept=".fasta,.fa,.fna,.faa,.txt,.gz,.fasta.gz,.fa.gz,.fna.gz,.faa.gz"

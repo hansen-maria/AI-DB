@@ -2,6 +2,7 @@
 //! Hash-Based Annotation Service for Microbial Sequencing Data
 
 use axum::http::{header, Method};
+use axum::extract::DefaultBodyLimit;
 use axum::{
     extract::{Multipart, Path, Query, State},
     http::StatusCode,
@@ -891,7 +892,7 @@ async fn get_job(State(state): State<AppState>, Path(job_id): Path<String>) -> i
 }
 
 /// Maximum upload size (unlimited when using temp files but set to a reasonable limit)
-const MAX_UPLOAD_SIZE: usize = 10 * 1024 * 1024 * 1024; // 10 GB
+const MAX_UPLOAD_SIZE: usize = 100 * 1024 * 1024; // 100 MB
 
 /// Get temp directory from environment or use default
 fn get_temp_dir() -> PathBuf {
@@ -977,7 +978,7 @@ fn get_temp_dir() -> PathBuf {
 /// - **400 Bad Request:**
 /// ```json
 /// {
-///   "detail": "File too large. Maximum size is 5 GB."
+///   "detail": "File too large. Maximum size is 100 MB."
 /// }
 /// ```
 /// - **500 Internal Server Error:**
@@ -1085,8 +1086,8 @@ async fn create_job(
                                     jar,
                                     Json(ErrorResponse {
                                         detail: format!(
-                                            "File too large. Maximum size is {} GB.",
-                                            MAX_UPLOAD_SIZE / (1024 * 1024 * 1024)
+                                            "File too large. Maximum size is {} MB.",
+                                            MAX_UPLOAD_SIZE / (1024 * 1024)
                                         ),
                                     }),
                                 )
@@ -1632,7 +1633,7 @@ async fn db_info(State(state): State<AppState>) -> impl IntoResponse {
             - **Fast**: Hash-based annotations in seconds instead of hours\n\
             - **Comprehensive**: Access to UniRef protein annotations\n\
             - **Fallback**: Diamond alignment for new sequences",
-        license(name = "MIT"),
+        license(name = "MIT", url = "http://opensource.org/licenses/MIT"),
         contact(name = "AI-DB Team", url = "https://github.com/hansen-maria/AI-DB-Web")
     ),
     tags(
@@ -1682,6 +1683,7 @@ async fn main() {
         // Swagger UI
         .merge(SwaggerUi::new("/api/docs/").url("/api/openapi.json", ApiDoc::openapi()))
         // Middleware
+        .layer(DefaultBodyLimit::max(100 * 1024 * 1024)) // 1 GB Limit
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         // State

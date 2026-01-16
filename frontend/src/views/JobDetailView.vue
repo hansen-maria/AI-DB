@@ -196,7 +196,7 @@ onUnmounted(stopPolling)
           ></div>
         </div>
         <span class="progress-text">
-          {{ job.processed_count }} / {{ job.sequence_count }} sequences processed
+          {{ job.processed_count }} sequences processed
         </span>
       </div>
 
