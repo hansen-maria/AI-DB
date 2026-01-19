@@ -56,7 +56,10 @@ pub struct SequenceInfo {
     pub md5_hash: String,
     /// Length in bp / aa
     pub length: usize,
-    /// Found annotations
+    /// The actual sequence (amino acids or nucleotides)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sequence: Option<String>,
+    /// Annotation description (if found)
     pub annotation: Option<String>,
     /// Source of annotation
     pub annotation_source: Option<String>,
@@ -210,7 +213,7 @@ pub struct PaginatedJobResponse {
     pub updated_at: DateTime<Utc>,
     /// Uploaded filename
     pub filename: Option<String>,
-    /// Total sequence count
+    /// Total sequence count (unfiltered)
     pub sequence_count: usize,
     /// Processed sequence count
     pub processed_count: usize,
@@ -412,7 +415,7 @@ fn get_or_create_owner(jar: CookieJar) -> (String, CookieJar) {
 }
 
 // ============================================================================
-// FASTA Parsing
+// FASTA Parsing (Streaming)
 // ============================================================================
 
 /// Batch size for processing sequences
@@ -449,6 +452,7 @@ impl<R: BufRead> Iterator for FastaIterator<R> {
         if self.finished {
             return None;
         }
+
         loop {
             self.line_buffer.clear();
             match self.reader.read_line(&mut self.line_buffer) {
@@ -468,6 +472,7 @@ impl<R: BufRead> Iterator for FastaIterator<R> {
                     if line.is_empty() {
                         continue;
                     }
+
                     if line.starts_with('>') {
                         // New sequence header
                         let new_header = line[1..]
@@ -475,6 +480,7 @@ impl<R: BufRead> Iterator for FastaIterator<R> {
                             .next()
                             .unwrap_or("")
                             .to_string();
+
                         if let Some(header) = self.current_header.take() {
                             if !self.current_sequence.is_empty() {
                                 let seq = std::mem::take(&mut self.current_sequence);
@@ -886,6 +892,7 @@ fn process_job_from_file(
                 id: header,
                 md5_hash: hash_hex,
                 length: seq_length,
+                sequence: Some(seq),
                 annotation,
                 annotation_source,
                 uniparc_id: lookup_result.uniparc_id,
@@ -1068,36 +1075,46 @@ async fn get_job(
         .unwrap_or(DEFAULT_PER_PAGE)
         .min(MAX_PER_PAGE)
         .max(1);
-    let filter = query.filter.as_deref().map(SequenceFilter::from_str).unwrap_or(SequenceFilter::All);
+    let filter = query
+        .filter
+        .as_deref()
+        .map(SequenceFilter::from_str)
+        .unwrap_or(SequenceFilter::All);
     let filter_str = match &filter {
         SequenceFilter::All => "all",
         SequenceFilter::HashMatch => "hash_match",
         SequenceFilter::Alignment => "alignment",
         SequenceFilter::NoMatch => "none",
-    }.to_string();
+    }
+    .to_string();
 
     let jobs = state.jobs.read();
 
     match jobs.get(&job_id) {
         Some(job) => {
             // Apply filter to sequences
-            let filtered_sequences: Vec<&SequenceInfo> = job.sequences
+            let filtered_sequences: Vec<&SequenceInfo> = job
+                .sequences
                 .as_ref()
                 .map(|seqs| {
-                    seqs.iter().filter(|s| {
-                        match filter {
+                    seqs.iter()
+                        .filter(|s| match filter {
                             SequenceFilter::All => true,
-                            SequenceFilter::HashMatch => s.annotation_source.as_deref() == Some("hash_match"),
-                            SequenceFilter::Alignment => s.annotation_source.as_deref() == Some("alignment"),
+                            SequenceFilter::HashMatch => {
+                                s.annotation_source.as_deref() == Some("hash_match")
+                            }
+                            SequenceFilter::Alignment => {
+                                s.annotation_source.as_deref() == Some("alignment")
+                            }
                             SequenceFilter::NoMatch => s.annotation_source.is_none(),
-                        }
-                    }).collect()
+                        })
+                        .collect()
                 })
                 .unwrap_or_default();
 
             let filtered_count = filtered_sequences.len();
 
-            // Calculate pagination
+            // Calculate pagination based on filtered results
             let pagination = PaginationInfo::new(page, per_page, filtered_count);
 
             // Get paginated sequences from filtered results
@@ -1105,7 +1122,10 @@ async fn get_job(
                 let start = (page - 1) * per_page;
                 let end = (start + per_page).min(filtered_count);
                 if start < filtered_count {
-                    filtered_sequences[start..end].iter().map(|s| (*s).clone()).collect()
+                    filtered_sequences[start..end]
+                        .iter()
+                        .map(|s| (*s).clone())
+                        .collect()
                 } else {
                     Vec::new()
                 }
@@ -1577,8 +1597,8 @@ async fn create_job(
     path = "/api/jobs/",
     tag = "Jobs",
     params(
-        ("page" = Option<usize>, Query, description = "Seite (1-indiziert, Standard: 1)"),
-        ("per_page" = Option<usize>, Query, description = "Jobs pro Seite (Standard: 20, Max: 100)")
+        ("page" = Option<usize>, Query, description = "Page (1-indexed, Default: 1)"),
+        ("per_page" = Option<usize>, Query, description = "Jobs per page (Default: 20, Max: 100)")
     ),
     responses(
         (status = 200, description = "List of jobs", body = Vec<JobResponse>)
@@ -1729,7 +1749,609 @@ async fn delete_job(
         None => (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
-                detail: format!("Job with ID ‘{}’ not found", job_id),
+                detail: format!("Job mit ID '{}' nicht gefunden", job_id),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+// ============================================================================
+// Download Handlers
+// ============================================================================
+
+/// Download format options
+#[derive(Debug, Clone, Copy)]
+pub enum DownloadFormat {
+    Tsv,
+    Json,
+    Fasta,
+    Gff3,
+}
+
+impl DownloadFormat {
+    fn from_str(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "tsv" => Some(DownloadFormat::Tsv),
+            "json" => Some(DownloadFormat::Json),
+            "fasta" => Some(DownloadFormat::Fasta),
+            "gff3" => Some(DownloadFormat::Gff3),
+            _ => None,
+        }
+    }
+
+    fn content_type(&self) -> &'static str {
+        match self {
+            DownloadFormat::Tsv => "text/tab-separated-values",
+            DownloadFormat::Json => "application/json",
+            DownloadFormat::Fasta => "text/x-fasta",
+            DownloadFormat::Gff3 => "text/x-gff3",
+        }
+    }
+
+    fn file_extension(&self) -> &'static str {
+        match self {
+            DownloadFormat::Tsv => "tsv",
+            DownloadFormat::Json => "json",
+            DownloadFormat::Fasta => "fasta",
+            DownloadFormat::Gff3 => "gff3",
+        }
+    }
+}
+
+/// JSON export structure with full metadata
+#[derive(Serialize)]
+struct JsonExport {
+    job_id: String,
+    filename: Option<String>,
+    created_at: DateTime<Utc>,
+    completed_at: DateTime<Utc>,
+    statistics: JsonExportStats,
+    sequences: Vec<JsonExportSequence>,
+}
+
+#[derive(Serialize)]
+struct JsonExportStats {
+    total_sequences: usize,
+    hash_matches: usize,
+    alignment_matches: usize,
+    no_matches: usize,
+}
+
+#[derive(Serialize)]
+struct JsonExportSequence {
+    id: String,
+    length: usize,
+    md5_hash: String,
+    sequence: Option<String>,
+    annotation_source: Option<String>,
+    annotation: Option<String>,
+    database_ids: JsonExportDbIds,
+    database_urls: JsonExportDbUrls,
+}
+
+#[derive(Serialize)]
+struct JsonExportDbIds {
+    uniparc: Option<String>,
+    ncbi_nrp: Option<String>,
+    uniref100: Option<String>,
+}
+
+#[derive(Serialize)]
+struct JsonExportDbUrls {
+    uniparc: Option<String>,
+    ncbi_nrp: Option<String>,
+    uniref100: Option<String>,
+}
+
+/// Generate TSV output
+fn generate_tsv(job: &JobResponse) -> String {
+    let mut output = String::new();
+
+    // Header line
+    output.push_str("# AI-DB Annotation Results\n");
+    output.push_str(&format!("# Job ID: {}\n", job.job_id));
+    output.push_str(&format!(
+        "# Filename: {}\n",
+        job.filename.as_deref().unwrap_or("N/A")
+    ));
+    output.push_str(&format!("# Created: {}\n", job.created_at));
+    output.push_str(&format!("# Total Sequences: {}\n", job.sequence_count));
+    output.push_str(&format!("# Hash Matches: {}\n", job.hash_matches));
+    output.push_str(&format!("# Alignment Matches: {}\n", job.alignment_matches));
+    output.push_str(&format!(
+        "# No Matches: {}\n",
+        job.sequence_count - job.hash_matches - job.alignment_matches
+    ));
+    output.push_str("#\n");
+
+    // Column headers
+    output.push_str("sequence_id\tlength\tmd5_hash\tannotation_source\tannotation\tuniparc_id\tncbi_nrp_id\tuniref100_id\tuniparc_url\tncbi_url\tuniref100_url\n");
+
+    // Data rows
+    if let Some(ref sequences) = job.sequences {
+        for seq in sequences {
+            let source = seq.annotation_source.as_deref().unwrap_or("none");
+            let annotation = seq.annotation.as_deref().unwrap_or("");
+            let uniparc = seq.uniparc_id.as_deref().unwrap_or("");
+            let ncbi = seq.ncbi_nrp_id.as_deref().unwrap_or("");
+            let uniref = seq.uniref100_id.as_deref().unwrap_or("");
+
+            // Generate URLs
+            let uniparc_url = seq
+                .uniparc_id
+                .as_ref()
+                .map(|id| format!("https://www.uniprot.org/uniparc/{}", id))
+                .unwrap_or_default();
+            let ncbi_url = seq
+                .ncbi_nrp_id
+                .as_ref()
+                .map(|id| format!("https://www.ncbi.nlm.nih.gov/protein/{}", id))
+                .unwrap_or_default();
+            let uniref_url = seq
+                .uniref100_id
+                .as_ref()
+                .map(|id| format!("https://www.uniprot.org/uniref/{}", id))
+                .unwrap_or_default();
+
+            output.push_str(&format!(
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                seq.id,
+                seq.length,
+                seq.md5_hash,
+                source,
+                annotation,
+                uniparc,
+                ncbi,
+                uniref,
+                uniparc_url,
+                ncbi_url,
+                uniref_url
+            ));
+        }
+    }
+
+    output
+}
+
+/// Generate JSON output
+fn generate_json(job: &JobResponse) -> String {
+    let sequences: Vec<JsonExportSequence> = job
+        .sequences
+        .as_ref()
+        .map(|seqs| {
+            seqs.iter()
+                .map(|seq| JsonExportSequence {
+                    id: seq.id.clone(),
+                    length: seq.length,
+                    md5_hash: seq.md5_hash.clone(),
+                    sequence: seq.sequence.clone(),
+                    annotation_source: seq.annotation_source.clone(),
+                    annotation: seq.annotation.clone(),
+                    database_ids: JsonExportDbIds {
+                        uniparc: seq.uniparc_id.clone(),
+                        ncbi_nrp: seq.ncbi_nrp_id.clone(),
+                        uniref100: seq.uniref100_id.clone(),
+                    },
+                    database_urls: JsonExportDbUrls {
+                        uniparc: seq
+                            .uniparc_id
+                            .as_ref()
+                            .map(|id| format!("https://www.uniprot.org/uniparc/{}", id)),
+                        ncbi_nrp: seq
+                            .ncbi_nrp_id
+                            .as_ref()
+                            .map(|id| format!("https://www.ncbi.nlm.nih.gov/protein/{}", id)),
+                        uniref100: seq
+                            .uniref100_id
+                            .as_ref()
+                            .map(|id| format!("https://www.uniprot.org/uniref/{}", id)),
+                    },
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let export = JsonExport {
+        job_id: job.job_id.clone(),
+        filename: job.filename.clone(),
+        created_at: job.created_at,
+        completed_at: job.updated_at,
+        statistics: JsonExportStats {
+            total_sequences: job.sequence_count,
+            hash_matches: job.hash_matches,
+            alignment_matches: job.alignment_matches,
+            no_matches: job.sequence_count - job.hash_matches - job.alignment_matches,
+        },
+        sequences,
+    };
+
+    serde_json::to_string_pretty(&export).unwrap_or_default()
+}
+
+/// Generate annotated FASTA output
+fn generate_fasta(job: &JobResponse) -> String {
+    let mut output = String::new();
+
+    if let Some(ref sequences) = job.sequences {
+        for seq in sequences {
+            // Build header with annotations
+            let mut header_parts = vec![seq.id.clone()];
+
+            if let Some(ref source) = seq.annotation_source {
+                header_parts.push(format!("source={}", source));
+            }
+
+            if let Some(ref annotation) = seq.annotation {
+                // Escape any special characters in annotation
+                let clean_annotation = annotation.replace("|", "_").replace("\n", " ");
+                header_parts.push(format!("annotation={}", clean_annotation));
+            }
+
+            if let Some(ref uniparc) = seq.uniparc_id {
+                header_parts.push(format!("UniParc={}", uniparc));
+            }
+
+            if let Some(ref uniref) = seq.uniref100_id {
+                header_parts.push(format!("UniRef100={}", uniref));
+            }
+
+            if let Some(ref ncbi) = seq.ncbi_nrp_id {
+                header_parts.push(format!("NCBI_NRP={}", ncbi));
+            }
+
+            header_parts.push(format!("length={}", seq.length));
+            header_parts.push(format!("md5={}", seq.md5_hash));
+
+            output.push_str(&format!(">{}\n", header_parts.join(" | ")));
+
+            // Write sequence (wrapped at 60 characters)
+            if let Some(ref sequence) = seq.sequence {
+                for chunk in sequence.as_bytes().chunks(60) {
+                    output.push_str(&String::from_utf8_lossy(chunk));
+                    output.push('\n');
+                }
+            } else {
+                output.push_str("# Sequence not available\n");
+            }
+        }
+    }
+
+    output
+}
+
+/// Generate GFF3 output following the GFF3 specification
+/// For protein annotations, each sequence is treated as a region with annotation features
+fn generate_gff3(job: &JobResponse) -> String {
+    let mut output = String::new();
+
+    // GFF3 header (required)
+    output.push_str("##gff-version 3\n");
+
+    // Metadata as comments
+    output.push_str(&format!("#!annotation-source AI-DB v1.0\n"));
+    output.push_str(&format!("#!job-id {}\n", job.job_id));
+    if let Some(ref filename) = job.filename {
+        output.push_str(&format!("#!original-file {}\n", filename));
+    }
+    output.push_str(&format!("#!date {}\n", job.created_at.format("%Y-%m-%d")));
+
+    if let Some(ref sequences) = job.sequences {
+        // First pass: declare all sequence regions
+        for seq in sequences {
+            // Sanitize sequence ID for GFF3 (no whitespace, tabs)
+            let safe_seqid = sanitize_gff3_seqid(&seq.id);
+            output.push_str(&format!(
+                "##sequence-region {} 1 {}\n",
+                safe_seqid, seq.length
+            ));
+        }
+
+        // Separator between header and features
+        output.push_str("###\n");
+
+        // Second pass: output features
+        for (idx, seq) in sequences.iter().enumerate() {
+            let safe_seqid = sanitize_gff3_seqid(&seq.id);
+
+            // Determine feature type based on annotation source (SOFA terms)
+            // - polypeptide (SO:0000104): A sequence of amino acids
+            // - protein_match (SO:0000349): A match to a protein sequence
+            let (feature_type, score) = match seq.annotation_source.as_deref() {
+                Some("hash_match") => ("protein_match", "."),
+                Some("alignment") => ("protein_match", "."),
+                _ => ("polypeptide", "."),
+            };
+
+            // Build attributes following GFF3 attribute conventions
+            let mut attributes = Vec::new();
+
+            // ID is required for features that may be referenced
+            attributes.push(format!("ID=seq_{:06}", idx + 1));
+
+            // Name attribute for display
+            let display_name = sanitize_gff3_attribute(&seq.id);
+            attributes.push(format!("Name={}", display_name));
+
+            // Add MD5 hash as custom attribute
+            attributes.push(format!("md5={}", seq.md5_hash));
+
+            // Add annotation note if present
+            if let Some(ref annotation) = seq.annotation {
+                let encoded = encode_gff3_attribute(annotation);
+                attributes.push(format!("Note={}", encoded));
+            }
+
+            // Add database cross-references (Dbxref format: DB:ID)
+            let mut dbxrefs = Vec::new();
+            if let Some(ref uniparc) = seq.uniparc_id {
+                dbxrefs.push(format!("UniParc:{}", uniparc));
+            }
+            if let Some(ref uniref) = seq.uniref100_id {
+                dbxrefs.push(format!("UniRef100:{}", uniref));
+            }
+            if let Some(ref ncbi) = seq.ncbi_nrp_id {
+                dbxrefs.push(format!("NCBI_NRP:{}", ncbi));
+            }
+            if !dbxrefs.is_empty() {
+                attributes.push(format!("Dbxref={}", dbxrefs.join(",")));
+            }
+
+            // Add ontology term for annotation source
+            if let Some(ref source) = seq.annotation_source {
+                attributes.push(format!("source_type={}", source));
+            }
+
+            // GFF3 columns (tab-separated):
+            // seqid, source, type, start, end, score, strand, phase, attributes
+            // For proteins: strand is '.', phase is '.' (only relevant for CDS)
+            output.push_str(&format!(
+                "{}\tai-db\t{}\t1\t{}\t{}\t.\t.\t{}\n",
+                safe_seqid,
+                feature_type,
+                seq.length,
+                score,
+                attributes.join(";")
+            ));
+        }
+    }
+
+    output
+}
+
+/// Sanitize sequence ID for use as GFF3 seqid (column 1)
+/// seqid cannot contain whitespace, semicolons, equals signs, or percent signs (unencoded)
+fn sanitize_gff3_seqid(id: &str) -> String {
+    id.chars()
+        .map(|c| match c {
+            ' ' | '\t' | '\n' | '\r' => '_',
+            ';' | '=' | '%' | '&' | ',' => '_',
+            _ => c,
+        })
+        .collect()
+}
+
+/// Sanitize a value for use in GFF3 attributes (not URL-encoded, just cleaned)
+fn sanitize_gff3_attribute(value: &str) -> String {
+    value
+        .chars()
+        .map(|c| match c {
+            ';' | '=' | '&' | ',' | '\t' | '\n' | '\r' => '_',
+            _ => c,
+        })
+        .collect()
+}
+
+/// URL-encode special characters in GFF3 attribute values
+/// Required for: tab, newline, carriage return, semicolons, equals, percent, ampersand, comma
+fn encode_gff3_attribute(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for c in value.chars() {
+        match c {
+            '%' => encoded.push_str("%25"),
+            ';' => encoded.push_str("%3B"),
+            '=' => encoded.push_str("%3D"),
+            '&' => encoded.push_str("%26"),
+            ',' => encoded.push_str("%2C"),
+            '\t' => encoded.push_str("%09"),
+            '\n' => encoded.push_str("%0A"),
+            '\r' => encoded.push_str("%0D"),
+            _ => encoded.push(c),
+        }
+    }
+    encoded
+}
+
+/// Handles the `/api/job/{job_id}/download/{format}` endpoint for file downloads.
+///
+/// This endpoint allows users to download the results of a completed job in a specified format.
+/// The download is restricted to the owner of the job and supports multiple formats such as `tsv`,
+/// `json`, `fasta`, and `gff3`.
+///
+/// # Endpoint
+/// - `GET /api/job/{job_id}/download/{format}`
+///
+/// # Path Parameters
+/// - `job_id` (String): The unique identifier (UUID) of the job.
+/// - `format` (String): The desired file format for download. Supported formats: `tsv`, `json`, `fasta`, `gff3`.
+///
+/// # Response
+///
+/// - **200 OK**: Returns the requested file in the specified format.
+///     - Content-Type: `application/octet-stream`
+///     - Content-Disposition: `attachment; filename="<generated_filename>"`
+///
+/// - **400 Bad Request**: Returns an error if the format is invalid or if the job is not yet completed.
+///     - Example error response:
+///       ```json
+///       {
+///           "detail": "Invalid format 'xyz'. Supported formats: tsv, json, fasta, gff3"
+///       }
+///       ```
+///
+/// - **403 Forbidden**: Returns an error if the user is not authorized to download the requested job.
+///     - Example error response:
+///       ```json
+///       {
+///           "detail": "Not authorized to download this job"
+///       }
+///       ```
+///
+/// - **404 Not Found**: Returns an error if the job is not found.
+///     - Example error response:
+///       ```json
+///       {
+///           "detail": "Job with ID '1234' not found"
+///       }
+///       ```
+///
+/// # Authorization
+/// The endpoint checks if the user is the owner of the job by validating the `OWNER_COOKIE_NAME`
+/// stored in the cookies. Only the job owner is authorized to download the results.
+///
+/// # Preconditions
+/// - The job must have a status of `Completed` to be eligible for download.
+///
+/// # File Naming and Format Details
+/// - The filename is dynamically generated based on the job's metadata and requested format.
+/// - Supported file extensions and MIME types:
+///     - `tsv`: `text/tab-separated-values`
+///     - `json`: `application/json`
+///     - `fasta`: `text/x-fasta`
+///     - `gff3`: `text/x-gff3`
+///
+/// # Errors
+/// - If the `format` parameter is invalid, a `400 Bad Request` response is returned.
+/// - If the job is not owned by the requesting user, a `403 Forbidden` response is returned.
+/// - If the job does not exist, a `404 Not Found` response is returned.
+///
+/// # Implementation Details
+/// - The function retrieves the job data from the application state.
+/// - It ensures that the user has appropriate permissions to access the job.
+/// - The requested file is generated dynamically based on the job's content and the chosen format.
+///
+/// # Example
+///
+/// ```http
+/// GET /api/job/123e4567-e89b-12d3-a456-426614174000/download/tsv HTTP/1.1
+/// Host: example.com
+/// Cookie: owner_cookie=<owner_id>
+/// ```
+///
+/// Response (200 OK):
+/// ```
+/// HTTP/1.1 200 OK
+/// Content-Type: application/octet-stream
+/// Content-Disposition: attachment; filename="results_annotations.tsv"
+///
+/// <file content>
+/// ```
+#[utoipa::path(
+    get,
+    path = "/api/job/{job_id}/download/{format}",
+    tag = "Jobs",
+    params(
+        ("job_id" = String, Path, description = "Job ID (UUID)"),
+        ("format" = String, Path, description = "Download format: tsv, json, fasta, gff3")
+    ),
+    responses(
+        (status = 200, description = "File download", content_type = "application/octet-stream"),
+        (status = 400, description = "Invalid format"),
+        (status = 404, description = "Job not found")
+    )
+)]
+async fn download_job(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Path((job_id, format_str)): Path<(String, String)>,
+) -> impl IntoResponse {
+    // Parse format
+    let format = match DownloadFormat::from_str(&format_str) {
+        Some(f) => f,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    detail: format!(
+                        "Invalid format '{}'. Supported formats: tsv, json, fasta, gff3",
+                        format_str
+                    ),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let owner_id = jar.get(OWNER_COOKIE_NAME).map(|c| c.value().to_string());
+    let jobs = state.jobs.read();
+
+    match jobs.get(&job_id) {
+        Some(job) => {
+            // Check ownership
+            let is_owner = match (&job.owner_id, &owner_id) {
+                (Some(job_owner), Some(cookie_owner)) => job_owner == cookie_owner,
+                _ => false,
+            };
+
+            if !is_owner {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(ErrorResponse {
+                        detail: "Not authorized to download this job".to_string(),
+                    }),
+                )
+                    .into_response();
+            }
+
+            // Check job is completed
+            if job.status != JobStatus::Completed {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse {
+                        detail: "Job is not yet completed".to_string(),
+                    }),
+                )
+                    .into_response();
+            }
+
+            // Generate content based on format
+            let content = match format {
+                DownloadFormat::Tsv => generate_tsv(job),
+                DownloadFormat::Json => generate_json(job),
+                DownloadFormat::Fasta => generate_fasta(job),
+                DownloadFormat::Gff3 => generate_gff3(job),
+            };
+
+            // Generate filename
+            let base_name = job
+                .filename
+                .as_ref()
+                .map(|f| {
+                    f.trim_end_matches(".gz")
+                        .trim_end_matches(".fasta")
+                        .trim_end_matches(".fa")
+                })
+                .unwrap_or("results");
+            let filename = format!("{}_annotations.{}", base_name, format.file_extension());
+
+            // Return file response
+            (
+                StatusCode::OK,
+                [
+                    (header::CONTENT_TYPE, format.content_type()),
+                    (
+                        header::CONTENT_DISPOSITION,
+                        &format!("attachment; filename=\"{}\"", filename),
+                    ),
+                ],
+                content,
+            )
+                .into_response()
+        }
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                detail: format!("Job with ID '{}' not found", job_id),
             }),
         )
             .into_response(),
@@ -1964,11 +2586,12 @@ async fn main() {
         .route("/api/db/info", get(db_info))
         .route("/api/job/", post(create_job))
         .route("/api/job/{job_id}", get(get_job).delete(delete_job))
+        .route("/api/job/{job_id}/download/{format}", get(download_job))
         .route("/api/jobs/", get(list_jobs))
         // Swagger UI
         .merge(SwaggerUi::new("/api/docs/").url("/api/openapi.json", ApiDoc::openapi()))
         // Middleware
-        .layer(DefaultBodyLimit::max(100 * 1024 * 1024)) // 1 GB Limit
+        .layer(DefaultBodyLimit::max(100 * 1024 * 1024)) // 100 MB Limit
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         // State

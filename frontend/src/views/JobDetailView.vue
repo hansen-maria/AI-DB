@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRoute, useRouter, RouterLink } from 'vue-router'
-import { getJob, deleteJob, type PaginatedJobResponse, type JobStatus, type PaginationInfo, type SequenceFilter } from '../api/jobs.ts'
+import { getJob, deleteJob, downloadJobResults, downloadOptions, type PaginatedJobResponse, type JobStatus, type PaginationInfo, type SequenceFilter, type DownloadFormat } from '../api/jobs.ts'
 
 const route = useRoute()
 const router = useRouter()
@@ -12,6 +12,8 @@ const loading = ref(true)
 const loadingSequences = ref(false)
 const error = ref('')
 const deleting = ref(false)
+const downloading = ref(false)
+const downloadError = ref('')
 const currentPage = ref(1)
 const currentFilter = ref<SequenceFilter>('all')
 const perPage = 20
@@ -129,6 +131,19 @@ async function handleDelete() {
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Failed to delete job'
     deleting.value = false
+  }
+}
+
+async function handleDownload(format: DownloadFormat) {
+  downloading.value = true
+  downloadError.value = ''
+
+  try {
+    await downloadJobResults(jobId.value, format)
+  } catch (e) {
+    downloadError.value = e instanceof Error ? e.message : 'Download failed'
+  } finally {
+    downloading.value = false
   }
 }
 
@@ -272,6 +287,35 @@ onUnmounted(stopPolling)
             <span class="stat-value">{{ job.sequence_count - job.hash_matches - job.alignment_matches }}</span>
             <span class="stat-label">No Match</span>
             <span class="stat-percent">{{ Math.round(((job.sequence_count - job.hash_matches - job.alignment_matches) / job.sequence_count) * 100) }}%</span>
+          </div>
+        </div>
+
+        <!-- Download Section -->
+        <div class="download-section">
+          <h4>Download Results</h4>
+          <p class="download-description">Export annotation results in various formats:</p>
+
+          <div v-if="downloadError" class="download-error">
+            {{ downloadError }}
+          </div>
+
+          <div class="download-buttons">
+            <button
+                v-for="opt in downloadOptions"
+                :key="opt.format"
+                class="download-btn"
+                :disabled="downloading"
+                @click="handleDownload(opt.format)"
+                :title="opt.description"
+            >
+              <span class="download-label">{{ opt.label }}</span>
+              <span class="download-desc">{{ opt.description }}</span>
+            </button>
+          </div>
+
+          <div v-if="downloading" class="download-progress">
+            <div class="spinner"></div>
+            Preparing download...
           </div>
         </div>
 
@@ -1209,6 +1253,124 @@ tr:last-child td {
     flex: 1;
     justify-content: center;
     padding: 0.5rem;
+  }
+}
+
+/* Download Section */
+.download-section {
+  margin-top: 2rem;
+  padding: 1.5rem;
+  background: var(--color-background-soft);
+  border-radius: 12px;
+  border: 1px solid var(--color-border);
+}
+
+.download-section h4 {
+  margin: 0 0 0.5rem 0;
+  color: var(--color-heading);
+  font-size: 1.1rem;
+}
+
+.download-description {
+  color: var(--color-text);
+  opacity: 0.8;
+  font-size: 0.9rem;
+  margin: 0 0 1rem 0;
+}
+
+.download-error {
+  background: rgba(244, 67, 54, 0.1);
+  border: 1px solid rgba(244, 67, 54, 0.3);
+  color: #f44336;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+}
+
+.download-buttons {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+}
+
+.download-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 1.25rem 1rem;
+  background: var(--color-background);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-align: center;
+}
+
+.download-btn:hover:not(:disabled) {
+  border-color: hsla(160, 100%, 37%, 0.5);
+  background: var(--color-background-mute);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.download-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.download-icon {
+  font-size: 1.75rem;
+}
+
+.download-label {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--color-heading);
+}
+
+.download-desc {
+  font-size: 0.75rem;
+  color: var(--color-text);
+  opacity: 0.7;
+}
+
+.download-progress {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  padding: 0.75rem;
+  color: var(--color-text);
+  font-size: 0.9rem;
+}
+
+.download-progress .spinner {
+  width: 20px;
+  height: 20px;
+  border-width: 2px;
+}
+
+@media (max-width: 600px) {
+  .download-buttons {
+    grid-template-columns: 1fr;
+  }
+
+  .download-btn {
+    flex-direction: row;
+    justify-content: flex-start;
+    padding: 1rem;
+    gap: 1rem;
+  }
+
+  .download-icon {
+    font-size: 1.5rem;
+  }
+
+  .download-desc {
+    text-align: left;
   }
 }
 </style>

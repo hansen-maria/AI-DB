@@ -303,3 +303,87 @@ export async function pollJobUntilComplete(
 
     throw new Error('Job polling timed out');
 }
+
+// ============================================================================
+// Download Functions
+// ============================================================================
+
+export type DownloadFormat = 'tsv' | 'json' | 'fasta' | 'gff3';
+
+export interface DownloadOption {
+    format: DownloadFormat;
+    label: string;
+    description: string;
+}
+
+export const downloadOptions: DownloadOption[] = [
+    {
+        format: 'tsv',
+        label: 'TSV',
+        description: 'Tab-separated values for spreadsheets',
+    },
+    {
+        format: 'json',
+        label: 'JSON',
+        description: 'Full data with metadata for programming',
+    },
+    {
+        format: 'fasta',
+        label: 'FASTA',
+        description: 'Annotated sequences for bioinformatics',
+    },
+    {
+        format: 'gff3',
+        label: 'GFF3',
+        description: 'Genome feature format for browsers',
+    },
+];
+
+/**
+ * Download job results in specified format
+ */
+export async function downloadJobResults(
+    jobId: string,
+    format: DownloadFormat
+): Promise<void> {
+    const url = `${API_BASE}/job/${jobId}/download/${format}`;
+
+    const response = await fetch(url, {
+        credentials: 'include',
+    });
+
+    if (!response.ok) {
+        if (response.status === 404) {
+            throw new Error(`Job with ID '${jobId}' not found`);
+        }
+        if (response.status === 403) {
+            throw new Error('Not authorized to download this job');
+        }
+        if (response.status === 400) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Invalid request');
+        }
+        throw new Error('Failed to download results');
+    }
+
+    // Get filename from Content-Disposition header
+    const contentDisposition = response.headers.get('Content-Disposition');
+    let filename = `results.${format}`;
+    if (contentDisposition) {
+        const match = contentDisposition.match(/filename="(.+)"/);
+        if (match) {
+            filename = match[1];
+        }
+    }
+
+    // Download the file
+    const blob = await response.blob();
+    const downloadUrl = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = downloadUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(downloadUrl);
+}
