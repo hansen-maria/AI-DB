@@ -101,7 +101,7 @@ import { RouterLink } from 'vue-router'
         </div>
         <div class="endpoint">
           <span class="method get">GET</span>
-          <code>/api/job/{'{id}'}</code>
+          <code>/api/job/{id}</code>
           <span class="endpoint-desc">Retrieve job status and results</span>
         </div>
         <div class="endpoint">
@@ -110,8 +110,13 @@ import { RouterLink } from 'vue-router'
           <span class="endpoint-desc">List all annotation jobs</span>
         </div>
         <div class="endpoint">
+          <span class="method get">GET</span>
+          <code>/api/job/{id}/download/{format}</code>
+          <span class="endpoint-desc">Download results in different file formats</span>
+        </div>
+        <div class="endpoint">
           <span class="method delete">DELETE</span>
-          <code>/api/job/{'{id}'}</code>
+          <code>/api/job/{id}</code>
           <span class="endpoint-desc">Delete a job and its results</span>
         </div>
       </div>

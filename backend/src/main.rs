@@ -234,7 +234,7 @@ pub struct PaginatedJobResponse {
 }
 
 /// Query parameters for job list
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct ListJobsQuery {
     /// Page number (1-indexed, default: 1)
     pub page: Option<usize>,
@@ -243,7 +243,7 @@ pub struct ListJobsQuery {
 }
 
 /// Query parameters for job details
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct GetJobQuery {
     /// Page number for sequences (1-indexed, default: 1)
     pub page: Option<usize>,
@@ -254,7 +254,7 @@ pub struct GetJobQuery {
 }
 
 /// Filter type for sequences
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, ToSchema)]
 pub enum SequenceFilter {
     All,
     HashMatch,
@@ -283,13 +283,51 @@ impl SequenceFilter {
 }
 
 /// Bakta Hash Lookup Result
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, ToSchema)]
 pub struct HashLookupResult {
     pub found: bool,
     pub db_length: Option<i64>,
     pub uniparc_id: Option<String>,
     pub ncbi_nrp_id: Option<String>,
     pub uniref100_id: Option<String>,
+}
+
+/// Service Health Check Response
+#[derive(Serialize, ToSchema)]
+pub struct HealthCheckResponse {
+    pub status: String,
+    pub service: String,
+    pub bakta_db: BaktaDbHealth,
+}
+
+/// Bakta Database Health Check Response
+#[derive(Serialize, ToSchema)]
+pub struct BaktaDbHealth {
+    /// Database connection status
+    /// Possible values: connected, error, not_found, not_configured
+    pub status: String,
+
+    /// Filesystem path to the Bakta database
+    pub path: Option<String>,
+}
+
+/// Database Info Response
+#[derive(Serialize, ToSchema)]
+pub struct DbInfoResponse {
+    /// Indicates whether the database is accessible
+    pub available: bool,
+
+    /// Filesystem path to the database
+    pub path: Option<String>,
+
+    /// Number of entries in the `ups` table
+    pub ups_entries: Option<i64>,
+
+    /// Bakta database version (if available)
+    pub version: Option<String>,
+
+    /// Error message if database is not accessible
+    pub error: Option<String>,
 }
 
 // ============================================================================
@@ -2419,6 +2457,14 @@ async fn download_job(
 ///   the actual connection result is used to determine the `status`.
 /// - The `.exists()` method is used to check if the path to the database is valid.
 /// - Errors during database connection are not propagated, but instead reflected in the response as `"error"`.
+#[utoipa::path(
+    get,
+    path = "/health",
+    tag = "Health",
+    responses(
+        (status = 200, description = "Service health status", body = HealthCheckResponse)
+    )
+)]
 async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
     let db_status = if let Some(ref path) = state.bakta_db_path {
         if path.exists() {
@@ -2487,6 +2533,14 @@ async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
 /// # Errors
 /// - If the database connection cannot be established, the response will indicate `"available": false`
 ///   and include an `error` field with a descriptive message.
+#[utoipa::path(
+    get,
+    path = "/db/info",
+    tag = "Database",
+    responses(
+        (status = 200, description = "Database information", body = DbInfoResponse)
+    )
+)]
 async fn db_info(State(state): State<AppState>) -> impl IntoResponse {
     let db_info = if let Some(conn) = state.open_db_connection() {
         // Get row count from ups table
@@ -2542,7 +2596,7 @@ async fn db_info(State(state): State<AppState>) -> impl IntoResponse {
     tags(
         (name = "Jobs", description = "Annotation Job Management - Creating and Querying Jobs")
     ),
-    paths(get_job, create_job, list_jobs, delete_job),
+    paths(health_check, db_info, create_job, get_job, list_jobs, download_job, delete_job),
     components(schemas(
         JobStatus,
         SequenceInfo,
@@ -2552,7 +2606,14 @@ async fn db_info(State(state): State<AppState>) -> impl IntoResponse {
         PaginationInfo,
         PaginatedJobsResponse,
         JobSummary,
-        PaginatedJobResponse
+        PaginatedJobResponse,
+        ListJobsQuery,
+        GetJobQuery,
+        SequenceFilter,
+        HashLookupResult,
+        HealthCheckResponse,
+        BaktaDbHealth,
+        DbInfoResponse,
     ))
 )]
 struct ApiDoc;
