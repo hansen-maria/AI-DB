@@ -48,6 +48,8 @@ export interface PaginatedJobsResponse {
     pagination: PaginationInfo;
 }
 
+export type SequenceFilter = 'all' | 'hash_match' | 'alignment' | 'none';
+
 export interface PaginatedJobResponse {
     job_id: string;
     status: JobStatus;
@@ -61,8 +63,11 @@ export interface PaginatedJobResponse {
     error_message: string | null;
     sequences: SequenceInfo[];
     pagination: PaginationInfo;
+    filter: SequenceFilter;
+    filtered_count: number;
 }
 
+// Legacy type for backward compatibility
 export interface JobResponse {
     job_id: string;
     status: JobStatus;
@@ -167,16 +172,18 @@ export async function createJobWithContent(
 }
 
 /**
- * Get job status and results with pagination
+ * Get job status and results with pagination and filtering
  */
 export async function getJob(
     jobId: string,
     page = 1,
-    perPage = 20
+    perPage = 20,
+    filter: SequenceFilter = 'all'
 ): Promise<PaginatedJobResponse> {
     const params = new URLSearchParams({
         page: page.toString(),
         per_page: perPage.toString(),
+        filter: filter,
     });
 
     const response = await fetch(`${API_BASE}/job/${jobId}?${params}`, {
@@ -269,18 +276,18 @@ export async function deleteJob(jobId: string): Promise<void> {
 }
 
 /**
- * Poll job status until completion
+ * Poll job status until completion (only fetches first page of sequences)
  */
 export async function pollJobUntilComplete(
     jobId: string,
-    onUpdate?: (job: JobResponse) => void,
+    onUpdate?: (job: PaginatedJobResponse) => void,
     intervalMs = 1000,
     maxAttempts = 300
-): Promise<JobResponse> {
+): Promise<PaginatedJobResponse> {
     let attempts = 0;
 
     while (attempts < maxAttempts) {
-        const job = await getJob(jobId);
+        const job = await getJob(jobId, 1, 20);
 
         if (onUpdate) {
             onUpdate(job);

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRoute, useRouter, RouterLink } from 'vue-router'
-import { getJob, deleteJob, type PaginatedJobResponse, type JobStatus, type PaginationInfo } from '../api/jobs.ts'
+import { getJob, deleteJob, type PaginatedJobResponse, type JobStatus, type PaginationInfo, type SequenceFilter } from '../api/jobs.ts'
 
 const route = useRoute()
 const router = useRouter()
@@ -13,6 +13,7 @@ const loadingSequences = ref(false)
 const error = ref('')
 const deleting = ref(false)
 const currentPage = ref(1)
+const currentFilter = ref<SequenceFilter>('all')
 const perPage = 20
 let pollInterval: number | null = null
 
@@ -32,6 +33,13 @@ const statusLabels: Record<JobStatus, string> = {
   failed: 'Failed'
 }
 
+const filterOptions: { value: SequenceFilter; label: string }[] = [
+  { value: 'all', label: 'All Sequences' },
+  { value: 'hash_match', label: 'Hash Matches' },
+  { value: 'alignment', label: 'Alignment Matches' },
+  { value: 'none', label: 'No Matches' },
+]
+
 // Generate page numbers to display
 const pageNumbers = computed(() => {
   if (!pagination.value) return []
@@ -49,14 +57,15 @@ const pageNumbers = computed(() => {
   return pages
 })
 
-async function loadJob(page = 1) {
-  if (page !== 1) loadingSequences.value = true
+async function loadJob(page = 1, filter: SequenceFilter = currentFilter.value) {
+  if (page !== 1 || filter !== currentFilter.value) loadingSequences.value = true
   else loading.value = true
 
   currentPage.value = page
+  currentFilter.value = filter
 
   try {
-    const response = await getJob(jobId.value, page, perPage)
+    const response = await getJob(jobId.value, page, perPage, filter)
     job.value = response
     pagination.value = response.pagination
 
@@ -74,7 +83,14 @@ async function loadJob(page = 1) {
 
 function goToPage(page: number) {
   if (page >= 1 && (!pagination.value || page <= pagination.value.total_pages)) {
-    loadJob(page)
+    loadJob(page, currentFilter.value)
+  }
+}
+
+function setFilter(filter: SequenceFilter) {
+  if (filter !== currentFilter.value) {
+    // Reset to page 1 when filter changes
+    loadJob(1, filter)
   }
 }
 
@@ -83,7 +99,7 @@ function startPolling() {
 
   pollInterval = window.setInterval(async () => {
     try {
-      const response = await getJob(jobId.value, currentPage.value, perPage)
+      const response = await getJob(jobId.value, currentPage.value, perPage, currentFilter.value)
       job.value = response
       pagination.value = response.pagination
 
@@ -259,86 +275,127 @@ onUnmounted(stopPolling)
           </div>
         </div>
 
-        <!-- Sequence Table -->
-        <div v-if="job.sequences && job.sequences.length > 0" class="sequences-table">
-          <h4>Sequence Details</h4>
-          <div class="table-wrapper">
-            <table>
-              <thead>
-              <tr>
-                <th>ID</th>
-                <th>Length</th>
-                <th>MD5 Hash</th>
-                <th>Annotation</th>
-                <th>Source</th>
-              </tr>
-              </thead>
-              <tbody>
-              <tr v-for="seq in job.sequences" :key="seq.id">
-                <td class="seq-id">{{ seq.id }}</td>
-                <td>{{ seq.length }}</td>
-                <td class="hash">{{ seq.md5_hash.substring(0, 12) }}...</td>
-                <td class="annotation-cell">
-                  <template v-if="hasAnnotationLinks(seq)">
-                    <div class="annotation-links">
-                      <a
-                          v-if="seq.uniref100_id"
-                          :href="getUniRef100Url(seq.uniref100_id)"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          class="db-link uniref"
-                      >
-                        <span class="db-badge">UniRef100</span>
-                        <span class="db-id">{{ seq.uniref100_id }}</span>
-                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
-                          <polyline points="15 3 21 3 21 9"/>
-                          <line x1="10" y1="14" x2="21" y2="3"/>
-                        </svg>
-                      </a>
-                      <a
-                          v-if="seq.uniparc_id"
-                          :href="getUniParcUrl(seq.uniparc_id)"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          class="db-link uniparc"
-                      >
-                        <span class="db-badge">UniParc</span>
-                        <span class="db-id">{{ seq.uniparc_id }}</span>
-                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
-                          <polyline points="15 3 21 3 21 9"/>
-                          <line x1="10" y1="14" x2="21" y2="3"/>
-                        </svg>
-                      </a>
-                      <a
-                          v-if="seq.ncbi_nrp_id"
-                          :href="getNcbiUrl(seq.ncbi_nrp_id)"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          class="db-link ncbi"
-                      >
-                        <span class="db-badge">NCBI</span>
-                        <span class="db-id">{{ seq.ncbi_nrp_id }}</span>
-                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
-                          <polyline points="15 3 21 3 21 9"/>
-                          <line x1="10" y1="14" x2="21" y2="3"/>
-                        </svg>
-                      </a>
-                    </div>
-                  </template>
-                  <span v-else class="no-annotation">-</span>
-                </td>
-                <td>
+        <!-- Sequence Table with Filter -->
+        <div class="sequences-section">
+          <div class="sequences-header">
+            <h4>Sequence Details</h4>
+            <div class="filter-controls">
+              <span class="filter-label">Filter:</span>
+              <div class="filter-buttons">
+                <button
+                    v-for="opt in filterOptions"
+                    :key="opt.value"
+                    class="filter-btn"
+                    :class="{ active: currentFilter === opt.value }"
+                    :disabled="loadingSequences"
+                    @click="setFilter(opt.value)"
+                >
+                  {{ opt.label }}
+                  <span v-if="opt.value === 'all'" class="filter-count">({{ job.sequence_count }})</span>
+                  <span v-else-if="opt.value === 'hash_match'" class="filter-count">({{ job.hash_matches }})</span>
+                  <span v-else-if="opt.value === 'alignment'" class="filter-count">({{ job.alignment_matches }})</span>
+                  <span v-else-if="opt.value === 'none'" class="filter-count">({{ job.sequence_count - job.hash_matches - job.alignment_matches }})</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Filtered results info -->
+          <div v-if="job.filtered_count !== job.sequence_count" class="filtered-info">
+            Showing {{ job.filtered_count }} of {{ job.sequence_count }} sequences
+          </div>
+
+          <!-- Table (when results exist) -->
+          <div v-if="job.sequences && job.sequences.length > 0" class="sequences-table">
+            <div class="table-wrapper">
+              <table>
+                <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Length</th>
+                  <th>MD5 Hash</th>
+                  <th>Annotation</th>
+                  <th>Source</th>
+                </tr>
+                </thead>
+                <tbody>
+                <tr v-for="seq in job.sequences" :key="seq.id">
+                  <td class="seq-id">{{ seq.id }}</td>
+                  <td>{{ seq.length }}</td>
+                  <td class="hash">{{ seq.md5_hash.substring(0, 12) }}...</td>
+                  <td class="annotation-cell">
+                    <template v-if="hasAnnotationLinks(seq)">
+                      <div class="annotation-links">
+                        <a
+                            v-if="seq.uniref100_id"
+                            :href="getUniRef100Url(seq.uniref100_id)"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            class="db-link uniref"
+                        >
+                          <span class="db-badge">UniRef100</span>
+                          <span class="db-id">{{ seq.uniref100_id }}</span>
+                          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+                            <polyline points="15 3 21 3 21 9"/>
+                            <line x1="10" y1="14" x2="21" y2="3"/>
+                          </svg>
+                        </a>
+                        <a
+                            v-if="seq.uniparc_id"
+                            :href="getUniParcUrl(seq.uniparc_id)"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            class="db-link uniparc"
+                        >
+                          <span class="db-badge">UniParc</span>
+                          <span class="db-id">{{ seq.uniparc_id }}</span>
+                          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+                            <polyline points="15 3 21 3 21 9"/>
+                            <line x1="10" y1="14" x2="21" y2="3"/>
+                          </svg>
+                        </a>
+                        <a
+                            v-if="seq.ncbi_nrp_id"
+                            :href="getNcbiUrl(seq.ncbi_nrp_id)"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            class="db-link ncbi"
+                        >
+                          <span class="db-badge">NCBI</span>
+                          <span class="db-id">{{ seq.ncbi_nrp_id }}</span>
+                          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+                            <polyline points="15 3 21 3 21 9"/>
+                            <line x1="10" y1="14" x2="21" y2="3"/>
+                          </svg>
+                        </a>
+                      </div>
+                    </template>
+                    <span v-else class="no-annotation">-</span>
+                  </td>
+                  <td>
                     <span v-if="seq.annotation_source" :class="['source-badge', seq.annotation_source]">
                       {{ seq.annotation_source === 'hash_match' ? 'Hash' : 'Alignment' }}
                     </span>
-                  <span v-else class="source-badge none">None</span>
-                </td>
-              </tr>
-              </tbody>
-            </table>
+                    <span v-else class="source-badge none">None</span>
+                  </td>
+                </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Empty filter results -->
+          <div v-else-if="job.filtered_count === 0" class="empty-filter-results">
+            <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <circle cx="11" cy="11" r="8"/>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+              <line x1="8" y1="11" x2="14" y2="11"/>
+            </svg>
+            <p>No sequences match the current filter.</p>
+            <button class="btn btn-secondary" @click="setFilter('all')">Show All Sequences</button>
           </div>
 
           <!-- Loading overlay for sequence pagination -->
@@ -1029,6 +1086,129 @@ tr:last-child td {
     width: 100%;
     text-align: center;
     margin: 0.5rem 0 0 0;
+  }
+}
+
+/* Sequences Section with Filter */
+.sequences-section {
+  margin-top: 2rem;
+}
+
+.sequences-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+.sequences-header h4 {
+  margin: 0;
+  color: var(--color-heading);
+  font-size: 1.1rem;
+}
+
+.filter-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.filter-label {
+  font-size: 0.9rem;
+  color: var(--color-text);
+  opacity: 0.8;
+}
+
+.filter-buttons {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.filter-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.85rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-background);
+  color: var(--color-text);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.filter-btn:hover:not(:disabled) {
+  background: var(--color-background-soft);
+  border-color: var(--color-border-hover);
+}
+
+.filter-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.filter-btn.active {
+  background: hsla(160, 100%, 37%, 1);
+  border-color: hsla(160, 100%, 37%, 1);
+  color: white;
+}
+
+.filter-count {
+  font-size: 0.8rem;
+  opacity: 0.8;
+}
+
+.filtered-info {
+  font-size: 0.9rem;
+  color: var(--color-text);
+  opacity: 0.7;
+  margin-bottom: 1rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.empty-filter-results {
+  text-align: center;
+  padding: 3rem 2rem;
+  background: var(--color-background-soft);
+  border-radius: 8px;
+}
+
+.empty-filter-results svg {
+  color: var(--color-text);
+  opacity: 0.4;
+  margin-bottom: 1rem;
+}
+
+.empty-filter-results p {
+  color: var(--color-text);
+  opacity: 0.8;
+  margin-bottom: 1rem;
+}
+
+@media (max-width: 600px) {
+  .sequences-header {
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .filter-controls {
+    width: 100%;
+  }
+
+  .filter-buttons {
+    width: 100%;
+  }
+
+  .filter-btn {
+    flex: 1;
+    justify-content: center;
+    padding: 0.5rem;
   }
 }
 </style>

@@ -7,7 +7,7 @@ use axum::{
     extract::{Multipart, Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{delete, get, post},
+    routing::{get, post},
     Json, Router,
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
@@ -21,7 +21,7 @@ use std::{
     collections::HashMap,
     env,
     fs::File,
-    io::{BufRead, BufReader, Read, Write},
+    io::{BufRead, BufReader, Write},
     net::SocketAddr,
     path::PathBuf,
     sync::Arc,
@@ -220,10 +220,14 @@ pub struct PaginatedJobResponse {
     pub alignment_matches: usize,
     /// Error message (if failed)
     pub error_message: Option<String>,
-    /// Paginated sequences
+    /// Paginated sequences (filtered)
     pub sequences: Vec<SequenceInfo>,
     /// Pagination information for sequences
     pub pagination: PaginationInfo,
+    /// Current filter applied ("all", "hash_match", "alignment", "none")
+    pub filter: String,
+    /// Number of sequences matching the current filter
+    pub filtered_count: usize,
 }
 
 /// Query parameters for job list
@@ -242,6 +246,37 @@ pub struct GetJobQuery {
     pub page: Option<usize>,
     /// Sequences per page (default: 20, max: 100)
     pub per_page: Option<usize>,
+    /// Filter by annotation source: "all", "hash_match", "alignment", "none" (default: "all")
+    pub filter: Option<String>,
+}
+
+/// Filter type for sequences
+#[derive(Debug, Clone, PartialEq)]
+pub enum SequenceFilter {
+    All,
+    HashMatch,
+    Alignment,
+    NoMatch,
+}
+
+impl SequenceFilter {
+    fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "hash_match" | "hash" => SequenceFilter::HashMatch,
+            "alignment" => SequenceFilter::Alignment,
+            "none" | "no_match" => SequenceFilter::NoMatch,
+            _ => SequenceFilter::All,
+        }
+    }
+
+    fn matches(&self, seq: &SequenceInfo) -> bool {
+        match self {
+            SequenceFilter::All => true,
+            SequenceFilter::HashMatch => seq.annotation.as_deref() == Some("hash_match"),
+            SequenceFilter::Alignment => seq.annotation.as_deref() == Some("alignment"),
+            SequenceFilter::NoMatch => seq.annotation.is_none(),
+        }
+    }
 }
 
 /// Bakta Hash Lookup Result
@@ -931,82 +966,82 @@ const DEFAULT_PER_PAGE: usize = 20;
 /// Maximum items per page
 const MAX_PER_PAGE: usize = 100;
 
-/// Retrieves information about a specific job using its unique job ID.
-///
-/// This endpoint allows clients to fetch details about a job, including its status, metadata,
-/// and associated sequences. The sequences can be paginated using optional query parameters.
+/// Retrieves information about a specific job by its unique `job_id`.
 ///
 /// # Endpoint
 /// `GET /api/job/{job_id}`
 ///
-/// # Parameters
+/// This endpoint provides detailed information about a job, including filtered and paginated sequences.
 ///
-/// **Path Parameters:**
-/// - `job_id` (String): The unique identifier (UUID) of the job to retrieve.
+/// # Path Parameters
+/// - `job_id` (*String*, required): A unique job identifier (UUID).
 ///
-/// **Query Parameters (optional):**
-/// - `page` (Option<usize>): The page number of sequences to retrieve (default: 1, indexed from 1).
-/// - `per_page` (Option<usize>): The number of sequences per page (default: 20, maximum: 100).
+/// # Query Parameters
+/// - `page` (*Option<usize>*, optional): Specifies the sequence page to retrieve. Defaults to `1` (indexed from 1).
+/// - `per_page` (*Option<usize>*, optional): The number of sequences to return per page. Defaults to `20` and cannot exceed `100`.
+/// - `filter` (*Option<String>*, optional): Specifies the type of sequences to include in the response. Options include:
+///   - `all`: Include all sequences.
+///   - `hash_match`: Include only sequences with hash matches.
+///   - `alignment`: Include sequences with alignment matches.
+///   - `none`: Include sequences without matches. Defaults to `all`.
 ///
 /// # Responses
 ///
-/// - **200 OK**: The job was found, and its details (including sequences, if available) are returned in the response body.
-///   - Response Body: [`PaginatedJobResponse`](PaginatedJobResponse)
-///   - Includes pagination information and the sequences data if available.
+/// ## Success (200)
+/// Returns job details and filtered/paginated sequences.
 ///
-/// - **404 Not Found**: The job with the specified ID does not exist.
-///   - Response Body: [`ErrorResponse`](ErrorResponse)
+/// Example Response Body:
+/// ```json
+/// {
+///   "job_id": "string",
+///   "status": "string",
+///   "created_at": "ISO8601_timestamp",
+///   "updated_at": "ISO8601_timestamp",
+///   "filename": "string",
+///   "sequence_count": 100,
+///   "processed_count": 80,
+///   "hash_matches": 50,
+///   "alignment_matches": 30,
+///   "error_message": null,
+///   "sequences": [
+///     {
+///       "sequence_id": "string",
+///       "hash": "string",
+///       "alignment_score": 95.0,
+///       "metadata": {}
+///     }
+///   ],
+///   "pagination": {
+///     "page": 1,
+///     "per_page": 20,
+///     "total_pages": 5,
+///     "total_items": 100
+///   },
+///   "filter": "all",
+///   "filtered_count": 100
+/// }
+/// ```
+///
+/// ## Error (404)
+/// If the requested job does not exist, a `404 Not Found` response is returned with an error message.
+///
+/// Example Error Response:
+/// ```json
+/// {
+///   "detail": "Job with ID 'job_id' not found"
+/// }
+/// ```
+///
+/// # Notes
+/// - Filters are applied to the sequences within the job.
+/// - Results are paginated after filtering is performed.
+/// - If no sequences match the filter, an empty list is returned.
 ///
 /// # Implementation Details
+/// - Default values are used for missing query parameters.
+/// - Pagination is calculated based on the filtered sequence count.
+/// - The response includes metadata about pagination, job status, and any applicable filtering.
 ///
-/// - The job data is retrieved from a shared `jobs` resource in the application state.
-/// - The sequences associated with the job are paginated based on the `page` and `per_page` parameters:
-///   - Defaults: `page` = 1, `per_page` = 20.
-///   - Constraints: `page` must be at least 1, and `per_page` is capped at 100 with a minimum value of 1.
-/// - If the job does not have any sequences, an empty list will be returned for the sequences field.
-///
-/// # Errors
-///
-/// - If the `job_id` does not exist, a `404 Not Found` response is returned, including an error message
-///   in the response body.
-///
-/// # Example Usage
-///
-/// ## Request:
-/// ```http
-/// GET /api/job/48a7b1ad-67d1-4cc1-aad6-63ed0a2b5e12?page=2&per_page=10 HTTP/1.1
-/// Host: example.com
-/// ```
-///
-/// ## Successful Response (200):
-/// ```json
-/// {
-///   "job_id": "48a7b1ad-67d1-4cc1-aad6-63ed0a2b5e12",
-///   "status": "completed",
-///   "created_at": "2023-09-20T12:00:00Z",
-///   "updated_at": "2023-09-21T15:30:00Z",
-///   "filename": "example_file.fasta",
-///   "sequence_count": 50,
-///   "processed_count": 50,
-///   "hash_matches": 25,
-///   "alignment_matches": 20,
-///   "error_message": null,
-///   "sequences": [ ... ], // Paginated sequence data
-///   "pagination": {
-///     "page": 2,
-///     "per_page": 10,
-///     "total_items": 50,
-///     "total_pages": 5
-///   }
-/// }
-/// ```
-///
-/// ## Error Response (404):
-/// ```json
-/// {
-///   "detail": "Job with ID '48a7b1ad-67d1-4cc1-aad6-63ed0a2b5e12' not found"
-/// }
-/// ```
 #[utoipa::path(
     get,
     path = "/api/job/{job_id}",
@@ -1014,7 +1049,8 @@ const MAX_PER_PAGE: usize = 100;
     params(
         ("job_id" = String, Path, description = "Unique job ID (UUID)"),
         ("page" = Option<usize>, Query, description = "Sequence page (indexed from 1, default: 1)"),
-        ("per_page" = Option<usize>, Query, description = "Sequences per page (default: 20, max: 100)")
+        ("per_page" = Option<usize>, Query, description = "Sequences per page (default: 20, max: 100)"),
+        ("filter" = Option<String>, Query, description = "Filter: all, hash_match, alignment, none")
     ),
     responses(
         (status = 200, description = "Job found", body = JobResponse),
@@ -1032,28 +1068,47 @@ async fn get_job(
         .unwrap_or(DEFAULT_PER_PAGE)
         .min(MAX_PER_PAGE)
         .max(1);
+    let filter = query.filter.as_deref().map(SequenceFilter::from_str).unwrap_or(SequenceFilter::All);
+    let filter_str = match &filter {
+        SequenceFilter::All => "all",
+        SequenceFilter::HashMatch => "hash_match",
+        SequenceFilter::Alignment => "alignment",
+        SequenceFilter::NoMatch => "none",
+    }.to_string();
 
     let jobs = state.jobs.read();
 
     match jobs.get(&job_id) {
         Some(job) => {
-            let sequences = job.sequences.as_ref();
-            let total_items = sequences.map(|s| s.len()).unwrap_or(0);
+            // Apply filter to sequences
+            let filtered_sequences: Vec<&SequenceInfo> = job.sequences
+                .as_ref()
+                .map(|seqs| {
+                    seqs.iter().filter(|s| {
+                        match filter {
+                            SequenceFilter::All => true,
+                            SequenceFilter::HashMatch => s.annotation_source.as_deref() == Some("hash_match"),
+                            SequenceFilter::Alignment => s.annotation_source.as_deref() == Some("alignment"),
+                            SequenceFilter::NoMatch => s.annotation_source.is_none(),
+                        }
+                    }).collect()
+                })
+                .unwrap_or_default();
+
+            let filtered_count = filtered_sequences.len();
 
             // Calculate pagination
-            let pagination = PaginationInfo::new(page, per_page, total_items);
+            let pagination = PaginationInfo::new(page, per_page, filtered_count);
 
-            // Get paginated sequences
-            let paginated_sequences: Vec<SequenceInfo> = if let Some(seqs) = sequences {
+            // Get paginated sequences from filtered results
+            let paginated_sequences: Vec<SequenceInfo> = {
                 let start = (page - 1) * per_page;
-                let end = (start + per_page).min(seqs.len());
-                if start < seqs.len() {
-                    seqs[start..end].to_vec()
+                let end = (start + per_page).min(filtered_count);
+                if start < filtered_count {
+                    filtered_sequences[start..end].iter().map(|s| (*s).clone()).collect()
                 } else {
                     Vec::new()
                 }
-            } else {
-                Vec::new()
             };
 
             let response = PaginatedJobResponse {
@@ -1069,6 +1124,8 @@ async fn get_job(
                 error_message: job.error_message.clone(),
                 sequences: paginated_sequences,
                 pagination,
+                filter: filter_str,
+                filtered_count,
             };
 
             (StatusCode::OK, Json(response)).into_response()
@@ -1857,7 +1914,7 @@ async fn db_info(State(state): State<AppState>) -> impl IntoResponse {
             - **Fast**: Hash-based annotations in seconds instead of hours\n\
             - **Comprehensive**: Access to UniRef protein annotations\n\
             - **Fallback**: Diamond alignment for new sequences",
-        license(name = "MIT", url = "http://opensource.org/licenses/MIT"),
+        license(name = "MIT", url = "https://opensource.org/licenses/MIT"),
         contact(name = "AI-DB Team", url = "https://github.com/hansen-maria/AI-DB-Web")
     ),
     tags(
