@@ -9,7 +9,7 @@ use axum::{extract::State, response::IntoResponse, Json};
 /// Health check endpoint - includes database status
 #[utoipa::path(
     get,
-    path = "/health",
+    path = "/api/health",
     tag = "Health",
     responses(
         (status = 200, description = "Service health status", body = HealthCheckResponse)
@@ -43,7 +43,7 @@ pub async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
 /// Database info endpoint - provides details about the Bakta database
 #[utoipa::path(
     get,
-    path = "/db/info",
+    path = "/api/db/info",
     tag = "Database",
     responses(
         (status = 200, description = "Database information", body = DbInfoResponse)

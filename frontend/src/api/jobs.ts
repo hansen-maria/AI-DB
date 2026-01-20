@@ -89,6 +89,23 @@ export interface JobCreateResponse {
     sequence_count: number;
 }
 
+export interface HealthCheckResponse {
+    status: string;
+    service: string;
+    bakta_db: {
+        status: 'connected' | 'error' | 'not_found' | 'not_configured';
+        path: string | null;
+    };
+}
+
+export interface DbInfoResponse {
+    available: boolean;
+    path: string | null;
+    ups_entries?: number | null;
+    version?: string | null;
+    error?: string;
+}
+
 export interface ApiError {
     detail: string;
 }
@@ -386,4 +403,56 @@ export async function downloadJobResults(
     link.click();
     document.body.removeChild(link);
     window.URL.revokeObjectURL(downloadUrl);
+}
+
+/**
+ * Health check endpoint - includes database status
+ */
+export async function checkHealth(): Promise<HealthCheckResponse> {
+    const response = await fetch(`${API_BASE}/health`, {
+        credentials: 'include',
+    });
+
+    // Check content type
+    const contentType = response.headers.get('content-type');
+    if (!contentType || !contentType.includes('application/json')) {
+        throw new Error('API not available');
+    }
+
+    if (!response.ok) {
+        try {
+            const error: ApiError = await response.json();
+            throw new Error(error.detail || 'Health check failed');
+        } catch {
+            throw new Error(`Health check failed: ${response.statusText}`);
+        }
+    }
+
+    return response.json();
+}
+
+/**
+ * Database info endpoint - provide details about the Bakta database
+ */
+export async function dbInfo(): Promise<DbInfoResponse> {
+    const response = await fetch(`${API_BASE}/db/info`, {
+        credentials: 'include',
+    });
+
+    // Check content type
+    const contentType = response.headers.get('content-type');
+    if (!contentType || !contentType.includes('application/json')) {
+        throw new Error('API not available');
+    }
+
+    if (!response.ok) {
+        try {
+            const error: ApiError = await response.json();
+            throw new Error(error.detail || 'Failed to fetch DB info');
+        } catch {
+            throw new Error(`Failed to fetch DB info: ${response.statusText}`);
+        }
+    }
+
+    return response.json();
 }
