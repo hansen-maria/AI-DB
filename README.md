@@ -12,15 +12,18 @@ using the [Bakta](https://github.com/oschwengers/bakta) database (~350 million p
 - **Comprehensive**: Access to UniRef100, UniParc, and NCBI protein annotations
 - **User-friendly**: Jobs are associated with users via cookies
 - **Shareable**: Jobs can be shared via Job-ID
+- **Export**: Download results in TSV, JSON, FASTA, or GFF3 format
+- **Pagination**: Efficient browsing of large result sets
+- **Filtering**: Filter sequences by annotation source (hash match, alignment, no match)
 
 ## Project Structure
 
 ```
-ai-db-web/
-├── docker-compose.yml          # Docker compose configuration
-├── frontend/                   # Vue.js frontend
+ai-db/
+├── docker-compose.yml
+├── frontend/                       # Vue.js Frontend
 │   ├── Dockerfile
-│   ├── nginx.conf              # Nginx configuration with API proxy
+│   ├── nginx.conf
 │   ├── package.json
 │   ├── vite.config.ts
 │   ├── src/
@@ -42,7 +45,26 @@ ai-db-web/
     ├── Dockerfile
     ├── Cargo.toml
     └── src/
-        └── main.rs            # REST API with OpenAPI/Swagger
+        ├── main.rs                 # Entry point, router, OpenAPI
+        ├── auth.rs                 # Cookie-based authentication
+        ├── state.rs                # AppState, DB connection
+        ├── models/                 # Data structures
+        │   ├── job.rs              # JobResponse, JobStatus
+        │   ├── sequence.rs         # SequenceInfo, SequenceFilter
+        │   ├── pagination.rs       # PaginationInfo, query types
+        │   └── error.rs            # ErrorResponse
+        ├── handlers/               # API endpoints
+        │   ├── jobs.rs             # CRUD operations
+        │   ├── download.rs         # Export handler
+        │   └── health.rs           # Health check
+        ├── services/               # Business logic
+        │   ├── fasta.rs            # FASTA parsing
+        │   └── annotation.rs       # DB lookup, job processing
+        └── export/                 # Download formats
+            ├── tsv.rs
+            ├── json.rs
+            ├── fasta.rs
+            └── gff3.rs
 ```
 
 ## Quick Start
@@ -56,9 +78,9 @@ ai-db-web/
 
 ```bash
 # Create and mount volume
-sudo mkfs.ext4 <path/to/dest/partition>
+sudo mkfs.ext4 /dev/sdb
 sudo mkdir -p /mnt/bakta-db
-sudo mount <path/to/dest/partition> /mnt/bakta-db
+sudo mount /dev/sdb /mnt/bakta-db
 
 # Download database (~40GB for Full DB)
 cd /mnt/bakta-db
@@ -83,8 +105,7 @@ docker-compose up -d --build
 ```bash
 cd backend
 BAKTA_DB=/mnt/bakta-db/db cargo run
-cargo run
-# Server running at http://localhost:8000
+# Server runs on http://localhost:8000
 # Swagger UI: http://localhost:8000/api/docs/
 ```
 
@@ -97,43 +118,65 @@ npm run dev
 
 ## REST API Endpoints
 
-| Method   | Endpoint        | Description                 | Authentication       |
-|----------|-----------------|-----------------------------|----------------------|
-| `POST`   | `/api/job/`     | Create new job              | Sets cookie          |
-| `GET`    | `/api/job/{id}` | Get job status              | Public (with Job-ID) |
-| `GET`    | `/api/jobs/`    | List own jobs               | Cookie required      |
-| `DELETE` | `/api/job/{id}` | Delete job                  | Own jobs only        |
-| `GET`    | `/api/health`   | Health check with DB status | Public               |
-| `GET`    | `/api/db/info`  | Database information        | Public               |
+| Method   | Endpoint                          | Description                 | Authentication   |
+|----------|-----------------------------------|-----------------------------|------------------|
+| `POST`   | `/api/job/`                       | Create new job              | Sets cookie      |
+| `GET`    | `/api/job/{id}`                   | Get job status (paginated)  | Public           |
+| `GET`    | `/api/job/{id}/download/{format}` | Download results            | Owner only       |
+| `GET`    | `/api/jobs/`                      | List own jobs (paginated)   | Cookie required  |
+| `DELETE` | `/api/job/{id}`                   | Delete job                  | Owner only       |
+| `GET`    | `/api/health`                     | Health check with DB status | Public           |
+| `GET`    | `/api/db/info`                    | Database information        | Public           |
+
+### Pagination Parameters
+
+Both `/api/job/{id}` and `/api/jobs/` support pagination:
+
+| Parameter   | Description             | Default  | Max  |
+|-------------|-------------------------|----------|------|
+| `page`      | Page number (1-indexed) | 1        | -    |
+| `per_page`  | Items per page          | 20       | 100  |
+
+### Filtering (Job Details)
+
+The `/api/job/{id}` endpoint supports sequence filtering:
+
+| Parameter   | Values       | Description                           |
+|-------------|--------------|---------------------------------------|
+| `filter`    | `all`        | All sequences (default)               |
+|             | `hash_match` | Only sequences with hash matches      |
+|             | `alignment`  | Only sequences with alignment matches |
+|             | `none`       | Only sequences without annotations    |
+
+### Download Formats
+
+| Format   | Endpoint                       | Content-Type                | Use Case                       |
+|----------|--------------------------------|-----------------------------|--------------------------------|
+| TSV      | `/api/job/{id}/download/tsv`   | `text/tab-separated-values` | Excel, R, Python               |
+| JSON     | `/api/job/{id}/download/json`  | `application/json`          | Programmatic access            |
+| FASTA    | `/api/job/{id}/download/fasta` | `text/x-fasta`              | Bioinformatics tools           |
+| GFF3     | `/api/job/{id}/download/gff3`  | `text/x-gff3`               | Genome browsers (IGV, JBrowse) |
 
 ### Cookie-based Authorization
 
 - On first job submission, an `ai_db_owner` cookie is automatically set (valid for 1 year)
 - The job list shows only your own jobs
 - Jobs can only be deleted by their creator
-- Anyone with the Job-ID can access a job (for sharing)
+- Downloads require ownership
+- Anyone with the Job-ID can view a job (for sharing)
 
 ### API Documentation
 
-The complete OpenAPI/Swagger documentation is available at:
+Full OpenAPI/Swagger documentation is available at:
 - **Swagger UI**: `https://ai-db.computational.bio/api/docs/`
 - **OpenAPI JSON**: `https://ai-db.computational.bio/api/openapi.json`
 
 ### Example: Create Job
 
-**With file upload:**
 ```bash
 curl -X POST "https://ai-db.computational.bio/api/job/" \
   -F "file=@sequences.fasta" \
   -F "job_name=MyJob" \
-  -c cookies.txt
-```
-
-**With direct FASTA content:**
-```bash
-curl -X POST "https://ai-db.computational.bio/api/job/" \
-  -F "fasta_content=>seq1
-MKFLILLFNILCLFPVLAADNHGVGPQGASGVDPITFDINSNQTGV" \
   -c cookies.txt
 ```
 
@@ -147,10 +190,10 @@ MKFLILLFNILCLFPVLAADNHGVGPQGASGVDPITFDINSNQTGV" \
 }
 ```
 
-### Example: Get Job Status
+### Example: Get Job with Pagination and Filter
 
 ```bash
-curl "https://ai-db.computational.bio/api/job/550e8400-e29b-41d4-a716-446655440000"
+curl "https://your-domain/api/job/550e8400-e29b-41d4-a716-446655440000?page=1&per_page=50&filter=hash_match"
 ```
 
 **Response:**
@@ -161,23 +204,32 @@ curl "https://ai-db.computational.bio/api/job/550e8400-e29b-41d4-a716-4466554400
   "created_at": "2026-01-13T10:30:00Z",
   "updated_at": "2026-01-13T10:30:05Z",
   "filename": "sequences.fasta",
-  "sequence_count": 100,
-  "processed_count": 100,
-  "hash_matches": 85,
+  "sequence_count": 4155,
+  "processed_count": 4155,
+  "hash_matches": 4111,
   "alignment_matches": 0,
-  "sequences": [
-    {
-      "id": "seq1",
-      "md5_hash": "a1b2c3d4e5f6...",
-      "length": 245,
-      "annotation": "UniRef100:A0A003 | UniParc:UPI0000E5B23F | NCBI:WP_012345678.1",
-      "annotation_source": "hash_match",
-      "uniparc_id": "UPI0000E5B23F",
-      "ncbi_nrp_id": "WP_012345678.1",
-      "uniref100_id": "A0A003"
-    }
-  ]
+  "filter": "hash_match",
+  "filtered_count": 4111,
+  "sequences": [...],
+  "pagination": {
+    "page": 1,
+    "per_page": 50,
+    "total_items": 4111,
+    "total_pages": 83,
+    "has_next": true,
+    "has_prev": false
+  }
 }
+```
+
+### Example: Download Results
+
+```bash
+# Download as TSV
+curl -b cookies.txt -O "https://ai-db.computational.bio/api/job/{id}/download/tsv"
+
+# Download as GFF3
+curl -b cookies.txt -O "https://ai-db.computational.bio/api/job/{id}/download/gff3"
 ```
 
 ### Example: Check Database Status
@@ -198,13 +250,13 @@ curl "https://ai-db.computational.bio/api/db/info"
 
 ## Frontend Routes
 
-| Route      | Component     | Description                                 |
-|------------|---------------|---------------------------------------------|
-| `/`        | HomeView      | Landing page with features                  |
-| `/submit`  | SubmitJobView | FASTA upload page                           |
-| `/jobs`    | JobListView   | List of own jobs                            |
-| `/job/:id` | JobDetailView | Job details with clickable annotation links |
-| `/docs`    | -             | Redirect to Swagger UI                      |
+| Route      | Component     | Description                           |
+|------------|---------------|---------------------------------------|
+| `/`        | HomeView      | Landing page with features            |
+| `/submit`  | SubmitJobView | FASTA upload page                     |
+| `/jobs`    | JobListView   | Paginated list of own jobs            |
+| `/job/:id` | JobDetailView | Job details with filtering & download |
+| `/docs`    | -             | Redirect to Swagger UI                |
 
 ### Annotation Links
 
@@ -218,21 +270,18 @@ Found annotations are displayed as clickable links to the respective databases:
 
 ## Rust Backend
 
-The backend uses the following crates:
+### Modular Architecture
 
-| Crate           | Purpose                                   |
-|-----------------|-------------------------------------------|
-| **axum**        | Ergonomic web framework                   |
-| **axum-extra**  | Cookie handling                           |
-| **rusqlite**    | SQLite access for Bakta-DB                |
-| **flate2**      | Gzip decompression                        |
-| **tempfile**    | Temporary file handling for large uploads |
-| **utoipa**      | OpenAPI/Swagger documentation             |
-| **tower-http**  | HTTP middleware (CORS, Tracing)           |
-| **serde**       | JSON serialization                        |
-| **tokio**       | Async runtime                             |
-| **parking_lot** | Efficient locks for in-memory storage     |
-| **md-5**        | MD5 hash computation                      |
+The backend is organized into focused modules:
+
+| Module      | Responsibility                           |
+|-------------|------------------------------------------|
+| `models/`   | Data structures, serialization           |
+| `handlers/` | HTTP request/response handling           |
+| `services/` | FASTA parsing, DB lookup, job processing |
+| `export/`   | TSV, JSON, FASTA, GFF3 generation        |
+| `state.rs`  | Application state, DB connection         |
+| `auth.rs`   | Cookie-based authentication              |
 
 ### Build
 
@@ -246,8 +295,6 @@ The release binary is located at `target/release/ai-db-api`.
 ## Configuration
 
 ### Environment Variables
-
-**Backend:**
 
 | Variable         | Description                                 | Default     |
 |------------------|---------------------------------------------|-------------|
@@ -287,13 +334,48 @@ MRYILAAVLLPMFAQSYKVDQTGSGPKNTFFINSNQTGVPEQYGDL
 
 ### Supported File Formats
 
-| Extension                       | Description                                        |
-|---------------------------------|----------------------------------------------------|
-| `.fasta`, `.fa`, `.fna`, `.faa` | Standard FASTA files                               |
-| `.txt`                          | Plain text FASTA                                   |
-| `.gz`                           | Gzip compressed FASTA (e.g., `sequences.fasta.gz`) |
+| Extension                       | Description           |
+|---------------------------------|-----------------------|
+| `.fasta`, `.fa`, `.fna`, `.faa` | Standard FASTA files  |
+| `.txt`                          | Plain text FASTA      |
+| `.gz`                           | Gzip compressed FASTA |
 
-Compressed files are automatically detected and decompressed based on their magic bytes, regardless of file extension.
+Compressed files are automatically detected via magic bytes.
+
+## Export Formats
+
+### TSV (Tab-Separated Values)
+
+Includes metadata header and data columns:
+- `sequence_id`, `length`, `md5_hash`, `annotation_source`
+- `annotation`, `uniparc_id`, `ncbi_nrp_id`, `uniref100_id`
+- Direct URLs to UniParc, NCBI, and UniRef100
+
+### JSON
+
+Structured export with:
+- Job metadata (ID, filename, timestamps)
+- Statistics (total, hash matches, alignment matches, no matches)
+- Sequences with database IDs and URLs
+
+### Annotated FASTA
+
+Original sequences with annotation info in headers:
+```
+>WP_000001234.1 | source=hash_match | annotation=UniRef100:A0A003 | UniParc=UPI000 | length=486 | md5=a1b2c3
+MKFLILLFNILCLFPVLAADNHGVGPQGASGVDPITFDINSNQTGVASLLNFLGGTTVGS
+```
+
+### GFF3
+
+Standard genome feature format for genome browsers:
+```
+##gff-version 3
+#!annotation-source AI-DB v1.0
+##sequence-region WP_000001234.1 1 486
+###
+WP_000001234.1	ai-db	protein_match	1	486	.	.	.	ID=seq_000001;Name=WP_000001234.1;md5=a1b2c3;Dbxref=UniParc:UPI000,UniRef100:A0A003
+```
 
 ## Bakta Database
 
@@ -306,30 +388,17 @@ Set up a daily update job:
 0 3 * * * root /usr/local/bin/bakta-db-update.sh >> /var/log/bakta-db-update.log 2>&1
 ```
 
-## Security
+## ⚡ Performance & Memory Management
 
-- HTTPS with Let's Encrypt
-- HTTP-Only cookies with SameSite=Lax
-- Security headers (HSTS, X-Frame-Options, etc.)
-- CORS with explicit origins for credentials
-- Non-root user in backend container
-- Memory-safe backend through Rust
-- Read-only Bakta-DB mount
-
-## Performance & Memory Management
-
-AI-DB is designed to handle large FASTA files efficiently:
-
-- **Streaming Upload**: Files are streamed directly to a temporary file on a dedicated volume
-- **No RAM Bottleneck**: Large files (up to 10 GB) are stored on disk during processing
-- **Iterator-based Parsing**: Sequences are processed one at a time from the temp file
-- **Batch Progress Updates**: Job progress is updated every 1,000 sequences
-- **Automatic Cleanup**: Temporary files are deleted after processing
+- **Streaming Upload**: Files streamed to temp storage
+- **Iterator-based Parsing**: One sequence at a time
+- **Batch Progress**: Updates every 1,000 sequences
 - **Memory Limits**:
-    - Maximum 1 million results stored per job (larger files show truncation warning)
-    - Maximum 5 MB per individual sequence
-    - 64 KB buffer size for file reading
-- **Gzip Support**: Compressed files are decompressed on-the-fly during processing
+    - 100 MB maximum upload size 
+    - 1M results max per job
+    - 5 MB max per sequence
+- **Gzip Support**: On-the-fly decompression
+
 
 ### Temp Volume Setup
 
@@ -346,7 +415,15 @@ sudo chmod 1777 /mnt/ai-db-tmp
 echo '<path/to/dest/partition> /mnt/ai-db-tmp ext4 defaults 0 2' | sudo tee -a /etc/fstab
 ```
 
-This architecture allows processing of multi-gigabyte FASTA files without running out of memory.
+## 🛡️ Security
+
+- HTTPS with Let's Encrypt
+- HTTP-Only cookies with SameSite=Lax
+- Security headers (HSTS, X-Frame-Options)
+- CORS with explicit origins
+- Non-root container user
+- Memory-safe Rust backend
+- Read-only database mount
 
 ## License
 
