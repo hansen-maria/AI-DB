@@ -8,7 +8,7 @@ use uuid::Uuid;
 pub const OWNER_COOKIE_NAME: &str = "ai_db_user";
 const COOKIE_MAX_AGE_DAYS: i64 = 365; // 1 year
 
-///
+/// Returns the owner_id from the cookie jar, or creates a new one if it doesn't exist
 pub fn get_or_create_owner(jar: CookieJar) -> (String, CookieJar) {
     if let Some(cookie) = jar.get(OWNER_COOKIE_NAME) {
         (cookie.value().to_string(), jar)

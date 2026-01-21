@@ -10,6 +10,7 @@
 //! - `export` - Export formats (TSV, JSON, FASTA, GFF3)
 //! - `state` - Application state and database connection
 //! - `auth` - Cookie-based authentication
+//! - `storage` - Logic to persist jobs for 30 days using SQLite
 
 pub mod auth;
 pub mod export;
