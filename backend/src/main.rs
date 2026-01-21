@@ -1,4 +1,3 @@
-//! ============================================================================
 //! AI-DB REST API Backend
 //!
 //! Hash-Based Annotation Service for Microbial Sequencing Data
@@ -11,7 +10,6 @@
 //! - `export` - Export formats (TSV, JSON, FASTA, GFF3)
 //! - `state` - Application state and database connection
 //! - `auth` - Cookie-based authentication
-//! ============================================================================
 
 pub mod auth;
 pub mod export;
@@ -19,6 +17,7 @@ pub mod handlers;
 pub mod models;
 pub mod services;
 pub mod state;
+pub mod storage;
 
 use axum::{
     routing::{get, post},

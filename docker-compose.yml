@@ -29,9 +29,11 @@ services:
       - RUST_LOG=info
       - BAKTA_DB=/bakta-db
       - AI_DB_TEMP_DIR=/tmp-data
+      - AI_DB_JOBS_PATH=/data/jobs.db
     volumes:
       - /mnt/bakta-db/db:/bakta-db:ro
       - /mnt/ai-db-tmp:/tmp-data
+      - /data:/data
     restart: unless-stopped
     networks:
       - app-network

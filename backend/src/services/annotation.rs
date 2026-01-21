@@ -31,7 +31,7 @@ pub fn lookup_hash_in_bakta(
             uniref100_id: row.get(3).ok(),
         })
     }) {
-        Ok(mut result) => {
+        Ok(result) => {
             // Verify length matches (optional sanity check)
             if let Some(db_len) = result.db_length {
                 if db_len as usize != seq_length {

@@ -2,7 +2,7 @@
 //! Health-Check types and responses
 //! ============================================================================
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use utoipa::ToSchema;
 
 /// Service Health Check Response

@@ -306,11 +306,8 @@ pub async fn create_job(
         owner_id: Some(owner_id.clone()),
     };
 
-    // Store job
-    {
-        let mut jobs = state.jobs_mut();
-        jobs.insert(job_id.clone(), job);
-    }
+    // Store job (with persistence)
+    state.save_job(&job);
 
     // Keep temp file path for background processing
     let temp_path = tf.into_temp_path();
@@ -320,7 +317,7 @@ pub async fn create_job(
     let job_id_clone = job_id.clone();
     tokio::spawn(async move {
         // Small delay to ensure job is stored
-        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
         // Use blocking task for CPU-intensive work
         let state_for_blocking = state_clone.clone();
@@ -459,18 +456,29 @@ pub async fn delete_job(
                 Json(ErrorResponse::new("Not authorized to delete this job")),
             )
                 .into_response();
+        } else {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse::new(format!(
+                    "Job with ID '{}' not found",
+                    job_id
+                ))),
+            )
+                .into_response();
         }
     }
 
-    match jobs.remove(&job_id) {
-        Some(_) => StatusCode::NO_CONTENT.into_response(),
-        None => (
+    // Delete with persistence
+    if state.delete_job(&job_id) {
+        StatusCode::NO_CONTENT.into_response()
+    } else {
+        (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse::new(format!(
                 "Job with ID '{}' not found",
                 job_id
             ))),
         )
-            .into_response(),
+            .into_response()
     }
 }
