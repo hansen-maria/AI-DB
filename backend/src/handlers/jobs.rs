@@ -293,8 +293,9 @@ pub async fn create_job(
         status: JobStatus::Pending,
         created_at: now,
         updated_at: now,
-        filename: filename
-            .or(job_name.clone())
+        filename: job_name
+            .clone()
+            .or(filename)
             .or(Some("direct_input".to_string())),
         sequence_count: 0,
         processed_count: 0,
