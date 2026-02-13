@@ -21,6 +21,12 @@ let pollInterval: number | null = null
 
 const jobId = computed(() => route.params.id as string)
 
+// Progress percentage with division by zero protection
+const progressPercent = computed(() => {
+  if (!job.value || job.value.sequence_count === 0) return 0
+  return Math.min(100, (job.value.processed_count / job.value.sequence_count) * 100)
+})
+
 const statusColors: Record<JobStatus, string> = {
   pending: '#ff9800',
   processing: '#2196f3',
@@ -127,7 +133,7 @@ async function handleDelete() {
   deleting.value = true
   try {
     await deleteJob(jobId.value)
-    router.push({ name: 'jobs' })
+    await router.push({name: 'jobs'})
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Failed to delete job'
     deleting.value = false
@@ -260,11 +266,16 @@ onUnmounted(stopPolling)
         <div class="progress-bar">
           <div
               class="progress-fill"
-              :style="{ width: `${(job.processed_count / job.sequence_count) * 100}%` }"
+              :class="{ 'indeterminate': job.sequence_count === 0 }"
+              :style="{ width: job.sequence_count > 0 ? `${progressPercent}%` : '100%' }"
           ></div>
         </div>
-        <span class="progress-text">
-          {{ job.processed_count }} / {{ job.sequence_count }} sequences processed
+        <span class="progress-text" v-if="job.sequence_count > 0">
+          {{ job.processed_count.toLocaleString() }} / {{ job.sequence_count.toLocaleString() }} sequences processed
+          ({{ progressPercent.toFixed(1) }}%)
+        </span>
+        <span class="progress-text" v-else>
+          Counting sequences...
         </span>
       </div>
 
@@ -730,6 +741,17 @@ onUnmounted(stopPolling)
   background: linear-gradient(90deg, #2196f3, #4caf50);
   border-radius: 4px;
   transition: width 0.3s;
+}
+
+.progress-fill.indeterminate {
+  background: linear-gradient(90deg, #2196f3, #4caf50, #2196f3);
+  background-size: 200% 100%;
+  animation: progress-indeterminate 1.5s linear infinite;
+}
+
+@keyframes progress-indeterminate {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
 }
 
 .progress-text {

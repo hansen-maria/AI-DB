@@ -6,7 +6,7 @@ use chrono::Utc;
 use flate2::read::GzDecoder;
 use rusqlite::Connection;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::Path;
 
 use crate::models::{HashLookupResult, JobStatus, SequenceInfo};
@@ -78,14 +78,53 @@ pub fn format_annotation(result: &HashLookupResult) -> Option<String> {
     }
 }
 
+/// Quickly count sequences in a FASTA file (counts '>' at start of lines)
+fn count_sequences(file_path: &Path, is_gzip: bool) -> usize {
+    let file = match File::open(file_path) {
+        Ok(f) => f,
+        Err(_) => return 0,
+    };
+
+    let reader: Box<dyn BufRead> = if is_gzip {
+        Box::new(BufReader::with_capacity(64 * 1024, GzDecoder::new(file)))
+    } else {
+        Box::new(BufReader::with_capacity(64 * 1024, file))
+    };
+
+    let mut count = 0;
+    for line in reader.lines() {
+        if let Ok(line) = line {
+            if line.starts_with('>') {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
 /// Processes a job from a temporary file (memory-efficient streaming)
 pub fn process_job_from_file(state: &AppState, job_id: &str, file_path: &Path, is_gzip: bool) {
-    // Set status to processing
+    // First, quickly count total sequences for progress tracking
+    let total_sequences = count_sequences(file_path, is_gzip);
+    tracing::info!("Job {} has {} sequences to process", job_id, total_sequences);
+
+    // Set status to processing with total count
     {
-        let mut jobs = state.jobs_mut();
-        if let Some(job) = jobs.get_mut(job_id) {
-            job.status = JobStatus::Processing;
-            job.updated_at = Utc::now();
+        let job_clone = {
+            let mut jobs = state.jobs_mut();
+            if let Some(job) = jobs.get_mut(job_id) {
+                job.status = JobStatus::Processing;
+                job.sequence_count = total_sequences;
+                job.processed_count = 0;
+                job.updated_at = Utc::now();
+                Some(job.clone())
+            } else {
+                None
+            }
+        };
+        // Persist the status change (outside the lock)
+        if let Some(job) = job_clone {
+            state.save_job(&job);
         }
     }
 
@@ -99,7 +138,7 @@ pub fn process_job_from_file(state: &AppState, job_id: &str, file_path: &Path, i
         tracing::warn!("Processing job {} without database", job_id);
     }
 
-    // Open file for streaming
+    // Open file for streaming (second pass for actual processing)
     let file = match File::open(file_path) {
         Ok(f) => f,
         Err(e) => {
@@ -176,16 +215,16 @@ pub fn process_job_from_file(state: &AppState, job_id: &str, file_path: &Path, i
             {
                 let mut jobs = state.jobs_mut();
                 if let Some(job) = jobs.get_mut(job_id) {
-                    job.sequence_count = processed_count;
                     job.processed_count = processed_count;
                     job.hash_matches = hash_matches;
                     job.updated_at = Utc::now();
                 }
             }
             tracing::debug!(
-                "Job {} progress: {} sequences processed",
+                "Job {} progress: {}/{} sequences processed",
                 job_id,
-                processed_count
+                processed_count,
+                total_sequences
             );
         }
     }
@@ -194,7 +233,7 @@ pub fn process_job_from_file(state: &AppState, job_id: &str, file_path: &Path, i
     sequence_infos.shrink_to_fit();
 
     // Final update with results
-    {
+    let final_job = {
         let mut jobs = state.jobs_mut();
         if let Some(job) = jobs.get_mut(job_id) {
             job.status = if processed_count > 0 {
@@ -203,7 +242,7 @@ pub fn process_job_from_file(state: &AppState, job_id: &str, file_path: &Path, i
                 JobStatus::Failed
             };
             job.updated_at = Utc::now();
-            job.sequence_count = processed_count;
+            job.sequence_count = processed_count; // Final accurate count
             job.processed_count = processed_count;
             job.hash_matches = hash_matches;
             job.alignment_matches = alignment_matches;
@@ -219,7 +258,15 @@ pub fn process_job_from_file(state: &AppState, job_id: &str, file_path: &Path, i
             }
 
             job.sequences = Some(sequence_infos);
+            Some(job.clone())
+        } else {
+            None
         }
+    };
+
+    // Persist final results to database
+    if let Some(job) = final_job {
+        state.save_job(&job);
     }
 
     tracing::info!(
