@@ -13,13 +13,15 @@ export type JobStatus = 'pending' | 'processing' | 'completed' | 'failed';
 
 export interface SequenceInfo {
     id: string;
-    md5_hash: string;
+    md5_hash?: string;  // Optional - only used internally
     length: number;
-    annotation: string | null;
-    annotation_source: string | null;
-    uniparc_id: string | null;
-    ncbi_nrp_id: string | null;
-    uniref100_id: string | null;
+    annotation?: string | null;  // Legacy field
+    annotation_source?: string | null;  // Used for filtering
+    uniparc_id?: string | null;
+    ncbi_nrp_id?: string | null;
+    uniref100_id?: string | null;
+    product?: string | null;  // Function description
+    gene?: string | null;     // Gene name
 }
 
 export interface PaginationInfo {

@@ -13,17 +13,19 @@ pub fn generate_fasta(job: &JobResponse) -> String {
 
     if let Some(ref sequences) = job.sequences {
         for seq in sequences {
-            // Build header with annotations
+            // Build header with annotations - prioritize gene and product
             let mut header_parts = vec![seq.id.clone()];
 
-            if let Some(ref source) = seq.annotation_source {
-                header_parts.push(format!("source={}", source));
+            // Add gene name if present
+            if let Some(ref gene) = seq.gene {
+                header_parts.push(format!("gene={}", gene));
             }
 
-            if let Some(ref annotation) = seq.annotation {
-                // Escape special characters in annotation
-                let clean_annotation = annotation.replace('|', "_").replace('\n', " ");
-                header_parts.push(format!("annotation={}", clean_annotation));
+            // Add product/function description if present
+            if let Some(ref product) = seq.product {
+                // Escape special characters in product description
+                let clean_product = product.replace('|', "_").replace('\n', " ");
+                header_parts.push(format!("product={}", clean_product));
             }
 
             if let Some(ref uniparc) = seq.uniparc_id {
@@ -39,7 +41,6 @@ pub fn generate_fasta(job: &JobResponse) -> String {
             }
 
             header_parts.push(format!("length={}", seq.length));
-            header_parts.push(format!("md5={}", seq.md5_hash));
 
             output.push_str(&format!(">{}\n", header_parts.join(" | ")));
 

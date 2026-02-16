@@ -25,14 +25,14 @@ pub fn generate_tsv(job: &JobResponse) -> String {
     ));
     output.push_str("#\n");
 
-    // Column headers
-    output.push_str("sequence_id\tlength\tmd5_hash\tannotation_source\tannotation\tuniparc_id\tncbi_nrp_id\tuniref100_id\tuniparc_url\tncbi_url\tuniref100_url\n");
+    // Column headers - product and gene are now primary, technical IDs at the end
+    output.push_str("sequence_id\tlength\tgene\tproduct\tuniref100_id\tuniparc_id\tncbi_nrp_id\tuniref100_url\tuniparc_url\tncbi_url\n");
 
     // Data rows
     if let Some(ref sequences) = job.sequences {
         for seq in sequences {
-            let source = seq.annotation_source.as_deref().unwrap_or("none");
-            let annotation = seq.annotation.as_deref().unwrap_or("");
+            let gene = seq.gene.as_deref().unwrap_or("");
+            let product = seq.product.as_deref().unwrap_or("");
             let uniparc = seq.uniparc_id.as_deref().unwrap_or("");
             let ncbi = seq.ncbi_nrp_id.as_deref().unwrap_or("");
             let uniref = seq.uniref100_id.as_deref().unwrap_or("");
@@ -55,18 +55,17 @@ pub fn generate_tsv(job: &JobResponse) -> String {
                 .unwrap_or_default();
 
             output.push_str(&format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                 seq.id,
                 seq.length,
-                seq.md5_hash,
-                source,
-                annotation,
+                gene,
+                product,
+                uniref,
                 uniparc,
                 ncbi,
-                uniref,
+                uniref_url,
                 uniparc_url,
-                ncbi_url,
-                uniref_url
+                ncbi_url
             ));
         }
     }

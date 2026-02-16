@@ -368,16 +368,23 @@ onUnmounted(stopPolling)
                 <tr>
                   <th>ID</th>
                   <th>Length</th>
-                  <th>MD5 Hash</th>
-                  <th>Annotation</th>
-                  <th>Source</th>
+                  <th>Gene</th>
+                  <th>Function / Product</th>
+                  <th>Database Links</th>
                 </tr>
                 </thead>
                 <tbody>
-                <tr v-for="seq in job.sequences" :key="seq.id">
+                <tr v-for="seq in job.sequences" :key="seq.id" :class="{ 'has-match': hasAnnotationLinks(seq) }">
                   <td class="seq-id">{{ seq.id }}</td>
-                  <td>{{ seq.length }}</td>
-                  <td class="hash">{{ seq.md5_hash.substring(0, 12) }}...</td>
+                  <td class="seq-length">{{ seq.length.toLocaleString() }}</td>
+                  <td class="seq-gene">
+                    <span v-if="seq.gene" class="gene-name">{{ seq.gene }}</span>
+                    <span v-else class="no-data">-</span>
+                  </td>
+                  <td class="seq-product">
+                    <span v-if="seq.product" class="product-desc">{{ seq.product }}</span>
+                    <span v-else class="no-data">-</span>
+                  </td>
                   <td class="annotation-cell">
                     <template v-if="hasAnnotationLinks(seq)">
                       <div class="annotation-links">
@@ -387,9 +394,9 @@ onUnmounted(stopPolling)
                             target="_blank"
                             rel="noopener noreferrer"
                             class="db-link uniref"
+                            title="View in UniRef100"
                         >
                           <span class="db-badge">UniRef100</span>
-                          <span class="db-id">{{ seq.uniref100_id }}</span>
                           <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
                             <polyline points="15 3 21 3 21 9"/>
@@ -402,9 +409,9 @@ onUnmounted(stopPolling)
                             target="_blank"
                             rel="noopener noreferrer"
                             class="db-link uniparc"
+                            title="View in UniParc"
                         >
                           <span class="db-badge">UniParc</span>
-                          <span class="db-id">{{ seq.uniparc_id }}</span>
                           <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
                             <polyline points="15 3 21 3 21 9"/>
@@ -417,9 +424,9 @@ onUnmounted(stopPolling)
                             target="_blank"
                             rel="noopener noreferrer"
                             class="db-link ncbi"
+                            title="View in NCBI"
                         >
                           <span class="db-badge">NCBI</span>
-                          <span class="db-id">{{ seq.ncbi_nrp_id }}</span>
                           <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
                             <polyline points="15 3 21 3 21 9"/>
@@ -428,13 +435,7 @@ onUnmounted(stopPolling)
                         </a>
                       </div>
                     </template>
-                    <span v-else class="no-annotation">-</span>
-                  </td>
-                  <td>
-                    <span v-if="seq.annotation_source" :class="['source-badge', seq.annotation_source]">
-                      {{ seq.annotation_source === 'hash_match' ? 'Hash' : 'Alignment' }}
-                    </span>
-                    <span v-else class="source-badge none">None</span>
+                    <span v-else class="no-data">-</span>
                   </td>
                 </tr>
                 </tbody>
@@ -983,6 +984,55 @@ tr:last-child td {
 .no-annotation {
   color: var(--color-text);
   opacity: 0.5;
+}
+
+.no-data {
+  color: var(--color-text);
+  opacity: 0.4;
+  font-style: italic;
+}
+
+/* Gene name styling */
+.seq-gene {
+  min-width: 80px;
+}
+
+.gene-name {
+  font-family: monospace;
+  font-weight: 600;
+  color: #ff9800;
+  background: rgba(255, 152, 0, 0.1);
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+
+/* Product/Function styling */
+.seq-product {
+  min-width: 200px;
+  max-width: 350px;
+}
+
+.product-desc {
+  color: var(--color-text);
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+/* Length formatting */
+.seq-length {
+  font-family: monospace;
+  text-align: right;
+  padding-right: 1rem !important;
+}
+
+/* Highlight rows with matches */
+tr.has-match {
+  background: rgba(76, 175, 80, 0.03);
+}
+
+tr.has-match:hover {
+  background: rgba(76, 175, 80, 0.08);
 }
 
 /* Error Section */

@@ -12,23 +12,35 @@ use utoipa::ToSchema;
 pub struct SequenceInfo {
     /// Sequence identifier
     pub id: String,
-    /// MD5-Hash
-    pub md5_hash: String,
+    /// MD5-Hash (used internally for matching, not displayed to user)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub md5_hash: Option<String>,
     /// Length in bp / aa
     pub length: usize,
     /// The actual sequence (amino acids or nucleotides)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sequence: Option<String>,
-    /// Annotation description (if found)
+    /// Annotation description (if found) - legacy field
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub annotation: Option<String>,
-    /// Source of annotation
+    /// Source of annotation (used for filtering, not displayed)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub annotation_source: Option<String>,
     /// UniParc ID (if found)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub uniparc_id: Option<String>,
     /// NCBI NRP ID (if found)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ncbi_nrp_id: Option<String>,
     /// UniRef100 ID (if found)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub uniref100_id: Option<String>,
+    /// Product/Function description (from PSC table)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub product: Option<String>,
+    /// Gene name (from PSC table)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gene: Option<String>,
 }
 
 /// Bakta Hash Lookup Result
@@ -39,6 +51,10 @@ pub struct HashLookupResult {
     pub uniparc_id: Option<String>,
     pub ncbi_nrp_id: Option<String>,
     pub uniref100_id: Option<String>,
+    /// Product/Function description (from PSC table)
+    pub product: Option<String>,
+    /// Gene name (from PSC table)
+    pub gene: Option<String>,
 }
 
 impl Default for HashLookupResult {
@@ -49,6 +65,8 @@ impl Default for HashLookupResult {
             uniparc_id: None,
             ncbi_nrp_id: None,
             uniref100_id: None,
+            product: None,
+            gene: None,
         }
     }
 }

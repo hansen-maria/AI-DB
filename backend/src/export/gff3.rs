@@ -56,10 +56,19 @@ pub fn generate_gff3(job: &JobResponse) -> String {
             let display_name = sanitize_gff3_attribute(&seq.id);
             attributes.push(format!("Name={}", display_name));
 
-            // Add MD5 hash as custom attribute
-            attributes.push(format!("md5={}", seq.md5_hash));
+            // Add gene name if present (standard GFF3 attribute)
+            if let Some(ref gene) = seq.gene {
+                let encoded = encode_gff3_attribute(gene);
+                attributes.push(format!("gene={}", encoded));
+            }
 
-            // Add annotation note if present
+            // Add product/function description if present (standard GFF3 attribute)
+            if let Some(ref product) = seq.product {
+                let encoded = encode_gff3_attribute(product);
+                attributes.push(format!("product={}", encoded));
+            }
+
+            // Add annotation note if present (legacy field)
             if let Some(ref annotation) = seq.annotation {
                 let encoded = encode_gff3_attribute(annotation);
                 attributes.push(format!("Note={}", encoded));

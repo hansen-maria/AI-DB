@@ -30,25 +30,33 @@ pub struct JsonExportStats {
 pub struct JsonExportSequence {
     pub id: String,
     pub length: usize,
-    pub md5_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gene: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub product: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub sequence: Option<String>,
-    pub annotation_source: Option<String>,
-    pub annotation: Option<String>,
     pub database_ids: JsonExportDbIds,
     pub database_urls: JsonExportDbUrls,
 }
 
 #[derive(Serialize)]
 pub struct JsonExportDbIds {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub uniparc: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ncbi_nrp: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub uniref100: Option<String>,
 }
 
 #[derive(Serialize)]
 pub struct JsonExportDbUrls {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub uniparc: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ncbi_nrp: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub uniref100: Option<String>,
 }
 
@@ -62,10 +70,9 @@ pub fn generate_json(job: &JobResponse) -> String {
                 .map(|seq| JsonExportSequence {
                     id: seq.id.clone(),
                     length: seq.length,
-                    md5_hash: seq.md5_hash.clone(),
+                    gene: seq.gene.clone(),
+                    product: seq.product.clone(),
                     sequence: seq.sequence.clone(),
-                    annotation_source: seq.annotation_source.clone(),
-                    annotation: seq.annotation.clone(),
                     database_ids: JsonExportDbIds {
                         uniparc: seq.uniparc_id.clone(),
                         ncbi_nrp: seq.ncbi_nrp_id.clone(),
