@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { useRoute, useRouter, RouterLink } from 'vue-router'
 import {
   getJob, deleteJob, downloadJobResults, downloadOptions, getJobStats,
-  type PaginatedJobResponse, type JobStatus, type PaginationInfo,
+  type PaginatedJobResponse, type JobStatus,
   type SequenceFilter, type DownloadFormat, type FunctionalStats
 } from '../api/jobs.ts'
 
@@ -12,32 +12,130 @@ const router = useRouter()
 
 // Job data
 const job = ref<PaginatedJobResponse | null>(null)
+const allSequences = ref<any[]>([]) // All sequences for client-side filtering
 const stats = ref<FunctionalStats | null>(null)
-const pagination = ref<PaginationInfo | null>(null)
 
 // UI state
 const loading = ref(true)
-const loadingSequences = ref(false)
 const loadingStats = ref(false)
 const error = ref('')
 const deleting = ref(false)
 const downloading = ref(false)
 const downloadError = ref('')
 const currentPage = ref(1)
-const currentFilter = ref<SequenceFilter>('all')
 const perPage = 20
 
 // Tab state
 const activeTab = ref<'overview' | 'sequences' | 'analysis'>('overview')
 
+// Advanced filter state
+const showAdvancedFilters = ref(false)
+const currentFilter = ref<SequenceFilter>('all')
+const searchText = ref('')
+const debouncedSearch = ref('') // Debounced version for filtering
+const minLength = ref<number | undefined>(undefined)
+const maxLength = ref<number | undefined>(undefined)
+const selectedCog = ref('')
+const selectedEcClass = ref('')
+const hasGeneOnly = ref(false)
+const hasProductOnly = ref(false)
+
+// Debounce search input
+let searchTimeout: number | null = null
+watch(searchText, (val) => {
+  if (searchTimeout) clearTimeout(searchTimeout)
+  searchTimeout = window.setTimeout(() => {
+    debouncedSearch.value = val
+  }, 80)
+})
+
 let pollInterval: number | null = null
 
 const jobId = computed(() => route.params.id as string)
+
+// Client-side filtered sequences
+const filteredSequences = computed(() => {
+  if (!allSequences.value.length) return []
+
+  return allSequences.value.filter(seq => {
+    // Basic filter (match status)
+    if (currentFilter.value === 'hash_match' && seq.annotation_source !== 'hash_match') return false
+    if (currentFilter.value === 'none' && seq.annotation_source) return false
+
+    // Text search (use debounced value)
+    if (debouncedSearch.value) {
+      const search = debouncedSearch.value.toLowerCase()
+      const idMatch = seq.id?.toLowerCase().includes(search)
+      const geneMatch = seq.gene?.toLowerCase().includes(search)
+      const productMatch = seq.product?.toLowerCase().includes(search)
+      if (!idMatch && !geneMatch && !productMatch) return false
+    }
+
+    // Length filters
+    if (minLength.value !== undefined && seq.length < minLength.value) return false
+    if (maxLength.value !== undefined && seq.length > maxLength.value) return false
+
+    // COG filter
+    if (selectedCog.value && (!seq.cog_category || !seq.cog_category.includes(selectedCog.value))) return false
+
+    // EC class filter
+    if (selectedEcClass.value) {
+      if (!seq.ec_ids) return false
+      const hasEc = seq.ec_ids.split(',').some((e: string) => e.trim().startsWith(selectedEcClass.value))
+      if (!hasEc) return false
+    }
+
+    // Has gene filter
+    if (hasGeneOnly.value && (!seq.gene || seq.gene === '')) return false
+
+    // Has product filter
+    if (hasProductOnly.value && (!seq.product || seq.product === '')) return false
+
+    return true
+  })
+})
+
+// Paginated sequences from filtered results
+const paginatedSequences = computed(() => {
+  const start = (currentPage.value - 1) * perPage
+  return filteredSequences.value.slice(start, start + perPage)
+})
+
+// Pagination info
+const pagination = computed(() => {
+  const total = filteredSequences.value.length
+  const totalPages = Math.ceil(total / perPage) || 1
+  return {
+    page: currentPage.value,
+    per_page: perPage,
+    total_items: total,
+    total_pages: totalPages,
+    has_next: currentPage.value < totalPages,
+    has_prev: currentPage.value > 1
+  }
+})
 
 // Progress percentage
 const progressPercent = computed(() => {
   if (!job.value || job.value.sequence_count === 0) return 0
   return Math.min(100, (job.value.processed_count / job.value.sequence_count) * 100)
+})
+
+// Check if any advanced filters are active
+const hasActiveFilters = computed(() => {
+  return debouncedSearch.value !== '' ||
+      minLength.value !== undefined ||
+      maxLength.value !== undefined ||
+      selectedCog.value !== '' ||
+      selectedEcClass.value !== '' ||
+      hasGeneOnly.value ||
+      hasProductOnly.value ||
+      currentFilter.value !== 'all'
+})
+
+// Reset to page 1 when filters change
+watch([debouncedSearch, currentFilter, minLength, maxLength, selectedCog, selectedEcClass, hasGeneOnly, hasProductOnly], () => {
+  currentPage.value = 1
 })
 
 const statusColors: Record<JobStatus, string> = {
@@ -60,8 +158,43 @@ const filterOptions: { value: SequenceFilter; label: string }[] = [
   { value: 'none', label: 'No Match' },
 ]
 
+const cogCategories = [
+  { value: 'A', label: 'A - RNA processing' },
+  { value: 'B', label: 'B - Chromatin structure' },
+  { value: 'C', label: 'C - Energy production' },
+  { value: 'D', label: 'D - Cell cycle' },
+  { value: 'E', label: 'E - Amino acid metabolism' },
+  { value: 'F', label: 'F - Nucleotide metabolism' },
+  { value: 'G', label: 'G - Carbohydrate metabolism' },
+  { value: 'H', label: 'H - Coenzyme metabolism' },
+  { value: 'I', label: 'I - Lipid metabolism' },
+  { value: 'J', label: 'J - Translation' },
+  { value: 'K', label: 'K - Transcription' },
+  { value: 'L', label: 'L - Replication/repair' },
+  { value: 'M', label: 'M - Cell wall/membrane' },
+  { value: 'N', label: 'N - Cell motility' },
+  { value: 'O', label: 'O - Post-translational mod.' },
+  { value: 'P', label: 'P - Inorganic ion transport' },
+  { value: 'Q', label: 'Q - Secondary metabolites' },
+  { value: 'R', label: 'R - General function' },
+  { value: 'S', label: 'S - Unknown function' },
+  { value: 'T', label: 'T - Signal transduction' },
+  { value: 'U', label: 'U - Trafficking/secretion' },
+  { value: 'V', label: 'V - Defense mechanisms' },
+  { value: 'X', label: 'X - Mobilome' },
+]
+
+const ecClasses = [
+  { value: '1', label: 'EC 1 - Oxidoreductases' },
+  { value: '2', label: 'EC 2 - Transferases' },
+  { value: '3', label: 'EC 3 - Hydrolases' },
+  { value: '4', label: 'EC 4 - Lyases' },
+  { value: '5', label: 'EC 5 - Isomerases' },
+  { value: '6', label: 'EC 6 - Ligases' },
+  { value: '7', label: 'EC 7 - Translocases' },
+]
+
 const pageNumbers = computed(() => {
-  if (!pagination.value) return []
   const total = pagination.value.total_pages
   const current = pagination.value.page
   const pages: number[] = []
@@ -78,16 +211,14 @@ const annotationRate = computed(() => {
   return Math.round((stats.value.annotated_sequences / stats.value.total_sequences) * 100)
 })
 
-async function loadJob(page = 1, filter: SequenceFilter = currentFilter.value) {
-  if (page !== 1 || filter !== currentFilter.value) loadingSequences.value = true
-  else loading.value = true
-  currentPage.value = page
-  currentFilter.value = filter
+async function loadJob() {
+  loading.value = true
 
   try {
-    const response = await getJob(jobId.value, page, perPage, filter)
+    // Load all sequences at once (up to 10000) for client-side filtering
+    const response = await getJob(jobId.value, 1, 10000, 'all')
     job.value = response
-    pagination.value = response.pagination
+    allSequences.value = response.sequences || []
 
     if (response.status === 'pending' || response.status === 'processing') {
       startPolling()
@@ -98,7 +229,6 @@ async function loadJob(page = 1, filter: SequenceFilter = currentFilter.value) {
     error.value = e instanceof Error ? e.message : 'Failed to load job'
   } finally {
     loading.value = false
-    loadingSequences.value = false
   }
 }
 
@@ -114,23 +244,32 @@ async function loadStats() {
   }
 }
 
-function goToPage(page: number) {
-  if (page >= 1 && (!pagination.value || page <= pagination.value.total_pages)) {
-    loadJob(page, currentFilter.value)
-  }
+function clearFilters() {
+  currentFilter.value = 'all'
+  searchText.value = ''
+  debouncedSearch.value = ''
+  minLength.value = undefined
+  maxLength.value = undefined
+  selectedCog.value = ''
+  selectedEcClass.value = ''
+  hasGeneOnly.value = false
+  hasProductOnly.value = false
+  currentPage.value = 1
 }
 
-function setFilter(filter: SequenceFilter) {
-  if (filter !== currentFilter.value) loadJob(1, filter)
+function goToPage(page: number) {
+  if (page >= 1 && page <= pagination.value.total_pages) {
+    currentPage.value = page
+  }
 }
 
 function startPolling() {
   if (pollInterval) return
   pollInterval = window.setInterval(async () => {
     try {
-      const response = await getJob(jobId.value, currentPage.value, perPage, currentFilter.value)
+      const response = await getJob(jobId.value, 1, 10000, 'all')
       job.value = response
-      pagination.value = response.pagination
+      allSequences.value = response.sequences || []
       if (response.status === 'completed' || response.status === 'failed') {
         stopPolling()
         if (response.status === 'completed') loadStats()
@@ -199,7 +338,10 @@ const chartColors = [
 ]
 
 onMounted(() => loadJob())
-onUnmounted(stopPolling)
+onUnmounted(() => {
+  stopPolling()
+  if (searchTimeout) clearTimeout(searchTimeout)
+})
 </script>
 
 <template>
@@ -327,24 +469,111 @@ onUnmounted(stopPolling)
         <!-- Sequences Tab -->
         <div v-if="activeTab === 'sequences' && job.status === 'completed'" class="tab-panel">
           <div class="sequences-section">
-            <div class="sequences-header">
-              <h4>Sequence Details</h4>
-              <div class="filter-controls">
-                <div class="filter-buttons">
-                  <button v-for="opt in filterOptions" :key="opt.value" class="filter-btn"
-                          :class="{ active: currentFilter === opt.value }" :disabled="loadingSequences"
-                          @click="setFilter(opt.value)">
-                    {{ opt.label }}
-                  </button>
+            <!-- Search and Filter Bar -->
+            <div class="search-filter-bar">
+              <div class="search-box">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                </svg>
+                <input
+                    type="text"
+                    v-model="searchText"
+                    placeholder="Search ID, gene, product..."
+                    class="search-input"
+                />
+                <button v-if="searchText" class="clear-search" @click="searchText = ''">×</button>
+              </div>
+
+              <div class="filter-buttons">
+                <button
+                    v-for="opt in filterOptions"
+                    :key="opt.value"
+                    class="filter-btn"
+                    :class="{ active: currentFilter === opt.value }"
+                    @click="currentFilter = opt.value"
+                >
+                  {{ opt.label }}
+                </button>
+              </div>
+
+              <button
+                  class="advanced-toggle"
+                  :class="{ active: showAdvancedFilters, 'has-filters': hasActiveFilters }"
+                  @click="showAdvancedFilters = !showAdvancedFilters"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>
+                </svg>
+                Filters
+                <span v-if="hasActiveFilters" class="filter-badge">!</span>
+              </button>
+            </div>
+
+            <!-- Advanced Filter Panel -->
+            <div v-if="showAdvancedFilters" class="advanced-filters">
+              <div class="filter-row">
+                <div class="filter-group">
+                  <label>Sequence Length</label>
+                  <div class="length-inputs">
+                    <input type="number" v-model.number="minLength" placeholder="Min" min="0" />
+                    <span>–</span>
+                    <input type="number" v-model.number="maxLength" placeholder="Max" min="0" />
+                    <span class="unit">aa</span>
+                  </div>
                 </div>
+
+                <div class="filter-group">
+                  <label>COG Category</label>
+                  <select v-model="selectedCog">
+                    <option value="">All categories</option>
+                    <option v-for="cog in cogCategories" :key="cog.value" :value="cog.value">
+                      {{ cog.label }}
+                    </option>
+                  </select>
+                </div>
+
+                <div class="filter-group">
+                  <label>Enzyme Class (EC)</label>
+                  <select v-model="selectedEcClass">
+                    <option value="">All classes</option>
+                    <option v-for="ec in ecClasses" :key="ec.value" :value="ec.value">
+                      {{ ec.label }}
+                    </option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="filter-row">
+                <div class="filter-group checkbox-group">
+                  <label class="checkbox-label">
+                    <input type="checkbox" v-model="hasGeneOnly" />
+                    <span>Has gene name</span>
+                  </label>
+                  <label class="checkbox-label">
+                    <input type="checkbox" v-model="hasProductOnly" />
+                    <span>Has function description</span>
+                  </label>
+                </div>
+
+                <button v-if="hasActiveFilters" class="clear-filters-btn" @click="clearFilters">
+                  Clear all filters
+                </button>
               </div>
             </div>
 
-            <div v-if="job.filtered_count !== job.sequence_count" class="filtered-info">
-              Showing {{ job.filtered_count }} of {{ job.sequence_count }} sequences
+            <!-- Filter Results Info -->
+            <div class="filtered-info">
+              <span v-if="hasActiveFilters">
+                <strong>{{ filteredSequences.length.toLocaleString() }}</strong> of {{ allSequences.length.toLocaleString() }} sequences
+                <span v-if="searchText && searchText !== debouncedSearch" class="typing-indicator">...</span>
+              </span>
+              <span v-else>
+                {{ allSequences.length.toLocaleString() }} sequences
+              </span>
             </div>
 
-            <div v-if="job.sequences && job.sequences.length > 0" class="sequences-table">
+            <!-- Table -->
+            <div v-if="paginatedSequences.length > 0" class="sequences-table">
               <div class="table-wrapper">
                 <table>
                   <thead>
@@ -357,7 +586,7 @@ onUnmounted(stopPolling)
                   </tr>
                   </thead>
                   <tbody>
-                  <tr v-for="seq in job.sequences" :key="seq.id" :class="{ 'has-match': hasAnnotationLinks(seq) }">
+                  <tr v-for="seq in paginatedSequences" :key="seq.id" :class="{ 'has-match': hasAnnotationLinks(seq) }">
                     <td class="seq-id">{{ seq.id }}</td>
                     <td class="seq-length">{{ seq.length.toLocaleString() }}</td>
                     <td class="seq-gene">
@@ -384,25 +613,25 @@ onUnmounted(stopPolling)
               </div>
             </div>
 
-            <div v-else-if="job.filtered_count === 0" class="empty-filter-results">
-              <p>No sequences match the current filter.</p>
-              <button class="btn btn-secondary" @click="setFilter('all')">Show All</button>
+            <div v-else-if="filteredSequences.length === 0 && allSequences.length > 0" class="empty-filter-results">
+              <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+              </svg>
+              <p>No sequences match the current filters.</p>
+              <button class="btn btn-secondary" @click="clearFilters">Clear Filters</button>
             </div>
 
-            <div v-if="loadingSequences" class="sequences-loading">
-              <div class="spinner"></div> Loading...
-            </div>
-
-            <div v-if="pagination && pagination.total_pages > 1" class="sequences-pagination">
-              <button class="page-btn" :disabled="!pagination.has_prev || loadingSequences" @click="goToPage(pagination.page - 1)">←</button>
-              <button v-if="pageNumbers[0] > 1" class="page-btn" :disabled="loadingSequences" @click="goToPage(1)">1</button>
+            <!-- Pagination -->
+            <div v-if="pagination.total_pages > 1" class="sequences-pagination">
+              <button class="page-btn" :disabled="!pagination.has_prev" @click="goToPage(pagination.page - 1)">←</button>
+              <button v-if="pageNumbers[0] > 1" class="page-btn" @click="goToPage(1)">1</button>
               <span v-if="pageNumbers[0] > 2" class="page-ellipsis">...</span>
               <button v-for="page in pageNumbers" :key="page" class="page-btn" :class="{ active: page === pagination.page }"
-                      :disabled="loadingSequences" @click="goToPage(page)">{{ page }}</button>
+                      @click="goToPage(page)">{{ page }}</button>
               <span v-if="pageNumbers[pageNumbers.length - 1] < pagination.total_pages - 1" class="page-ellipsis">...</span>
               <button v-if="pageNumbers[pageNumbers.length - 1] < pagination.total_pages" class="page-btn"
-                      :disabled="loadingSequences" @click="goToPage(pagination.total_pages)">{{ pagination.total_pages }}</button>
-              <button class="page-btn" :disabled="!pagination.has_next || loadingSequences" @click="goToPage(pagination.page + 1)">→</button>
+                      @click="goToPage(pagination.total_pages)">{{ pagination.total_pages }}</button>
+              <button class="page-btn" :disabled="!pagination.has_next" @click="goToPage(pagination.page + 1)">→</button>
               <span class="page-info">Page {{ pagination.page }} of {{ pagination.total_pages }}</span>
             </div>
           </div>
@@ -621,21 +850,242 @@ onUnmounted(stopPolling)
 .download-desc { font-size: 0.75rem; color: var(--color-text); opacity: 0.7; }
 .download-progress { display: flex; align-items: center; gap: 0.75rem; margin-top: 1rem; color: var(--color-text); }
 
+/* Search and Filter Bar */
 .sequences-section { margin-top: 1rem; }
-.sequences-header { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 1rem; flex-wrap: wrap; }
-.sequences-header h4 { margin: 0; color: var(--color-heading); }
+
+.search-filter-bar {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+.search-box {
+  flex: 1;
+  min-width: 250px;
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.search-box svg {
+  position: absolute;
+  left: 12px;
+  color: var(--color-text);
+  opacity: 0.5;
+}
+
+.search-input {
+  width: 100%;
+  padding: 0.6rem 2.5rem 0.6rem 2.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-background);
+  color: var(--color-text);
+  font-size: 0.9rem;
+}
+
+.search-input:focus {
+  outline: none;
+  border-color: hsla(160, 100%, 37%, 0.5);
+  box-shadow: 0 0 0 3px hsla(160, 100%, 37%, 0.1);
+}
+
+.typing-indicator {
+  color: hsla(160, 100%, 37%, 1);
+  animation: blink 0.8s infinite;
+}
+
+@keyframes blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0.3; }
+}
+
+.clear-search {
+  position: absolute;
+  right: 8px;
+  background: none;
+  border: none;
+  color: var(--color-text);
+  opacity: 0.5;
+  cursor: pointer;
+  font-size: 1.2rem;
+  padding: 0.25rem;
+}
+
+.clear-search:hover { opacity: 1; }
+
 .filter-buttons { display: flex; gap: 0.5rem; }
-.filter-btn { padding: 0.4rem 0.75rem; font-size: 0.85rem; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-background); color: var(--color-text); cursor: pointer; transition: all 0.2s; }
+.filter-btn {
+  padding: 0.5rem 1rem;
+  font-size: 0.85rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-background);
+  color: var(--color-text);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
 .filter-btn:hover:not(:disabled) { background: var(--color-background-soft); }
-.filter-btn.active { background: hsla(160, 100%, 37%, 1); border-color: hsla(160, 100%, 37%, 1); color: white; }
-.filtered-info { font-size: 0.9rem; color: var(--color-text); opacity: 0.7; margin-bottom: 1rem; }
+.filter-btn.active {
+  background: hsla(160, 100%, 37%, 1);
+  border-color: hsla(160, 100%, 37%, 1);
+  color: white;
+  transform: scale(1.02);
+}
+
+.advanced-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-background);
+  color: var(--color-text);
+  cursor: pointer;
+  position: relative;
+  transition: all 0.2s;
+}
+
+.advanced-toggle:hover { background: var(--color-background-soft); }
+.advanced-toggle.active { border-color: hsla(160, 100%, 37%, 0.5); background: hsla(160, 100%, 37%, 0.05); }
+.advanced-toggle.has-filters { border-color: #ff9800; }
+
+.filter-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 16px;
+  height: 16px;
+  background: #ff9800;
+  color: white;
+  border-radius: 50%;
+  font-size: 0.7rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Advanced Filter Panel */
+.advanced-filters {
+  background: var(--color-background-soft);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+  animation: slideDown 0.2s ease;
+}
+
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.filter-row {
+  display: flex;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+.filter-row:last-child { margin-bottom: 0; }
+
+.filter-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 180px;
+}
+
+.filter-group label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-text);
+  opacity: 0.8;
+}
+
+.filter-group select,
+.filter-group input[type="number"] {
+  padding: 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-background);
+  color: var(--color-text);
+  font-size: 0.85rem;
+}
+
+.length-inputs {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.length-inputs input {
+  width: 80px;
+}
+
+.length-inputs span { color: var(--color-text); opacity: 0.5; }
+.unit { font-size: 0.8rem; }
+
+.checkbox-group {
+  flex-direction: row;
+  align-items: center;
+  gap: 1.5rem;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  font-size: 0.9rem !important;
+  font-weight: normal !important;
+}
+
+.checkbox-label input { cursor: pointer; }
+
+.clear-filters-btn {
+  padding: 0.5rem 1rem;
+  border: 1px solid #f44336;
+  border-radius: 6px;
+  background: transparent;
+  color: #f44336;
+  cursor: pointer;
+  font-size: 0.85rem;
+  margin-left: auto;
+}
+
+.clear-filters-btn:hover { background: rgba(244, 67, 54, 0.1); }
+
+.filtered-info {
+  font-size: 0.9rem;
+  color: var(--color-text);
+  padding: 0.75rem 0;
+  border-bottom: 1px solid var(--color-border);
+  margin-bottom: 1rem;
+}
+
+.filtered-info strong {
+  color: hsla(160, 100%, 37%, 1);
+  font-size: 1rem;
+}
+
+/* Table */
+.sequences-table {
+  animation: fadeIn 0.15s ease;
+}
 
 .table-wrapper { overflow-x: auto; border: 1px solid var(--color-border); border-radius: 8px; }
 table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 th, td { padding: 0.75rem 1rem; text-align: left; border-bottom: 1px solid var(--color-border); }
-th { background: var(--color-background-soft); font-weight: 600; color: var(--color-heading); }
+th { background: var(--color-background-soft); font-weight: 600; color: var(--color-heading); position: sticky; top: 0; }
 tr:last-child td { border-bottom: none; }
 tr.has-match { background: rgba(76, 175, 80, 0.03); }
+tbody tr { transition: background-color 0.1s ease; }
+tbody tr:hover { background: var(--color-background-soft); }
 .seq-id { font-family: monospace; color: hsla(160, 100%, 37%, 1); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .seq-length { font-family: monospace; text-align: right; }
 .gene-name { font-family: monospace; font-weight: 600; color: #ff9800; background: rgba(255, 152, 0, 0.1); padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.85rem; }
@@ -643,7 +1093,8 @@ tr.has-match { background: rgba(76, 175, 80, 0.03); }
 .product-desc { font-size: 0.9rem; }
 .no-data { color: var(--color-text); opacity: 0.4; }
 .annotation-links { display: flex; gap: 0.3rem; flex-wrap: wrap; }
-.db-link { padding: 0.2rem 0.4rem; border-radius: 4px; text-decoration: none; font-size: 0.7rem; font-weight: 600; }
+.db-link { padding: 0.2rem 0.4rem; border-radius: 4px; text-decoration: none; font-size: 0.7rem; font-weight: 600; transition: transform 0.1s ease; }
+.db-link:hover { transform: translateY(-1px); }
 .db-link.uniref { background: rgba(156, 39, 176, 0.1); color: #9c27b0; }
 .db-link.uniparc { background: rgba(33, 150, 243, 0.1); color: #2196f3; }
 .db-link.ncbi { background: rgba(76, 175, 80, 0.1); color: #4caf50; }
@@ -656,7 +1107,15 @@ tr.has-match { background: rgba(76, 175, 80, 0.03); }
 .page-ellipsis { color: var(--color-text); opacity: 0.6; }
 .page-info { margin-left: 1rem; font-size: 0.85rem; color: var(--color-text); opacity: 0.7; }
 .sequences-loading { display: flex; align-items: center; gap: 0.75rem; padding: 2rem; justify-content: center; color: var(--color-text); }
-.empty-filter-results { text-align: center; padding: 2rem; background: var(--color-background-soft); border-radius: 8px; }
+
+.empty-filter-results {
+  text-align: center;
+  padding: 3rem 2rem;
+  background: var(--color-background-soft);
+  border-radius: 8px;
+}
+.empty-filter-results svg { color: var(--color-text); opacity: 0.3; margin-bottom: 1rem; }
+.empty-filter-results p { margin-bottom: 1rem; color: var(--color-text); opacity: 0.7; }
 
 .loading-stats { display: flex; align-items: center; gap: 0.75rem; padding: 4rem; justify-content: center; color: var(--color-text); }
 .analysis-section { animation: fadeIn 0.3s ease; }
@@ -707,7 +1166,13 @@ tr.has-match { background: rgba(76, 175, 80, 0.03); }
   .info-grid { grid-template-columns: 1fr; }
   .results-stats { grid-template-columns: 1fr; }
   .tab-btn { flex: 1; padding: 0.6rem 0.5rem; font-size: 0.85rem; }
-  .sequences-header { flex-direction: column; }
+  .search-filter-bar { flex-direction: column; align-items: stretch; }
+  .search-box { min-width: 100%; }
+  .filter-buttons { justify-content: center; }
+  .advanced-toggle { justify-content: center; }
+  .filter-row { flex-direction: column; }
+  .filter-group { min-width: 100%; }
+  .checkbox-group { flex-wrap: wrap; }
   .annotation-rate { flex-direction: column; text-align: center; }
   .bar-item { grid-template-columns: 1fr; gap: 0.25rem; }
 }

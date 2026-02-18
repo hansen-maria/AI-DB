@@ -16,9 +16,9 @@ use uuid::Uuid;
 
 use crate::auth::{get_or_create_owner, OWNER_COOKIE_NAME};
 use crate::models::{
-    ErrorResponse, GetJobQuery, JobCreateResponse, JobResponse, JobStatus, JobSummary,
-    ListJobsQuery, PaginatedJobResponse, PaginatedJobsResponse, PaginationInfo, SequenceFilter,
-    DEFAULT_PER_PAGE, MAX_PER_PAGE,
+    AdvancedSequenceFilter, ErrorResponse, GetJobQuery, JobCreateResponse, JobResponse, JobStatus,
+    JobSummary, ListJobsQuery, PaginatedJobResponse, PaginatedJobsResponse, PaginationInfo,
+    SequenceFilter, DEFAULT_PER_PAGE, MAX_PER_PAGE,
 };
 use crate::services::process_job_from_file;
 use crate::state::AppState;
@@ -42,7 +42,14 @@ fn get_temp_dir() -> PathBuf {
         ("job_id" = String, Path, description = "Unique job ID (UUID)"),
         ("page" = Option<usize>, Query, description = "Sequence page (1-indexed, default: 1)"),
         ("per_page" = Option<usize>, Query, description = "Sequences per page (default: 20, max: 100)"),
-        ("filter" = Option<String>, Query, description = "Filter: all, hash_match, alignment, none")
+        ("filter" = Option<String>, Query, description = "Filter: all, hash_match, alignment, none"),
+        ("search" = Option<String>, Query, description = "Search in ID, gene, product"),
+        ("min_length" = Option<usize>, Query, description = "Minimum sequence length"),
+        ("max_length" = Option<usize>, Query, description = "Maximum sequence length"),
+        ("cog" = Option<String>, Query, description = "Filter by COG category"),
+        ("ec_class" = Option<String>, Query, description = "Filter by EC class (1-7)"),
+        ("has_gene" = Option<bool>, Query, description = "Only sequences with gene name"),
+        ("has_product" = Option<bool>, Query, description = "Only sequences with product")
     ),
     responses(
         (status = 200, description = "Job found", body = PaginatedJobResponse),
@@ -60,22 +67,34 @@ pub async fn get_job(
         .unwrap_or(DEFAULT_PER_PAGE)
         .min(MAX_PER_PAGE)
         .max(1);
-    let filter = query
-        .filter
-        .as_deref()
-        .map(SequenceFilter::from_str)
-        .unwrap_or(SequenceFilter::All);
-    let filter_str = filter.as_str().to_string();
+
+    // Build advanced filter from query parameters
+    let advanced_filter = AdvancedSequenceFilter {
+        basic: query
+            .filter
+            .as_deref()
+            .map(SequenceFilter::from_str)
+            .unwrap_or(SequenceFilter::All),
+        search: query.search.clone().filter(|s| !s.is_empty()),
+        min_length: query.min_length,
+        max_length: query.max_length,
+        cog_category: query.cog.clone().filter(|s| !s.is_empty()),
+        ec_class: query.ec_class.clone().filter(|s| !s.is_empty()),
+        has_gene: query.has_gene,
+        has_product: query.has_product,
+    };
+
+    let filter_str = advanced_filter.basic.as_str().to_string();
 
     let jobs = state.jobs();
 
     match jobs.get(&job_id) {
         Some(job) => {
-            // Apply filter to sequences
+            // Apply advanced filter to sequences
             let filtered_sequences: Vec<_> = job
                 .sequences
                 .as_ref()
-                .map(|seqs| seqs.iter().filter(|s| filter.matches(s)).collect())
+                .map(|seqs| seqs.iter().filter(|s| advanced_filter.matches(s)).collect())
                 .unwrap_or_default();
 
             let filtered_count = filtered_sequences.len();
@@ -332,7 +351,7 @@ pub async fn create_job(
                 is_gzip_data,
             );
         })
-        .await;
+            .await;
 
         // Clean up temp file
         if let Err(e) = temp_path.close() {

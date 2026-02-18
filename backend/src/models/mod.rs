@@ -7,7 +7,7 @@ pub mod health;
 pub mod job;
 pub mod pagination;
 pub mod sequence;
-mod stats;
+pub mod stats;
 
 pub use error::ErrorResponse;
 pub use health::{BaktaDbHealth, DbInfoResponse, HealthCheckResponse};
@@ -16,5 +16,5 @@ pub use pagination::{
     GetJobQuery, ListJobsQuery, PaginatedJobResponse, PaginatedJobsResponse, PaginationInfo,
     DEFAULT_PER_PAGE, MAX_PER_PAGE,
 };
-pub use sequence::{HashLookupResult, SequenceFilter, SequenceInfo};
+pub use sequence::{AdvancedSequenceFilter, HashLookupResult, SequenceFilter, SequenceInfo};
 pub use stats::{cog_category_name, ec_class_name, CogCategory, CountItem, FunctionalStats, GoTermStats};

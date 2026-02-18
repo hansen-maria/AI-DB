@@ -11,6 +11,28 @@ const API_BASE = '/api';
 
 export type JobStatus = 'pending' | 'processing' | 'completed' | 'failed';
 
+export type SequenceFilter = 'all' | 'hash_match' | 'alignment' | 'none';
+
+/** Advanced filter options for sequence search */
+export interface AdvancedFilterOptions {
+    /** Basic filter (match status) */
+    filter?: SequenceFilter;
+    /** Search text (searches in ID, gene, product) */
+    search?: string;
+    /** Minimum sequence length */
+    minLength?: number;
+    /** Maximum sequence length */
+    maxLength?: number;
+    /** COG category filter (e.g., "J", "K") */
+    cog?: string;
+    /** EC class filter (e.g., "1", "2") */
+    ecClass?: string;
+    /** Only sequences with gene name */
+    hasGene?: boolean;
+    /** Only sequences with product description */
+    hasProduct?: boolean;
+}
+
 export interface SequenceInfo {
     id: string;
     md5_hash?: string;  // Optional - only used internally
@@ -81,8 +103,6 @@ export interface PaginatedJobsResponse {
     jobs: JobSummary[];
     pagination: PaginationInfo;
 }
-
-export type SequenceFilter = 'all' | 'hash_match' | 'alignment' | 'none';
 
 export interface PaginatedJobResponse {
     job_id: string;
@@ -229,13 +249,39 @@ export async function getJob(
     jobId: string,
     page = 1,
     perPage = 20,
-    filter: SequenceFilter = 'all'
+    filter: SequenceFilter = 'all',
+    advancedFilters?: AdvancedFilterOptions
 ): Promise<PaginatedJobResponse> {
     const params = new URLSearchParams({
         page: page.toString(),
         per_page: perPage.toString(),
-        filter: filter,
+        filter: advancedFilters?.filter || filter,
     });
+
+    // Add advanced filter parameters if provided
+    if (advancedFilters) {
+        if (advancedFilters.search) {
+            params.set('search', advancedFilters.search);
+        }
+        if (advancedFilters.minLength !== undefined) {
+            params.set('min_length', advancedFilters.minLength.toString());
+        }
+        if (advancedFilters.maxLength !== undefined) {
+            params.set('max_length', advancedFilters.maxLength.toString());
+        }
+        if (advancedFilters.cog) {
+            params.set('cog', advancedFilters.cog);
+        }
+        if (advancedFilters.ecClass) {
+            params.set('ec_class', advancedFilters.ecClass);
+        }
+        if (advancedFilters.hasGene !== undefined) {
+            params.set('has_gene', advancedFilters.hasGene.toString());
+        }
+        if (advancedFilters.hasProduct !== undefined) {
+            params.set('has_product', advancedFilters.hasProduct.toString());
+        }
+    }
 
     const response = await fetch(`${API_BASE}/job/${jobId}?${params}`, {
         credentials: 'include', // Include cookies

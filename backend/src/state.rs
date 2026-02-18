@@ -188,12 +188,12 @@ impl AppState {
     }
 
     /// Returns a read lock on the jobs cache
-    pub fn jobs(&self) -> parking_lot::RwLockReadGuard<HashMap<String, JobResponse>> {
+    pub fn jobs(&self) -> parking_lot::RwLockReadGuard<'_, HashMap<String, JobResponse>> {
         self.jobs.read()
     }
 
     /// Returns a write lock on the jobs cache
-    pub fn jobs_mut(&self) -> parking_lot::RwLockWriteGuard<HashMap<String, JobResponse>> {
+    pub fn jobs_mut(&self) -> parking_lot::RwLockWriteGuard<'_, HashMap<String, JobResponse>> {
         self.jobs.write()
     }
 

@@ -105,4 +105,18 @@ pub struct GetJobQuery {
     pub per_page: Option<usize>,
     /// Filter by annotation source: "all", "hash_match", "alignment", "none" (default: "all")
     pub filter: Option<String>,
+    /// Search text (searches in ID, gene, product)
+    pub search: Option<String>,
+    /// Minimum sequence length
+    pub min_length: Option<usize>,
+    /// Maximum sequence length
+    pub max_length: Option<usize>,
+    /// Filter by COG category (e.g., "J", "K", "L")
+    pub cog: Option<String>,
+    /// Filter by EC class (1-7)
+    pub ec_class: Option<String>,
+    /// Filter: only sequences with gene name
+    pub has_gene: Option<bool>,
+    /// Filter: only sequences with product/function
+    pub has_product: Option<bool>,
 }
