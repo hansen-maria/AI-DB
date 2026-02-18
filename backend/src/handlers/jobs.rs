@@ -441,7 +441,7 @@ pub async fn delete_job(
 ) -> impl IntoResponse {
     let owner_id = jar.get(OWNER_COOKIE_NAME).map(|c| c.value().to_string());
 
-    let mut jobs = state.jobs_mut();
+    let jobs = state.jobs_mut();
 
     // First check if job exists and belongs to owner
     if let Some(job) = jobs.get(&job_id) {

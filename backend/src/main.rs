@@ -31,9 +31,9 @@ use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
-use crate::handlers::{create_job, db_info, delete_job, download_job, get_job, health_check, list_jobs};
+use crate::handlers::{create_job, db_info, delete_job, download_job, get_job, get_job_stats, health_check, list_jobs};
 use crate::models::{
-    ErrorResponse, JobCreateResponse, JobResponse, JobStatus, JobSummary, PaginatedJobResponse,
+    ErrorResponse, FunctionalStats, JobCreateResponse, JobResponse, JobStatus, JobSummary, PaginatedJobResponse,
     PaginatedJobsResponse, PaginationInfo, SequenceInfo,
 };
 use crate::state::AppState;
@@ -65,6 +65,7 @@ use crate::state::AppState;
         handlers::jobs::list_jobs,
         handlers::jobs::delete_job,
         handlers::download::download_job,
+        handlers::stats::get_job_stats,
         handlers::health::health_check,
         handlers::health::db_info
     ),
@@ -77,7 +78,8 @@ use crate::state::AppState;
         PaginationInfo,
         PaginatedJobsResponse,
         JobSummary,
-        PaginatedJobResponse
+        PaginatedJobResponse,
+        FunctionalStats
     ))
 )]
 struct ApiDoc;
@@ -119,6 +121,7 @@ async fn main() {
         .route("/api/job/", post(create_job))
         .route("/api/job/{job_id}", get(get_job).delete(delete_job))
         .route("/api/job/{job_id}/download/{format}", get(download_job))
+        .route("/api/job/{job_id}/stats", get(get_job_stats))
         .route("/api/jobs/", get(list_jobs))
         // Swagger UI
         .merge(SwaggerUi::new("/api/docs/").url("/api/openapi.json", ApiDoc::openapi()))

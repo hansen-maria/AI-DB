@@ -1,15 +1,24 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRoute, useRouter, RouterLink } from 'vue-router'
-import { getJob, deleteJob, downloadJobResults, downloadOptions, type PaginatedJobResponse, type JobStatus, type PaginationInfo, type SequenceFilter, type DownloadFormat } from '../api/jobs.ts'
+import {
+  getJob, deleteJob, downloadJobResults, downloadOptions, getJobStats,
+  type PaginatedJobResponse, type JobStatus, type PaginationInfo,
+  type SequenceFilter, type DownloadFormat, type FunctionalStats
+} from '../api/jobs.ts'
 
 const route = useRoute()
 const router = useRouter()
 
+// Job data
 const job = ref<PaginatedJobResponse | null>(null)
+const stats = ref<FunctionalStats | null>(null)
 const pagination = ref<PaginationInfo | null>(null)
+
+// UI state
 const loading = ref(true)
 const loadingSequences = ref(false)
+const loadingStats = ref(false)
 const error = ref('')
 const deleting = ref(false)
 const downloading = ref(false)
@@ -17,11 +26,15 @@ const downloadError = ref('')
 const currentPage = ref(1)
 const currentFilter = ref<SequenceFilter>('all')
 const perPage = 20
+
+// Tab state
+const activeTab = ref<'overview' | 'sequences' | 'analysis'>('overview')
+
 let pollInterval: number | null = null
 
 const jobId = computed(() => route.params.id as string)
 
-// Progress percentage with division by zero protection
+// Progress percentage
 const progressPercent = computed(() => {
   if (!job.value || job.value.sequence_count === 0) return 0
   return Math.min(100, (job.value.processed_count / job.value.sequence_count) * 100)
@@ -42,33 +55,32 @@ const statusLabels: Record<JobStatus, string> = {
 }
 
 const filterOptions: { value: SequenceFilter; label: string }[] = [
-  { value: 'all', label: 'All Sequences' },
-  { value: 'hash_match', label: 'Hash Matches' },
-  { value: 'alignment', label: 'Alignment Matches' },
-  { value: 'none', label: 'No Matches' },
+  { value: 'all', label: 'All' },
+  { value: 'hash_match', label: 'Matches' },
+  { value: 'none', label: 'No Match' },
 ]
 
-// Generate page numbers to display
 const pageNumbers = computed(() => {
   if (!pagination.value) return []
   const total = pagination.value.total_pages
   const current = pagination.value.page
   const pages: number[] = []
-
   let start = Math.max(1, current - 2)
   let end = Math.min(total, current + 2)
-
   if (current <= 3) end = Math.min(5, total)
   if (current >= total - 2) start = Math.max(1, total - 4)
-
   for (let i = start; i <= end; i++) pages.push(i)
   return pages
+})
+
+const annotationRate = computed(() => {
+  if (!stats.value || stats.value.total_sequences === 0) return 0
+  return Math.round((stats.value.annotated_sequences / stats.value.total_sequences) * 100)
 })
 
 async function loadJob(page = 1, filter: SequenceFilter = currentFilter.value) {
   if (page !== 1 || filter !== currentFilter.value) loadingSequences.value = true
   else loading.value = true
-
   currentPage.value = page
   currentFilter.value = filter
 
@@ -77,15 +89,28 @@ async function loadJob(page = 1, filter: SequenceFilter = currentFilter.value) {
     job.value = response
     pagination.value = response.pagination
 
-    // Start polling if job is not complete
     if (response.status === 'pending' || response.status === 'processing') {
       startPolling()
+    } else if (response.status === 'completed' && !stats.value) {
+      loadStats()
     }
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Failed to load job'
   } finally {
     loading.value = false
     loadingSequences.value = false
+  }
+}
+
+async function loadStats() {
+  if (!job.value || job.value.status !== 'completed') return
+  loadingStats.value = true
+  try {
+    stats.value = await getJobStats(jobId.value)
+  } catch (e) {
+    console.error('Failed to load stats:', e)
+  } finally {
+    loadingStats.value = false
   }
 }
 
@@ -96,23 +121,19 @@ function goToPage(page: number) {
 }
 
 function setFilter(filter: SequenceFilter) {
-  if (filter !== currentFilter.value) {
-    // Reset to page 1 when filter changes
-    loadJob(1, filter)
-  }
+  if (filter !== currentFilter.value) loadJob(1, filter)
 }
 
 function startPolling() {
   if (pollInterval) return
-
   pollInterval = window.setInterval(async () => {
     try {
       const response = await getJob(jobId.value, currentPage.value, perPage, currentFilter.value)
       job.value = response
       pagination.value = response.pagination
-
       if (response.status === 'completed' || response.status === 'failed') {
         stopPolling()
+        if (response.status === 'completed') loadStats()
       }
     } catch (e) {
       stopPolling()
@@ -129,7 +150,6 @@ function stopPolling() {
 
 async function handleDelete() {
   if (!confirm('Are you sure you want to delete this job?')) return
-
   deleting.value = true
   try {
     await deleteJob(jobId.value)
@@ -143,7 +163,6 @@ async function handleDelete() {
 async function handleDownload(format: DownloadFormat) {
   downloading.value = true
   downloadError.value = ''
-
   try {
     await downloadJobResults(jobId.value, format)
   } catch (e) {
@@ -157,7 +176,6 @@ function formatDate(dateStr: string) {
   return new Date(dateStr).toLocaleString()
 }
 
-// Database URL generators
 function getUniRef100Url(id: string): string {
   return `https://www.uniprot.org/uniref/UniRef100_${id}`
 }
@@ -170,10 +188,15 @@ function getNcbiUrl(id: string): string {
   return `https://www.ncbi.nlm.nih.gov/protein/${id}`
 }
 
-// Check if sequence has any database IDs
 function hasAnnotationLinks(seq: { uniparc_id?: string | null; ncbi_nrp_id?: string | null; uniref100_id?: string | null }): boolean {
   return !!(seq.uniparc_id || seq.ncbi_nrp_id || seq.uniref100_id)
 }
+
+const chartColors = [
+  '#00bd7e', '#2196f3', '#ff9800', '#9c27b0', '#f44336',
+  '#00bcd4', '#8bc34a', '#ffeb3b', '#795548', '#607d8b',
+  '#e91e63', '#3f51b5', '#009688', '#ff5722', '#cddc39'
+]
 
 onMounted(() => loadJob())
 onUnmounted(stopPolling)
@@ -181,19 +204,14 @@ onUnmounted(stopPolling)
 
 <template>
   <div class="job-detail">
-    <!-- Loading State -->
+    <!-- Loading -->
     <div v-if="loading" class="loading-state">
       <div class="spinner-large"></div>
       <p>Loading job details...</p>
     </div>
 
-    <!-- Error State -->
+    <!-- Error -->
     <div v-else-if="error" class="error-state">
-      <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <circle cx="12" cy="12" r="10"/>
-        <line x1="12" y1="8" x2="12" y2="12"/>
-        <line x1="12" y1="16" x2="12.01" y2="16"/>
-      </svg>
       <h3>Error</h3>
       <p>{{ error }}</p>
       <RouterLink to="/jobs" class="btn btn-secondary">Back to Jobs</RouterLink>
@@ -204,29 +222,15 @@ onUnmounted(stopPolling)
       <!-- Header -->
       <div class="job-header">
         <div class="header-left">
-          <RouterLink to="/jobs" class="back-link">
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <line x1="19" y1="12" x2="5" y2="12"/>
-              <polyline points="12 19 5 12 12 5"/>
-            </svg>
-            Back to Jobs
-          </RouterLink>
-          <h2>Job Details</h2>
+          <RouterLink to="/jobs" class="back-link">← Back to Jobs</RouterLink>
+          <h2>{{ job.filename || 'Job Details' }}</h2>
         </div>
-        <button
-            @click="handleDelete"
-            :disabled="deleting"
-            class="delete-btn"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polyline points="3 6 5 6 21 6"/>
-            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-          </svg>
+        <button @click="handleDelete" :disabled="deleting" class="delete-btn">
           {{ deleting ? 'Deleting...' : 'Delete' }}
         </button>
       </div>
 
-      <!-- Status Card -->
+      <!-- Status -->
       <div class="status-card">
         <div class="status-indicator" :style="{ backgroundColor: statusColors[job.status] }">
           <span v-if="job.status === 'processing'" class="pulse"></span>
@@ -240,287 +244,278 @@ onUnmounted(stopPolling)
         </div>
       </div>
 
-      <!-- Info Grid -->
-      <div class="info-grid">
-        <div class="info-item">
-          <span class="info-label">Filename</span>
-          <span class="info-value">{{ job.filename || 'Direct Input' }}</span>
-        </div>
-        <div class="info-item">
-          <span class="info-label">Sequences</span>
-          <span class="info-value">{{ job.sequence_count }}</span>
-        </div>
-        <div class="info-item">
-          <span class="info-label">Created</span>
-          <span class="info-value">{{ formatDate(job.created_at) }}</span>
-        </div>
-        <div class="info-item">
-          <span class="info-label">Last Updated</span>
-          <span class="info-value">{{ formatDate(job.updated_at) }}</span>
-        </div>
-      </div>
-
-      <!-- Progress (if processing) -->
+      <!-- Progress -->
       <div v-if="job.status === 'processing'" class="progress-section">
-        <h3>Progress</h3>
         <div class="progress-bar">
-          <div
-              class="progress-fill"
-              :class="{ 'indeterminate': job.sequence_count === 0 }"
-              :style="{ width: job.sequence_count > 0 ? `${progressPercent}%` : '100%' }"
-          ></div>
+          <div class="progress-fill" :class="{ 'indeterminate': job.sequence_count === 0 }"
+               :style="{ width: job.sequence_count > 0 ? `${progressPercent}%` : '100%' }"></div>
         </div>
         <span class="progress-text" v-if="job.sequence_count > 0">
-          {{ job.processed_count.toLocaleString() }} / {{ job.sequence_count.toLocaleString() }} sequences processed
-          ({{ progressPercent.toFixed(1) }}%)
+          {{ job.processed_count.toLocaleString() }} / {{ job.sequence_count.toLocaleString() }} ({{ progressPercent.toFixed(1) }}%)
         </span>
-        <span class="progress-text" v-else>
-          Counting sequences...
-        </span>
+        <span class="progress-text" v-else>Counting sequences...</span>
       </div>
 
-      <!-- Results (if completed) -->
-      <div v-if="job.status === 'completed'" class="results-section">
-        <h3>Results</h3>
+      <!-- Tabs -->
+      <div v-if="job.status === 'completed'" class="tab-navigation">
+        <button class="tab-btn" :class="{ active: activeTab === 'overview' }" @click="activeTab = 'overview'">
+          Overview
+        </button>
+        <button class="tab-btn" :class="{ active: activeTab === 'sequences' }" @click="activeTab = 'sequences'">
+          Sequences
+        </button>
+        <button class="tab-btn" :class="{ active: activeTab === 'analysis' }" @click="activeTab = 'analysis'">
+          Functional Analysis
+        </button>
+      </div>
 
-        <div class="results-stats">
-          <div class="stat-card stat-hash">
-            <span class="stat-value">{{ job.hash_matches }}</span>
-            <span class="stat-label">Hash Matches</span>
-            <span class="stat-percent">{{ Math.round((job.hash_matches / job.sequence_count) * 100) }}%</span>
-          </div>
-          <div class="stat-card stat-alignment">
-            <span class="stat-value">{{ job.alignment_matches }}</span>
-            <span class="stat-label">Alignment Matches</span>
-            <span class="stat-percent">{{ Math.round((job.alignment_matches / job.sequence_count) * 100) }}%</span>
-          </div>
-          <div class="stat-card stat-none">
-            <span class="stat-value">{{ job.sequence_count - job.hash_matches - job.alignment_matches }}</span>
-            <span class="stat-label">No Match</span>
-            <span class="stat-percent">{{ Math.round(((job.sequence_count - job.hash_matches - job.alignment_matches) / job.sequence_count) * 100) }}%</span>
-          </div>
-        </div>
-
-        <!-- Download Section -->
-        <div class="download-section">
-          <h4>Download Results</h4>
-          <p class="download-description">Export annotation results in various formats:</p>
-
-          <div v-if="downloadError" class="download-error">
-            {{ downloadError }}
-          </div>
-
-          <div class="download-buttons">
-            <button
-                v-for="opt in downloadOptions"
-                :key="opt.format"
-                class="download-btn"
-                :disabled="downloading"
-                @click="handleDownload(opt.format)"
-                :title="opt.description"
-            >
-              <span class="download-label">{{ opt.label }}</span>
-              <span class="download-desc">{{ opt.description }}</span>
-            </button>
+      <!-- Tab Content -->
+      <div class="tab-content">
+        <!-- Overview Tab -->
+        <div v-if="activeTab === 'overview' || job.status !== 'completed'" class="tab-panel">
+          <div class="info-grid">
+            <div class="info-item">
+              <span class="info-label">Filename</span>
+              <span class="info-value">{{ job.filename || 'Direct Input' }}</span>
+            </div>
+            <div class="info-item">
+              <span class="info-label">Sequences</span>
+              <span class="info-value">{{ job.sequence_count.toLocaleString() }}</span>
+            </div>
+            <div class="info-item">
+              <span class="info-label">Created</span>
+              <span class="info-value">{{ formatDate(job.created_at) }}</span>
+            </div>
+            <div class="info-item">
+              <span class="info-label">Updated</span>
+              <span class="info-value">{{ formatDate(job.updated_at) }}</span>
+            </div>
           </div>
 
-          <div v-if="downloading" class="download-progress">
-            <div class="spinner"></div>
-            Preparing download...
-          </div>
-        </div>
+          <div v-if="job.status === 'completed'" class="results-section">
+            <h3>Results Summary</h3>
+            <div class="results-stats">
+              <div class="stat-card stat-hash">
+                <span class="stat-value">{{ job.hash_matches.toLocaleString() }}</span>
+                <span class="stat-label">Hash Matches</span>
+                <span class="stat-percent">{{ Math.round((job.hash_matches / job.sequence_count) * 100) }}%</span>
+              </div>
+              <div class="stat-card stat-none">
+                <span class="stat-value">{{ (job.sequence_count - job.hash_matches).toLocaleString() }}</span>
+                <span class="stat-label">No Match</span>
+                <span class="stat-percent">{{ Math.round(((job.sequence_count - job.hash_matches) / job.sequence_count) * 100) }}%</span>
+              </div>
+            </div>
 
-        <!-- Sequence Table with Filter -->
-        <div class="sequences-section">
-          <div class="sequences-header">
-            <h4>Sequence Details</h4>
-            <div class="filter-controls">
-              <span class="filter-label">Filter:</span>
-              <div class="filter-buttons">
-                <button
-                    v-for="opt in filterOptions"
-                    :key="opt.value"
-                    class="filter-btn"
-                    :class="{ active: currentFilter === opt.value }"
-                    :disabled="loadingSequences"
-                    @click="setFilter(opt.value)"
-                >
-                  {{ opt.label }}
-                  <span v-if="opt.value === 'all'" class="filter-count">({{ job.sequence_count }})</span>
-                  <span v-else-if="opt.value === 'hash_match'" class="filter-count">({{ job.hash_matches }})</span>
-                  <span v-else-if="opt.value === 'alignment'" class="filter-count">({{ job.alignment_matches }})</span>
-                  <span v-else-if="opt.value === 'none'" class="filter-count">({{ job.sequence_count - job.hash_matches - job.alignment_matches }})</span>
+            <div class="download-section">
+              <h4>Download Results</h4>
+              <div v-if="downloadError" class="download-error">{{ downloadError }}</div>
+              <div class="download-buttons">
+                <button v-for="opt in downloadOptions" :key="opt.format" class="download-btn"
+                        :disabled="downloading" @click="handleDownload(opt.format)">
+                  <span class="download-label">{{ opt.label }}</span>
+                  <span class="download-desc">{{ opt.description }}</span>
                 </button>
+              </div>
+              <div v-if="downloading" class="download-progress">
+                <div class="spinner"></div> Preparing download...
               </div>
             </div>
           </div>
+        </div>
 
-          <!-- Filtered results info -->
-          <div v-if="job.filtered_count !== job.sequence_count" class="filtered-info">
-            Showing {{ job.filtered_count }} of {{ job.sequence_count }} sequences
-          </div>
+        <!-- Sequences Tab -->
+        <div v-if="activeTab === 'sequences' && job.status === 'completed'" class="tab-panel">
+          <div class="sequences-section">
+            <div class="sequences-header">
+              <h4>Sequence Details</h4>
+              <div class="filter-controls">
+                <div class="filter-buttons">
+                  <button v-for="opt in filterOptions" :key="opt.value" class="filter-btn"
+                          :class="{ active: currentFilter === opt.value }" :disabled="loadingSequences"
+                          @click="setFilter(opt.value)">
+                    {{ opt.label }}
+                  </button>
+                </div>
+              </div>
+            </div>
 
-          <!-- Table (when results exist) -->
-          <div v-if="job.sequences && job.sequences.length > 0" class="sequences-table">
-            <div class="table-wrapper">
-              <table>
-                <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>Length</th>
-                  <th>Gene</th>
-                  <th>Function / Product</th>
-                  <th>Database Links</th>
-                </tr>
-                </thead>
-                <tbody>
-                <tr v-for="seq in job.sequences" :key="seq.id" :class="{ 'has-match': hasAnnotationLinks(seq) }">
-                  <td class="seq-id">{{ seq.id }}</td>
-                  <td class="seq-length">{{ seq.length.toLocaleString() }}</td>
-                  <td class="seq-gene">
-                    <span v-if="seq.gene" class="gene-name">{{ seq.gene }}</span>
-                    <span v-else class="no-data">-</span>
-                  </td>
-                  <td class="seq-product">
-                    <span v-if="seq.product" class="product-desc">{{ seq.product }}</span>
-                    <span v-else class="no-data">-</span>
-                  </td>
-                  <td class="annotation-cell">
-                    <template v-if="hasAnnotationLinks(seq)">
-                      <div class="annotation-links">
-                        <a
-                            v-if="seq.uniref100_id"
-                            :href="getUniRef100Url(seq.uniref100_id)"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            class="db-link uniref"
-                            title="View in UniRef100"
-                        >
-                          <span class="db-badge">UniRef100</span>
-                          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
-                            <polyline points="15 3 21 3 21 9"/>
-                            <line x1="10" y1="14" x2="21" y2="3"/>
-                          </svg>
-                        </a>
-                        <a
-                            v-if="seq.uniparc_id"
-                            :href="getUniParcUrl(seq.uniparc_id)"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            class="db-link uniparc"
-                            title="View in UniParc"
-                        >
-                          <span class="db-badge">UniParc</span>
-                          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
-                            <polyline points="15 3 21 3 21 9"/>
-                            <line x1="10" y1="14" x2="21" y2="3"/>
-                          </svg>
-                        </a>
-                        <a
-                            v-if="seq.ncbi_nrp_id"
-                            :href="getNcbiUrl(seq.ncbi_nrp_id)"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            class="db-link ncbi"
-                            title="View in NCBI"
-                        >
-                          <span class="db-badge">NCBI</span>
-                          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
-                            <polyline points="15 3 21 3 21 9"/>
-                            <line x1="10" y1="14" x2="21" y2="3"/>
-                          </svg>
-                        </a>
-                      </div>
-                    </template>
-                    <span v-else class="no-data">-</span>
-                  </td>
-                </tr>
-                </tbody>
-              </table>
+            <div v-if="job.filtered_count !== job.sequence_count" class="filtered-info">
+              Showing {{ job.filtered_count }} of {{ job.sequence_count }} sequences
+            </div>
+
+            <div v-if="job.sequences && job.sequences.length > 0" class="sequences-table">
+              <div class="table-wrapper">
+                <table>
+                  <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Length</th>
+                    <th>Gene</th>
+                    <th>Function / Product</th>
+                    <th>Links</th>
+                  </tr>
+                  </thead>
+                  <tbody>
+                  <tr v-for="seq in job.sequences" :key="seq.id" :class="{ 'has-match': hasAnnotationLinks(seq) }">
+                    <td class="seq-id">{{ seq.id }}</td>
+                    <td class="seq-length">{{ seq.length.toLocaleString() }}</td>
+                    <td class="seq-gene">
+                      <span v-if="seq.gene" class="gene-name">{{ seq.gene }}</span>
+                      <span v-else class="no-data">-</span>
+                    </td>
+                    <td class="seq-product">
+                      <span v-if="seq.product" class="product-desc">{{ seq.product }}</span>
+                      <span v-else class="no-data">-</span>
+                    </td>
+                    <td class="annotation-cell">
+                      <template v-if="hasAnnotationLinks(seq)">
+                        <div class="annotation-links">
+                          <a v-if="seq.uniref100_id" :href="getUniRef100Url(seq.uniref100_id)" target="_blank" class="db-link uniref">UniRef</a>
+                          <a v-if="seq.uniparc_id" :href="getUniParcUrl(seq.uniparc_id)" target="_blank" class="db-link uniparc">UniParc</a>
+                          <a v-if="seq.ncbi_nrp_id" :href="getNcbiUrl(seq.ncbi_nrp_id)" target="_blank" class="db-link ncbi">NCBI</a>
+                        </div>
+                      </template>
+                      <span v-else class="no-data">-</span>
+                    </td>
+                  </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div v-else-if="job.filtered_count === 0" class="empty-filter-results">
+              <p>No sequences match the current filter.</p>
+              <button class="btn btn-secondary" @click="setFilter('all')">Show All</button>
+            </div>
+
+            <div v-if="loadingSequences" class="sequences-loading">
+              <div class="spinner"></div> Loading...
+            </div>
+
+            <div v-if="pagination && pagination.total_pages > 1" class="sequences-pagination">
+              <button class="page-btn" :disabled="!pagination.has_prev || loadingSequences" @click="goToPage(pagination.page - 1)">←</button>
+              <button v-if="pageNumbers[0] > 1" class="page-btn" :disabled="loadingSequences" @click="goToPage(1)">1</button>
+              <span v-if="pageNumbers[0] > 2" class="page-ellipsis">...</span>
+              <button v-for="page in pageNumbers" :key="page" class="page-btn" :class="{ active: page === pagination.page }"
+                      :disabled="loadingSequences" @click="goToPage(page)">{{ page }}</button>
+              <span v-if="pageNumbers[pageNumbers.length - 1] < pagination.total_pages - 1" class="page-ellipsis">...</span>
+              <button v-if="pageNumbers[pageNumbers.length - 1] < pagination.total_pages" class="page-btn"
+                      :disabled="loadingSequences" @click="goToPage(pagination.total_pages)">{{ pagination.total_pages }}</button>
+              <button class="page-btn" :disabled="!pagination.has_next || loadingSequences" @click="goToPage(pagination.page + 1)">→</button>
+              <span class="page-info">Page {{ pagination.page }} of {{ pagination.total_pages }}</span>
             </div>
           </div>
+        </div>
 
-          <!-- Empty filter results -->
-          <div v-else-if="job.filtered_count === 0" class="empty-filter-results">
-            <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-              <circle cx="11" cy="11" r="8"/>
-              <line x1="21" y1="21" x2="16.65" y2="16.65"/>
-              <line x1="8" y1="11" x2="14" y2="11"/>
-            </svg>
-            <p>No sequences match the current filter.</p>
-            <button class="btn btn-secondary" @click="setFilter('all')">Show All Sequences</button>
+        <!-- Functional Analysis Tab -->
+        <div v-if="activeTab === 'analysis' && job.status === 'completed'" class="tab-panel">
+          <div v-if="loadingStats" class="loading-stats">
+            <div class="spinner"></div> Loading functional analysis...
           </div>
 
-          <!-- Loading overlay for sequence pagination -->
-          <div v-if="loadingSequences" class="sequences-loading">
-            <div class="spinner"></div>
-            Loading sequences...
-          </div>
+          <div v-else-if="stats" class="analysis-section">
+            <!-- Annotation Rate -->
+            <div class="annotation-overview">
+              <div class="annotation-rate">
+                <div class="rate-circle">
+                  <svg viewBox="0 0 36 36" class="circular-chart">
+                    <path class="circle-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
+                    <path class="circle" :stroke-dasharray="`${annotationRate}, 100`"
+                          d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
+                  </svg>
+                  <span class="rate-value">{{ annotationRate }}%</span>
+                </div>
+                <div class="rate-info">
+                  <span class="rate-label">Annotation Rate</span>
+                  <span class="rate-detail">{{ stats.annotated_sequences.toLocaleString() }} of {{ stats.total_sequences.toLocaleString() }} sequences</span>
+                </div>
+              </div>
+            </div>
 
-          <!-- Sequence Pagination -->
-          <div v-if="pagination && pagination.total_pages > 1" class="sequences-pagination">
-            <button
-                class="page-btn"
-                :disabled="!pagination.has_prev || loadingSequences"
-                @click="goToPage(pagination.page - 1)"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="15 18 9 12 15 6"/>
-              </svg>
-            </button>
+            <!-- Charts -->
+            <div class="charts-grid">
+              <!-- Top Genes -->
+              <div class="chart-card">
+                <h4>Top Genes</h4>
+                <div v-if="stats.top_genes.length > 0" class="horizontal-bars">
+                  <div v-for="(item, index) in stats.top_genes.slice(0, 12)" :key="item.name" class="bar-item">
+                    <span class="bar-label">{{ item.name }}</span>
+                    <div class="bar-wrapper">
+                      <div class="bar-fill" :style="{ width: `${(item.count / stats.top_genes[0].count) * 100}%`, backgroundColor: chartColors[index % chartColors.length] }"></div>
+                    </div>
+                    <span class="bar-value">{{ item.count }}</span>
+                  </div>
+                </div>
+                <div v-else class="no-chart-data">No gene annotations found</div>
+              </div>
 
-            <button
-                v-if="pageNumbers[0] > 1"
-                class="page-btn"
-                :disabled="loadingSequences"
-                @click="goToPage(1)"
-            >1</button>
-            <span v-if="pageNumbers[0] > 2" class="page-ellipsis">...</span>
+              <!-- Top Products -->
+              <div class="chart-card">
+                <h4>Top Functions / Products</h4>
+                <div v-if="stats.top_products.length > 0" class="horizontal-bars">
+                  <div v-for="(item, index) in stats.top_products.slice(0, 12)" :key="item.name" class="bar-item">
+                    <span class="bar-label" :title="item.name">{{ item.name }}</span>
+                    <div class="bar-wrapper">
+                      <div class="bar-fill" :style="{ width: `${(item.count / stats.top_products[0].count) * 100}%`, backgroundColor: chartColors[index % chartColors.length] }"></div>
+                    </div>
+                    <span class="bar-value">{{ item.count }}</span>
+                  </div>
+                </div>
+                <div v-else class="no-chart-data">No product annotations found</div>
+              </div>
 
-            <button
-                v-for="page in pageNumbers"
-                :key="page"
-                class="page-btn"
-                :class="{ active: page === pagination.page }"
-                :disabled="loadingSequences"
-                @click="goToPage(page)"
-            >{{ page }}</button>
+              <!-- COG Categories -->
+              <div class="chart-card">
+                <h4>COG Functional Categories</h4>
+                <div v-if="stats.cog_categories.length > 0" class="horizontal-bars">
+                  <div v-for="(item, index) in stats.cog_categories" :key="item.code" class="bar-item">
+                    <span class="bar-label"><span class="cog-code">{{ item.code }}</span> {{ item.name }}</span>
+                    <div class="bar-wrapper">
+                      <div class="bar-fill" :style="{ width: `${(item.count / stats.cog_categories[0].count) * 100}%`, backgroundColor: chartColors[index % chartColors.length] }"></div>
+                    </div>
+                    <span class="bar-value">{{ item.count }}</span>
+                  </div>
+                </div>
+                <div v-else class="no-chart-data">No COG categories found</div>
+              </div>
 
-            <span v-if="pageNumbers[pageNumbers.length - 1] < pagination.total_pages - 1" class="page-ellipsis">...</span>
-            <button
-                v-if="pageNumbers[pageNumbers.length - 1] < pagination.total_pages"
-                class="page-btn"
-                :disabled="loadingSequences"
-                @click="goToPage(pagination.total_pages)"
-            >{{ pagination.total_pages }}</button>
+              <!-- EC Classes -->
+              <div class="chart-card">
+                <h4>Enzyme Classes (EC)</h4>
+                <div v-if="stats.ec_classes.length > 0" class="horizontal-bars">
+                  <div v-for="(item, index) in stats.ec_classes" :key="item.name" class="bar-item">
+                    <span class="bar-label">{{ item.name }}</span>
+                    <div class="bar-wrapper">
+                      <div class="bar-fill" :style="{ width: `${(item.count / stats.ec_classes[0].count) * 100}%`, backgroundColor: chartColors[index % chartColors.length] }"></div>
+                    </div>
+                    <span class="bar-value">{{ item.count }}</span>
+                  </div>
+                </div>
+                <div v-else class="no-chart-data">No enzyme classifications found</div>
+              </div>
 
-            <button
-                class="page-btn"
-                :disabled="!pagination.has_next || loadingSequences"
-                @click="goToPage(pagination.page + 1)"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="9 18 15 12 9 6"/>
-              </svg>
-            </button>
-
-            <span class="page-info">
-              Showing {{ (pagination.page - 1) * pagination.per_page + 1 }}-{{ Math.min(pagination.page * pagination.per_page, pagination.total_items) }} of {{ pagination.total_items }}
-            </span>
+              <!-- GO Terms -->
+              <div v-if="stats.go_terms.molecular_function.length > 0" class="chart-card chart-card-wide">
+                <h4>Gene Ontology (GO) Terms</h4>
+                <div class="go-items">
+                  <div v-for="item in stats.go_terms.molecular_function.slice(0, 15)" :key="item.name" class="go-item">
+                    <span class="go-id">{{ item.name }}</span>
+                    <span class="go-count">{{ item.count }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
 
-      <!-- Error Message (if failed) -->
+      <!-- Error -->
       <div v-if="job.status === 'failed'" class="error-section">
         <h3>Error</h3>
-        <p class="error-message">{{ job.error_message || 'An unknown error occurred during processing.' }}</p>
+        <p>{{ job.error_message || 'An unknown error occurred.' }}</p>
       </div>
 
-      <!-- Actions -->
       <div class="actions">
         <RouterLink to="/submit" class="btn btn-primary">Submit New Job</RouterLink>
       </div>
@@ -529,21 +524,12 @@ onUnmounted(stopPolling)
 </template>
 
 <style scoped>
-.job-detail {
-  max-width: 900px;
-  margin: 0 auto;
-}
+.job-detail { max-width: 1200px; margin: 0 auto; }
 
-/* Loading & Error States */
-.loading-state,
-.error-state {
-  text-align: center;
-  padding: 4rem 2rem;
-}
+.loading-state, .error-state { text-align: center; padding: 4rem 2rem; }
 
 .spinner-large {
-  width: 48px;
-  height: 48px;
+  width: 48px; height: 48px;
   border: 3px solid var(--color-border);
   border-top-color: hsla(160, 100%, 37%, 1);
   border-radius: 50%;
@@ -551,898 +537,178 @@ onUnmounted(stopPolling)
   margin: 0 auto 1rem;
 }
 
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
-.error-state svg {
-  color: #f44336;
-  margin-bottom: 1rem;
-}
-
-.error-state h3 {
-  margin: 0 0 0.5rem 0;
-  color: var(--color-heading);
-}
-
-.error-state p {
-  color: var(--color-text);
-  opacity: 0.8;
-  margin-bottom: 1.5rem;
-}
-
-/* Header */
-.job-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 1.5rem;
-}
-
-.header-left {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.back-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-  color: var(--color-text);
-  text-decoration: none;
-  font-size: 0.9rem;
-  opacity: 0.8;
-  transition: opacity 0.2s;
-}
-
-.back-link:hover {
-  opacity: 1;
-}
-
-.job-header h2 {
-  margin: 0;
-  font-size: 1.5rem;
-  color: var(--color-heading);
-}
-
-.delete-btn {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 1rem;
-  border: 1px solid #f44336;
-  border-radius: 6px;
-  background: transparent;
-  color: #f44336;
-  cursor: pointer;
-  font-size: 0.9rem;
-  transition: all 0.2s;
-}
-
-.delete-btn:hover:not(:disabled) {
-  background: #f44336;
-  color: white;
-}
-
-.delete-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-/* Status Card */
-.status-card {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  padding: 1rem 1.5rem;
-  background: var(--color-background-soft);
-  border: 1px solid var(--color-border);
-  border-radius: 12px;
-  margin-bottom: 1.5rem;
-}
-
-.status-indicator {
-  position: relative;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-}
-
-.pulse {
-  position: absolute;
-  inset: -4px;
-  border-radius: 50%;
-  background: inherit;
-  animation: pulse 1.5s ease-out infinite;
-}
-
-@keyframes pulse {
-  0% { opacity: 0.8; transform: scale(1); }
-  100% { opacity: 0; transform: scale(2); }
-}
-
-.status-info {
-  flex: 1;
-}
-
-.status-label {
-  display: block;
-  font-weight: 600;
-  color: var(--color-heading);
-}
-
-.job-id {
-  font-size: 0.85rem;
-  color: var(--color-text);
-  opacity: 0.7;
-  font-family: monospace;
-}
-
-.processing-spinner .spinner {
-  width: 24px;
-  height: 24px;
-  border: 2px solid var(--color-border);
-  border-top-color: #2196f3;
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
-/* Info Grid */
-.info-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 1rem;
-  margin-bottom: 2rem;
-}
-
-.info-item {
-  padding: 1rem;
-  background: var(--color-background-soft);
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-}
-
-.info-label {
-  display: block;
-  font-size: 0.8rem;
-  text-transform: uppercase;
-  color: var(--color-text);
-  opacity: 0.6;
-  margin-bottom: 0.25rem;
-}
-
-.info-value {
-  font-weight: 500;
-  color: var(--color-heading);
-  word-break: break-word;
-}
-
-/* Progress */
-.progress-section {
-  margin-bottom: 2rem;
-}
-
-.progress-section h3 {
-  margin: 0 0 1rem 0;
-  font-size: 1.1rem;
-  color: var(--color-heading);
-}
-
-.progress-bar {
-  height: 8px;
-  background: var(--color-border);
-  border-radius: 4px;
-  overflow: hidden;
-  margin-bottom: 0.5rem;
-}
-
-.progress-fill {
-  height: 100%;
-  background: linear-gradient(90deg, #2196f3, #4caf50);
-  border-radius: 4px;
-  transition: width 0.3s;
-}
-
-.progress-fill.indeterminate {
-  background: linear-gradient(90deg, #2196f3, #4caf50, #2196f3);
-  background-size: 200% 100%;
-  animation: progress-indeterminate 1.5s linear infinite;
-}
-
-@keyframes progress-indeterminate {
-  0% { background-position: 100% 0; }
-  100% { background-position: -100% 0; }
-}
-
-.progress-text {
-  font-size: 0.85rem;
-  color: var(--color-text);
-  opacity: 0.8;
-}
-
-/* Results */
-.results-section h3 {
-  margin: 0 0 1rem 0;
-  font-size: 1.1rem;
-  color: var(--color-heading);
-}
-
-.results-stats {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 1rem;
-  margin-bottom: 2rem;
-}
-
-.stat-card {
-  padding: 1.25rem;
-  border-radius: 12px;
-  text-align: center;
-}
-
-.stat-hash {
-  background: rgba(76, 175, 80, 0.1);
-  border: 1px solid rgba(76, 175, 80, 0.3);
-}
-
-.stat-alignment {
-  background: rgba(33, 150, 243, 0.1);
-  border: 1px solid rgba(33, 150, 243, 0.3);
-}
-
-.stat-none {
-  background: rgba(158, 158, 158, 0.1);
-  border: 1px solid rgba(158, 158, 158, 0.3);
-}
-
-.stat-value {
-  display: block;
-  font-size: 2rem;
-  font-weight: 600;
-  color: var(--color-heading);
-}
-
-.stat-label {
-  display: block;
-  font-size: 0.85rem;
-  color: var(--color-text);
-  margin: 0.25rem 0;
-}
-
-.stat-percent {
-  font-size: 0.9rem;
-  color: var(--color-text);
-  opacity: 0.6;
-}
-
-/* Sequences Table */
-.sequences-table {
-  margin-top: 2rem;
-}
-
-.sequences-table h4 {
-  margin: 0 0 1rem 0;
-  font-size: 1rem;
-  color: var(--color-heading);
-}
-
-.table-wrapper {
-  overflow-x: auto;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-}
-
-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.9rem;
-}
-
-th, td {
-  padding: 0.75rem 1rem;
-  text-align: left;
-  border-bottom: 1px solid var(--color-border);
-}
-
-th {
-  background: var(--color-background-soft);
-  font-weight: 600;
-  color: var(--color-heading);
-}
-
-tr:last-child td {
-  border-bottom: none;
-}
-
-.seq-id {
-  font-family: monospace;
-  color: hsla(160, 100%, 37%, 1);
-}
-
-.hash {
-  font-family: monospace;
-  font-size: 0.85rem;
-  color: var(--color-text);
-  opacity: 0.8;
-}
-
-.source-badge {
-  display: inline-block;
-  padding: 0.2rem 0.5rem;
-  border-radius: 4px;
-  font-size: 0.75rem;
-  font-weight: 500;
-}
-
-.source-badge.hash_match {
-  background: rgba(76, 175, 80, 0.15);
-  color: #4caf50;
-}
-
-.source-badge.alignment {
-  background: rgba(33, 150, 243, 0.15);
-  color: #2196f3;
-}
-
-.source-badge.none {
-  background: rgba(158, 158, 158, 0.15);
-  color: #9e9e9e;
-}
-
-/* Annotation Links */
-.annotation-cell {
-  min-width: 200px;
-}
-
-.annotation-links {
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-}
-
-.db-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0.25rem 0.5rem;
-  border-radius: 4px;
-  text-decoration: none;
-  font-size: 0.8rem;
-  transition: all 0.2s;
-  width: fit-content;
-}
-
-.db-link:hover {
-  transform: translateX(2px);
-}
-
-.db-link svg {
-  opacity: 0.6;
-  flex-shrink: 0;
-}
-
-.db-link:hover svg {
-  opacity: 1;
-}
-
-.db-badge {
-  font-weight: 600;
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  padding: 0.1rem 0.3rem;
-  border-radius: 3px;
-}
-
-.db-id {
-  font-family: monospace;
-  font-size: 0.8rem;
-}
-
-/* UniRef100 */
-.db-link.uniref {
-  background: rgba(156, 39, 176, 0.1);
-  color: #9c27b0;
-}
-
-.db-link.uniref:hover {
-  background: rgba(156, 39, 176, 0.2);
-}
-
-.db-link.uniref .db-badge {
-  background: rgba(156, 39, 176, 0.2);
-}
-
-/* UniParc */
-.db-link.uniparc {
-  background: rgba(33, 150, 243, 0.1);
-  color: #2196f3;
-}
-
-.db-link.uniparc:hover {
-  background: rgba(33, 150, 243, 0.2);
-}
-
-.db-link.uniparc .db-badge {
-  background: rgba(33, 150, 243, 0.2);
-}
-
-/* NCBI */
-.db-link.ncbi {
-  background: rgba(76, 175, 80, 0.1);
-  color: #4caf50;
-}
-
-.db-link.ncbi:hover {
-  background: rgba(76, 175, 80, 0.2);
-}
-
-.db-link.ncbi .db-badge {
-  background: rgba(76, 175, 80, 0.2);
-}
-
-.no-annotation {
-  color: var(--color-text);
-  opacity: 0.5;
-}
-
-.no-data {
-  color: var(--color-text);
-  opacity: 0.4;
-  font-style: italic;
-}
-
-/* Gene name styling */
-.seq-gene {
-  min-width: 80px;
-}
-
-.gene-name {
-  font-family: monospace;
-  font-weight: 600;
-  color: #ff9800;
-  background: rgba(255, 152, 0, 0.1);
-  padding: 0.15rem 0.4rem;
-  border-radius: 4px;
-  font-size: 0.85rem;
-}
-
-/* Product/Function styling */
-.seq-product {
-  min-width: 200px;
-  max-width: 350px;
-}
-
-.product-desc {
-  color: var(--color-text);
-  font-size: 0.9rem;
-  line-height: 1.4;
-}
-
-/* Length formatting */
-.seq-length {
-  font-family: monospace;
-  text-align: right;
-  padding-right: 1rem !important;
-}
-
-/* Highlight rows with matches */
-tr.has-match {
-  background: rgba(76, 175, 80, 0.03);
-}
-
-tr.has-match:hover {
-  background: rgba(76, 175, 80, 0.08);
-}
-
-/* Error Section */
-.error-section {
-  background: rgba(244, 67, 54, 0.1);
-  border: 1px solid rgba(244, 67, 54, 0.3);
-  border-radius: 8px;
-  padding: 1.5rem;
-  margin-bottom: 2rem;
-}
-
-.error-section h3 {
-  margin: 0 0 0.5rem 0;
-  color: #f44336;
-}
-
-.error-section .error-message {
-  margin: 0;
-  color: var(--color-text);
-}
-
-/* Actions */
-.actions {
-  margin-top: 2rem;
-  text-align: center;
-}
-
-.btn {
-  padding: 0.75rem 1.5rem;
-  font-size: 0.95rem;
-  font-weight: 500;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: all 0.3s;
-  text-decoration: none;
-  display: inline-block;
-}
-
-.btn-primary {
-  background: hsla(160, 100%, 37%, 1);
-  color: white;
-}
-
-.btn-primary:hover {
-  background: hsla(160, 100%, 32%, 1);
-}
-
-.btn-secondary {
-  background: transparent;
-  color: hsla(160, 100%, 37%, 1);
-  border: 1px solid hsla(160, 100%, 37%, 1);
-}
-
-.btn-secondary:hover {
-  background: hsla(160, 100%, 37%, 0.1);
-}
-
-/* Responsive */
-@media (max-width: 600px) {
-  .job-header {
-    flex-direction: column;
-    gap: 1rem;
-  }
-
-  .delete-btn {
-    align-self: flex-start;
-  }
-
-  .info-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .results-stats {
-    grid-template-columns: 1fr;
-  }
-}
-
-/* Sequences Pagination */
-.sequences-pagination {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  margin-top: 1.5rem;
-  padding-top: 1.5rem;
-  border-top: 1px solid var(--color-border);
-  flex-wrap: wrap;
-}
-
-.sequences-loading {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.75rem;
-  padding: 1rem;
-  color: var(--color-text);
-  opacity: 0.8;
-}
-
-.sequences-loading .spinner {
-  width: 20px;
-  height: 20px;
+.spinner {
+  width: 24px; height: 24px;
   border: 2px solid var(--color-border);
   border-top-color: hsla(160, 100%, 37%, 1);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
 
-.page-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 36px;
-  height: 36px;
-  padding: 0 0.75rem;
-  font-size: 0.9rem;
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  background: var(--color-background);
-  color: var(--color-text);
-  cursor: pointer;
-  transition: all 0.2s;
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.job-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1.5rem; }
+.header-left { display: flex; flex-direction: column; gap: 0.5rem; }
+.back-link { color: var(--color-text); text-decoration: none; font-size: 0.9rem; opacity: 0.8; }
+.back-link:hover { opacity: 1; }
+.job-header h2 { margin: 0; font-size: 1.5rem; color: var(--color-heading); }
+
+.delete-btn {
+  padding: 0.5rem 1rem; border: 1px solid #f44336; border-radius: 6px;
+  background: transparent; color: #f44336; cursor: pointer; transition: all 0.2s;
+}
+.delete-btn:hover:not(:disabled) { background: #f44336; color: white; }
+.delete-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.status-card {
+  display: flex; align-items: center; gap: 1rem; padding: 1rem 1.5rem;
+  background: var(--color-background-soft); border: 1px solid var(--color-border);
+  border-radius: 12px; margin-bottom: 1.5rem;
 }
 
-.page-btn:hover:not(:disabled) {
-  background: var(--color-background-soft);
-  border-color: var(--color-border-hover);
-}
+.status-indicator { position: relative; width: 12px; height: 12px; border-radius: 50%; }
+.pulse { position: absolute; inset: -4px; border-radius: 50%; background: inherit; animation: pulse 1.5s ease-out infinite; }
+@keyframes pulse { 0% { opacity: 0.8; transform: scale(1); } 100% { opacity: 0; transform: scale(2); } }
 
-.page-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
+.status-info { flex: 1; }
+.status-label { display: block; font-weight: 600; color: var(--color-heading); }
+.job-id { font-size: 0.85rem; color: var(--color-text); opacity: 0.7; font-family: monospace; }
+.processing-spinner .spinner { border-top-color: #2196f3; }
 
-.page-btn.active {
-  background: hsla(160, 100%, 37%, 1);
-  border-color: hsla(160, 100%, 37%, 1);
-  color: white;
-}
+.progress-section { margin-bottom: 1.5rem; }
+.progress-bar { height: 8px; background: var(--color-background-mute); border-radius: 4px; overflow: hidden; margin-bottom: 0.5rem; }
+.progress-fill { height: 100%; background: linear-gradient(90deg, hsla(160, 100%, 37%, 1), hsla(160, 100%, 47%, 1)); border-radius: 4px; transition: width 0.3s; }
+.progress-fill.indeterminate { animation: indeterminate 1.5s infinite linear; background: linear-gradient(90deg, transparent, hsla(160, 100%, 37%, 1), transparent); }
+@keyframes indeterminate { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
+.progress-text { font-size: 0.85rem; color: var(--color-text); opacity: 0.8; }
 
-.page-ellipsis {
-  color: var(--color-text);
-  opacity: 0.6;
-  padding: 0 0.25rem;
+.tab-navigation { display: flex; gap: 0.5rem; margin-bottom: 1.5rem; border-bottom: 1px solid var(--color-border); }
+.tab-btn {
+  padding: 0.75rem 1.25rem; border: none; background: transparent; color: var(--color-text);
+  font-size: 0.95rem; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; transition: all 0.2s;
 }
+.tab-btn:hover { color: hsla(160, 100%, 37%, 1); }
+.tab-btn.active { color: hsla(160, 100%, 37%, 1); border-bottom-color: hsla(160, 100%, 37%, 1); }
 
-.page-info {
-  margin-left: 1rem;
-  font-size: 0.85rem;
-  color: var(--color-text);
-  opacity: 0.7;
-}
+.tab-content { min-height: 300px; }
+.tab-panel { animation: fadeIn 0.2s ease; }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
+.info-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+.info-item { padding: 1rem; background: var(--color-background-soft); border-radius: 8px; }
+.info-label { display: block; font-size: 0.8rem; color: var(--color-text); opacity: 0.7; margin-bottom: 0.25rem; }
+.info-value { font-weight: 600; color: var(--color-heading); word-break: break-word; }
+
+.results-section h3 { margin: 0 0 1rem 0; color: var(--color-heading); font-size: 1.2rem; }
+.results-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+.stat-card { padding: 1.25rem; border-radius: 12px; text-align: center; }
+.stat-card.stat-hash { background: rgba(76, 175, 80, 0.1); border: 1px solid rgba(76, 175, 80, 0.2); }
+.stat-card.stat-none { background: rgba(158, 158, 158, 0.1); border: 1px solid rgba(158, 158, 158, 0.2); }
+.stat-value { display: block; font-size: 2rem; font-weight: 700; color: var(--color-heading); }
+.stat-label { display: block; font-size: 0.85rem; color: var(--color-text); opacity: 0.8; margin-top: 0.25rem; }
+.stat-percent { display: block; font-size: 0.9rem; font-weight: 600; margin-top: 0.5rem; }
+.stat-hash .stat-percent { color: #4caf50; }
+.stat-none .stat-percent { color: #9e9e9e; }
+
+.download-section { padding: 1.5rem; background: var(--color-background-soft); border-radius: 12px; border: 1px solid var(--color-border); }
+.download-section h4 { margin: 0 0 1rem 0; color: var(--color-heading); }
+.download-error { background: rgba(244, 67, 54, 0.1); border: 1px solid rgba(244, 67, 54, 0.3); color: #f44336; padding: 0.75rem; border-radius: 8px; margin-bottom: 1rem; }
+.download-buttons { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem; }
+.download-btn { display: flex; flex-direction: column; padding: 1rem; background: var(--color-background); border: 1px solid var(--color-border); border-radius: 8px; cursor: pointer; transition: all 0.2s; }
+.download-btn:hover:not(:disabled) { border-color: hsla(160, 100%, 37%, 0.5); transform: translateY(-2px); }
+.download-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.download-label { font-weight: 600; color: var(--color-heading); }
+.download-desc { font-size: 0.75rem; color: var(--color-text); opacity: 0.7; }
+.download-progress { display: flex; align-items: center; gap: 0.75rem; margin-top: 1rem; color: var(--color-text); }
+
+.sequences-section { margin-top: 1rem; }
+.sequences-header { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 1rem; flex-wrap: wrap; }
+.sequences-header h4 { margin: 0; color: var(--color-heading); }
+.filter-buttons { display: flex; gap: 0.5rem; }
+.filter-btn { padding: 0.4rem 0.75rem; font-size: 0.85rem; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-background); color: var(--color-text); cursor: pointer; transition: all 0.2s; }
+.filter-btn:hover:not(:disabled) { background: var(--color-background-soft); }
+.filter-btn.active { background: hsla(160, 100%, 37%, 1); border-color: hsla(160, 100%, 37%, 1); color: white; }
+.filtered-info { font-size: 0.9rem; color: var(--color-text); opacity: 0.7; margin-bottom: 1rem; }
+
+.table-wrapper { overflow-x: auto; border: 1px solid var(--color-border); border-radius: 8px; }
+table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+th, td { padding: 0.75rem 1rem; text-align: left; border-bottom: 1px solid var(--color-border); }
+th { background: var(--color-background-soft); font-weight: 600; color: var(--color-heading); }
+tr:last-child td { border-bottom: none; }
+tr.has-match { background: rgba(76, 175, 80, 0.03); }
+.seq-id { font-family: monospace; color: hsla(160, 100%, 37%, 1); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.seq-length { font-family: monospace; text-align: right; }
+.gene-name { font-family: monospace; font-weight: 600; color: #ff9800; background: rgba(255, 152, 0, 0.1); padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.85rem; }
+.seq-product { max-width: 300px; }
+.product-desc { font-size: 0.9rem; }
+.no-data { color: var(--color-text); opacity: 0.4; }
+.annotation-links { display: flex; gap: 0.3rem; flex-wrap: wrap; }
+.db-link { padding: 0.2rem 0.4rem; border-radius: 4px; text-decoration: none; font-size: 0.7rem; font-weight: 600; }
+.db-link.uniref { background: rgba(156, 39, 176, 0.1); color: #9c27b0; }
+.db-link.uniparc { background: rgba(33, 150, 243, 0.1); color: #2196f3; }
+.db-link.ncbi { background: rgba(76, 175, 80, 0.1); color: #4caf50; }
+
+.sequences-pagination { display: flex; align-items: center; justify-content: center; gap: 0.5rem; margin-top: 1.5rem; flex-wrap: wrap; }
+.page-btn { min-width: 36px; height: 36px; padding: 0 0.75rem; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-background); color: var(--color-text); cursor: pointer; }
+.page-btn:hover:not(:disabled) { background: var(--color-background-soft); }
+.page-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.page-btn.active { background: hsla(160, 100%, 37%, 1); border-color: hsla(160, 100%, 37%, 1); color: white; }
+.page-ellipsis { color: var(--color-text); opacity: 0.6; }
+.page-info { margin-left: 1rem; font-size: 0.85rem; color: var(--color-text); opacity: 0.7; }
+.sequences-loading { display: flex; align-items: center; gap: 0.75rem; padding: 2rem; justify-content: center; color: var(--color-text); }
+.empty-filter-results { text-align: center; padding: 2rem; background: var(--color-background-soft); border-radius: 8px; }
+
+.loading-stats { display: flex; align-items: center; gap: 0.75rem; padding: 4rem; justify-content: center; color: var(--color-text); }
+.analysis-section { animation: fadeIn 0.3s ease; }
+
+.annotation-overview { margin-bottom: 2rem; }
+.annotation-rate { display: flex; align-items: center; gap: 1.5rem; padding: 1.5rem; background: var(--color-background-soft); border-radius: 12px; border: 1px solid var(--color-border); }
+.rate-circle { position: relative; width: 100px; height: 100px; }
+.circular-chart { width: 100%; height: 100%; }
+.circle-bg { fill: none; stroke: var(--color-border); stroke-width: 3.8; }
+.circle { fill: none; stroke: hsla(160, 100%, 37%, 1); stroke-width: 3.8; stroke-linecap: round; animation: progress 1s ease-out forwards; }
+@keyframes progress { from { stroke-dasharray: 0, 100; } }
+.rate-value { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 1.5rem; font-weight: 700; color: hsla(160, 100%, 37%, 1); }
+.rate-info { display: flex; flex-direction: column; gap: 0.25rem; }
+.rate-label { font-size: 1.1rem; font-weight: 600; color: var(--color-heading); }
+.rate-detail { font-size: 0.9rem; color: var(--color-text); opacity: 0.8; }
+
+.charts-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1.5rem; }
+.chart-card { background: var(--color-background-soft); border: 1px solid var(--color-border); border-radius: 12px; padding: 1.5rem; }
+.chart-card-wide { grid-column: 1 / -1; }
+.chart-card h4 { margin: 0 0 1rem 0; color: var(--color-heading); font-size: 1rem; }
+.no-chart-data { text-align: center; padding: 2rem; color: var(--color-text); opacity: 0.6; }
+
+.horizontal-bars { display: flex; flex-direction: column; gap: 0.5rem; }
+.bar-item { display: grid; grid-template-columns: minmax(100px, 1fr) 2fr auto; gap: 0.75rem; align-items: center; }
+.bar-label { font-size: 0.85rem; color: var(--color-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cog-code { display: inline-block; width: 20px; height: 20px; line-height: 20px; text-align: center; background: hsla(160, 100%, 37%, 0.15); color: hsla(160, 100%, 37%, 1); border-radius: 4px; font-weight: 600; font-size: 0.75rem; margin-right: 0.5rem; }
+.bar-wrapper { height: 20px; background: var(--color-background); border-radius: 4px; overflow: hidden; }
+.bar-fill { height: 100%; border-radius: 4px; transition: width 0.5s ease; }
+.bar-value { font-size: 0.85rem; font-weight: 600; color: var(--color-heading); min-width: 40px; text-align: right; }
+
+.go-items { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.go-item { display: flex; justify-content: space-between; gap: 0.5rem; padding: 0.35rem 0.5rem; background: var(--color-background); border-radius: 4px; font-size: 0.8rem; }
+.go-id { font-family: monospace; color: var(--color-text); }
+.go-count { font-weight: 600; color: hsla(160, 100%, 37%, 1); }
+
+.error-section { background: rgba(244, 67, 54, 0.1); border: 1px solid rgba(244, 67, 54, 0.3); border-radius: 8px; padding: 1.5rem; margin-bottom: 2rem; }
+.error-section h3 { margin: 0 0 0.5rem 0; color: #f44336; }
+
+.actions { margin-top: 2rem; text-align: center; }
+.btn { padding: 0.75rem 1.5rem; font-size: 0.95rem; font-weight: 500; border-radius: 6px; cursor: pointer; text-decoration: none; display: inline-block; border: none; }
+.btn-primary { background: hsla(160, 100%, 37%, 1); color: white; }
+.btn-primary:hover { background: hsla(160, 100%, 32%, 1); }
+.btn-secondary { background: transparent; color: hsla(160, 100%, 37%, 1); border: 1px solid hsla(160, 100%, 37%, 1); }
+
+@media (max-width: 900px) { .charts-grid { grid-template-columns: 1fr; } }
 @media (max-width: 600px) {
-  .sequences-pagination {
-    gap: 0.25rem;
-  }
-
-  .page-btn {
-    min-width: 32px;
-    height: 32px;
-    padding: 0 0.5rem;
-    font-size: 0.85rem;
-  }
-
-  .page-info {
-    width: 100%;
-    text-align: center;
-    margin: 0.5rem 0 0 0;
-  }
-}
-
-/* Sequences Section with Filter */
-.sequences-section {
-  margin-top: 2rem;
-}
-
-.sequences-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 1rem;
-  margin-bottom: 1rem;
-  flex-wrap: wrap;
-}
-
-.sequences-header h4 {
-  margin: 0;
-  color: var(--color-heading);
-  font-size: 1.1rem;
-}
-
-.filter-controls {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  flex-wrap: wrap;
-}
-
-.filter-label {
-  font-size: 0.9rem;
-  color: var(--color-text);
-  opacity: 0.8;
-}
-
-.filter-buttons {
-  display: flex;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-
-.filter-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  padding: 0.4rem 0.75rem;
-  font-size: 0.85rem;
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  background: var(--color-background);
-  color: var(--color-text);
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.filter-btn:hover:not(:disabled) {
-  background: var(--color-background-soft);
-  border-color: var(--color-border-hover);
-}
-
-.filter-btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.filter-btn.active {
-  background: hsla(160, 100%, 37%, 1);
-  border-color: hsla(160, 100%, 37%, 1);
-  color: white;
-}
-
-.filter-count {
-  font-size: 0.8rem;
-  opacity: 0.8;
-}
-
-.filtered-info {
-  font-size: 0.9rem;
-  color: var(--color-text);
-  opacity: 0.7;
-  margin-bottom: 1rem;
-  padding: 0.5rem 0;
-  border-bottom: 1px solid var(--color-border);
-}
-
-.empty-filter-results {
-  text-align: center;
-  padding: 3rem 2rem;
-  background: var(--color-background-soft);
-  border-radius: 8px;
-}
-
-.empty-filter-results svg {
-  color: var(--color-text);
-  opacity: 0.4;
-  margin-bottom: 1rem;
-}
-
-.empty-filter-results p {
-  color: var(--color-text);
-  opacity: 0.8;
-  margin-bottom: 1rem;
-}
-
-@media (max-width: 600px) {
-  .sequences-header {
-    flex-direction: column;
-    gap: 0.75rem;
-  }
-
-  .filter-controls {
-    width: 100%;
-  }
-
-  .filter-buttons {
-    width: 100%;
-  }
-
-  .filter-btn {
-    flex: 1;
-    justify-content: center;
-    padding: 0.5rem;
-  }
-}
-
-/* Download Section */
-.download-section {
-  margin-top: 2rem;
-  padding: 1.5rem;
-  background: var(--color-background-soft);
-  border-radius: 12px;
-  border: 1px solid var(--color-border);
-}
-
-.download-section h4 {
-  margin: 0 0 0.5rem 0;
-  color: var(--color-heading);
-  font-size: 1.1rem;
-}
-
-.download-description {
-  color: var(--color-text);
-  opacity: 0.8;
-  font-size: 0.9rem;
-  margin: 0 0 1rem 0;
-}
-
-.download-error {
-  background: rgba(244, 67, 54, 0.1);
-  border: 1px solid rgba(244, 67, 54, 0.3);
-  color: #f44336;
-  padding: 0.75rem 1rem;
-  border-radius: 8px;
-  margin-bottom: 1rem;
-  font-size: 0.9rem;
-}
-
-.download-buttons {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 1rem;
-}
-
-.download-btn {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 1.25rem 1rem;
-  background: var(--color-background);
-  border: 1px solid var(--color-border);
-  border-radius: 10px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  text-align: center;
-}
-
-.download-btn:hover:not(:disabled) {
-  border-color: hsla(160, 100%, 37%, 0.5);
-  background: var(--color-background-mute);
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-}
-
-.download-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.download-icon {
-  font-size: 1.75rem;
-}
-
-.download-label {
-  font-size: 1rem;
-  font-weight: 600;
-  color: var(--color-heading);
-}
-
-.download-desc {
-  font-size: 0.75rem;
-  color: var(--color-text);
-  opacity: 0.7;
-}
-
-.download-progress {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.75rem;
-  margin-top: 1rem;
-  padding: 0.75rem;
-  color: var(--color-text);
-  font-size: 0.9rem;
-}
-
-.download-progress .spinner {
-  width: 20px;
-  height: 20px;
-  border-width: 2px;
-}
-
-@media (max-width: 600px) {
-  .download-buttons {
-    grid-template-columns: 1fr;
-  }
-
-  .download-btn {
-    flex-direction: row;
-    justify-content: flex-start;
-    padding: 1rem;
-    gap: 1rem;
-  }
-
-  .download-icon {
-    font-size: 1.5rem;
-  }
-
-  .download-desc {
-    text-align: left;
-  }
+  .job-header { flex-direction: column; gap: 1rem; }
+  .info-grid { grid-template-columns: 1fr; }
+  .results-stats { grid-template-columns: 1fr; }
+  .tab-btn { flex: 1; padding: 0.6rem 0.5rem; font-size: 0.85rem; }
+  .sequences-header { flex-direction: column; }
+  .annotation-rate { flex-direction: column; text-align: center; }
+  .bar-item { grid-template-columns: 1fr; gap: 0.25rem; }
 }
 </style>

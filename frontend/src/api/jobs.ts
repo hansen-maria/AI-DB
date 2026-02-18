@@ -22,6 +22,38 @@ export interface SequenceInfo {
     uniref100_id?: string | null;
     product?: string | null;  // Function description
     gene?: string | null;     // Gene name
+    cog_category?: string | null;  // COG category code
+    ec_ids?: string | null;   // EC numbers (comma-separated)
+    go_ids?: string | null;   // GO terms (comma-separated)
+}
+
+// Functional statistics types
+export interface CountItem {
+    name: string;
+    count: number;
+}
+
+export interface CogCategory {
+    code: string;
+    name: string;
+    count: number;
+}
+
+export interface GoTermStats {
+    biological_process: CountItem[];
+    molecular_function: CountItem[];
+    cellular_component: CountItem[];
+}
+
+export interface FunctionalStats {
+    job_id: string;
+    total_sequences: number;
+    annotated_sequences: number;
+    top_genes: CountItem[];
+    top_products: CountItem[];
+    cog_categories: CogCategory[];
+    ec_classes: CountItem[];
+    go_terms: GoTermStats;
 }
 
 export interface PaginationInfo {
@@ -453,6 +485,38 @@ export async function dbInfo(): Promise<DbInfoResponse> {
             throw new Error(error.detail || 'Failed to fetch DB info');
         } catch {
             throw new Error(`Failed to fetch DB info: ${response.statusText}`);
+        }
+    }
+
+    return response.json();
+}
+
+/**
+ * Get functional statistics for a job
+ */
+export async function getJobStats(jobId: string): Promise<FunctionalStats> {
+    const response = await fetch(`${API_BASE}/job/${jobId}/stats`, {
+        credentials: 'include',
+    });
+
+    // Check content type
+    const contentType = response.headers.get('content-type');
+    if (!contentType || !contentType.includes('application/json')) {
+        throw new Error('API not available');
+    }
+
+    if (!response.ok) {
+        if (response.status === 404) {
+            throw new Error(`Job with ID '${jobId}' not found`);
+        }
+        if (response.status === 400) {
+            throw new Error('Job is not yet completed');
+        }
+        try {
+            const error: ApiError = await response.json();
+            throw new Error(error.detail || 'Failed to fetch job stats');
+        } catch {
+            throw new Error(`Failed to fetch job stats: ${response.statusText}`);
         }
     }
 

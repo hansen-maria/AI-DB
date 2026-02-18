@@ -35,12 +35,21 @@ pub struct SequenceInfo {
     /// UniRef100 ID (if found)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uniref100_id: Option<String>,
-    /// Product/Function description (from PSC table)
+    /// Product/Function description
     #[serde(skip_serializing_if = "Option::is_none")]
     pub product: Option<String>,
-    /// Gene name (from PSC table)
+    /// Gene name
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gene: Option<String>,
+    /// COG category (e.g., "J" for Translation)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cog_category: Option<String>,
+    /// EC numbers (enzyme classification, comma-separated)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ec_ids: Option<String>,
+    /// GO terms (Gene Ontology, comma-separated)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub go_ids: Option<String>,
 }
 
 /// Bakta Hash Lookup Result
@@ -51,10 +60,16 @@ pub struct HashLookupResult {
     pub uniparc_id: Option<String>,
     pub ncbi_nrp_id: Option<String>,
     pub uniref100_id: Option<String>,
-    /// Product/Function description (from PSC table)
+    /// Product/Function description
     pub product: Option<String>,
-    /// Gene name (from PSC table)
+    /// Gene name
     pub gene: Option<String>,
+    /// COG category
+    pub cog_category: Option<String>,
+    /// EC numbers (comma-separated)
+    pub ec_ids: Option<String>,
+    /// GO terms (comma-separated)
+    pub go_ids: Option<String>,
 }
 
 impl Default for HashLookupResult {
@@ -67,6 +82,9 @@ impl Default for HashLookupResult {
             uniref100_id: None,
             product: None,
             gene: None,
+            cog_category: None,
+            ec_ids: None,
+            go_ids: None,
         }
     }
 }
