@@ -34,7 +34,7 @@ frontend/
     ├── views/
     │   ├── HomeView.vue       # Landing page
     │   ├── SubmitJobView.vue  # FASTA upload form
-    │   ├── JobDetailView.vue  # Job results with filtering & download
+    │   ├── JobDetailView.vue  # Job results with tabs, search & analysis
     │   └── JobListView.vue    # Paginated job list
     └── assets/
         ├── main.css           # Global styles
@@ -66,43 +66,10 @@ npm run dev
 npm run type-check
 ```
 
-The development server runs at `http://localhost:8080` with hot module replacement.
-
-**Note:** For API access during development, either:
-- Run the backend locally on port 8000
-- Configure a proxy in `vite.config.ts`
-
 ### Production Build
 
 ```bash
-# Build for production
 npm run build
-
-# Preview production build
-npm run preview
-```
-
-The build output is in the `dist/` directory.
-
-## Docker
-
-### Build Image
-
-```bash
-docker build -t ai-db-frontend .
-```
-
-### Multi-Stage Build
-
-The Dockerfile uses a multi-stage build:
-
-1. **Build Stage**: Node.js image for `npm run build`
-2. **Production Stage**: Nginx Alpine for serving static files
-
-### Run Container
-
-```bash
-docker run -p 80:80 ai-db-frontend
 ```
 
 ## Views
@@ -113,7 +80,6 @@ Landing page featuring:
 - Hero section with call-to-action
 - Feature highlights
 - How-it-works explanation
-- Technology overview
 
 ### SubmitJobView (`/submit`)
 
@@ -122,28 +88,55 @@ FASTA submission form with:
 - Direct text input
 - Gzip support (automatic detection)
 - Real-time validation
-- Progress indication
 - Auto-redirect to job details
 
 ### JobDetailView (`/job/:id`)
 
-Job results page featuring:
-- Job status with color-coded badges
-- Statistics overview (total, hash matches, alignment matches)
-- **Sequence filtering** by annotation source:
-    - All sequences
-    - Hash matches only
-    - Alignment matches only
-    - No matches only
-- **Pagination** for large result sets
-- **Download section** with 4 export formats:
-    - TSV (spreadsheets)
-    - JSON (programming)
-    - FASTA (bioinformatics)
-    - GFF3 (genome browsers)
+**Three-tab interface:**
+
+#### Overview Tab
+- Job metadata (ID, filename, timestamps)
+- Processing statistics (total, hash matches, alignment matches)
+- Download section with 4 export formats
+
+#### Sequences Tab
+
+**Search & Filter Bar:**
+- Real-time text search (ID, gene, product)
+- Basic filters: All / Matches / No Match
+- Advanced filter panel (collapsible)
+
+**Advanced Filters:**
+- Sequence length range (min/max)
+- COG functional category dropdown (23 categories)
+- EC enzyme class dropdown (7 classes)
+- Checkboxes: "Has gene name", "Has function description"
+- Clear all filters button
+
+**Client-Side Filtering:**
+- All sequences loaded once (up to 10,000)
+- Instant filtering without server requests
+- 80ms debounce prevents UI flickering
+- Smooth transitions and hover effects
+
+**Sequence Table:**
+- Paginated results (20 per page)
 - Clickable database links (UniParc, UniRef100, NCBI)
-- Delete job functionality
-- Auto-polling for pending/processing jobs
+- Sticky header for scrolling
+- Row hover highlighting
+
+#### Functional Analysis Tab
+
+**Annotation Rate:**
+- Visual progress ring showing percentage annotated
+
+**Charts (Horizontal Bar Charts):**
+- **Top Genes**: Sequential green color palette (darker = lower rank)
+- **Top Products**: Sequential green color palette
+- **COG Categories**: Categorical color palette (distinct colors)
+- **EC Classes**: Categorical color palette
+- **GO Terms**: Molecular function terms
+
 
 ### JobListView (`/jobs`)
 
@@ -151,7 +144,6 @@ Job history page with:
 - Paginated job list
 - Status indicators
 - Quick actions (view, delete)
-- Empty state for new users
 
 ## API Client
 
@@ -164,80 +156,71 @@ type JobStatus = 'pending' | 'processing' | 'completed' | 'failed';
 type SequenceFilter = 'all' | 'hash_match' | 'alignment' | 'none';
 type DownloadFormat = 'tsv' | 'json' | 'fasta' | 'gff3';
 
-interface SequenceInfo { ... }
-interface PaginationInfo { ... }
-interface PaginatedJobResponse { ... }
-interface PaginatedJobsResponse { ... }
+interface AdvancedFilterOptions {
+  filter?: SequenceFilter;
+  search?: string;
+  minLength?: number;
+  maxLength?: number;
+  cog?: string;
+  ecClass?: string;
+  hasGene?: boolean;
+  hasProduct?: boolean;
+}
+
+interface FunctionalStats {
+  total_sequences: number;
+  annotated_sequences: number;
+  top_genes: CountItem[];
+  top_products: CountItem[];
+  cog_categories: CogCategory[];
+  ec_classes: CountItem[];
+  go_terms: GoTerms;
+}
 ```
 
 ### Functions
 
 ```typescript
-// Create job with file upload
-createJobWithFile(file: File, jobName?: string): Promise<JobCreateResponse>
-
-// Create job with FASTA content
-createJobWithContent(content: string, jobName?: string): Promise<JobCreateResponse>
-
 // Get job with pagination and filtering
-getJob(jobId: string, page?: number, perPage?: number, filter?: SequenceFilter): Promise<PaginatedJobResponse>
+getJob(jobId, page?, perPage?, filter?, advancedFilters?): Promise<PaginatedJobResponse>
 
-// List all jobs (paginated)
-listJobs(page?: number, perPage?: number): Promise<PaginatedJobsResponse>
+// Get functional statistics
+getJobStats(jobId): Promise<FunctionalStats>
 
-// Delete job
-deleteJob(jobId: string): Promise<void>
-
-// Poll until completion
-pollJobUntilComplete(jobId: string, onUpdate?: callback): Promise<PaginatedJobResponse>
+// Create, list, delete jobs
+createJobWithFile(file, jobName?): Promise<JobCreateResponse>
+listJobs(page?, perPage?): Promise<PaginatedJobsResponse>
+deleteJob(jobId): Promise<void>
 
 // Download results
-downloadJobResults(jobId: string, format: DownloadFormat): Promise<void>
+downloadJobResults(jobId, format): Promise<void>
 ```
-
-### Features
-
-- Automatic cookie handling (`credentials: 'include'`)
-- Content-type validation (prevents HTML parsing errors)
-- Error handling with typed responses
-- Download with filename extraction from headers
 
 ## Routing
 
-| Route      | View          | Description            |
-|------------|---------------|------------------------|
-| `/`        | HomeView      | Landing page           |
-| `/submit`  | SubmitJobView | Job submission         |
-| `/job/:id` | JobDetailView | Job results            |
-| `/jobs`    | JobListView   | Job history            |
-| `/docs`    | -             | Redirect to Swagger UI |
-
-### Features
-
-- History mode (clean URLs)
-- Dynamic page titles
-- Scroll behavior management
-- Lazy loading for non-critical views
+| Route      | View          | Description                        |
+|------------|---------------|------------------------------------|
+| `/`        | HomeView      | Landing page                       |
+| `/submit`  | SubmitJobView | Job submission                     |
+| `/job/:id` | JobDetailView | Job results (tabs, search, charts) |
+| `/jobs`    | JobListView   | Job history                        |
+| `/docs`    | -             | Redirect to Swagger UI             |
 
 ## Styling
 
 ### CSS Variables
 
-The application uses CSS custom properties for theming:
-
 ```css
 :root {
-  --color-primary: #10b981;
+  --color-primary: #00bd7e;
   --color-background: #ffffff;
   --color-text: #1a1a1a;
-  /* ... */
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
     --color-background: #1a1a1a;
     --color-text: #ffffff;
-    /* ... */
   }
 }
 ```
@@ -253,48 +236,21 @@ const statusColors = {
 }
 ```
 
-## Nginx Configuration
+## Performance Features
 
-The `nginx.conf` handles:
+- **Client-side filtering**: No server requests during search/filter
+- **Debounced search**: 80ms delay prevents excessive re-renders
+- **Computed pagination**: Instant page navigation
+- **Lazy loading**: Non-critical views loaded on demand
 
-### API Proxy
-
-```nginx
-location ^~ /api/ {
-    proxy_pass http://api:8000;
-    client_max_body_size 100M;  # Large file uploads
-    proxy_read_timeout 3600s;   # Long-running requests
-}
-```
-
-### SPA Fallback
-
-```nginx
-location / {
-    try_files $uri $uri/ /index.html;
-}
-```
-
-### HTTPS & Security
-
-- TLS 1.2/1.3 only
-- HSTS headers
-- X-Frame-Options
-- X-Content-Type-Options
-
-### Caching
-
-- Static assets: 1 year (`immutable`)
-- HTML: No caching
-
-## 🔧 Customization
+## Customization
 
 ### Logo
 
-Replace these files with your own logos:
-- `src/assets/logo-light.png` - Logo for light mode
-- `src/assets/logo-dark.png` - Logo for dark mode
-- `public/favicon.png` - Browser favicon
+Replace these files:
+- `src/assets/logo-light.png`
+- `src/assets/logo-dark.png`
+- `public/favicon.png`
 
 ### Domain
 
@@ -302,9 +258,9 @@ Update `nginx.conf` to replace `ai-db.computational.bio` with your domain.
 
 ### Colors
 
-Edit CSS variables in `src/assets/main.css` to customize the color scheme.
+Edit CSS variables in `src/assets/main.css`.
 
-## 📦 Scripts
+## Scripts
 
 | Script               | Description              |
 |----------------------|--------------------------|

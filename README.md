@@ -2,7 +2,7 @@
 
 Hash-Based Annotation Service for Microbial Sequencing Data
 
-AI-DB accelerates the analysis of microbial sequencing data through cryptographic hash-based annotations 
+AI-DB accelerates the analysis of microbial sequencing data through cryptographic hash-based annotations
 using the [Bakta](https://github.com/oschwengers/bakta) database (~350 million protein sequences).
 
 ## Features
@@ -10,6 +10,9 @@ using the [Bakta](https://github.com/oschwengers/bakta) database (~350 million p
 - **Fast**: Hash-based annotations in seconds instead of hours
 - **Privacy**: Sequence data is processed locally as MD5 hashes
 - **Comprehensive**: Access to UniRef100, UniParc, and NCBI protein annotations
+- **Functional Analysis**: Interactive visualizations of COG categories, EC classes, and top genes/products
+- **Advanced Search**: Real-time client-side filtering by sequence ID, gene name, product, length, and functional categories
+- **Persistent**: Jobs are stored for 30 days and survive container restarts
 - **User-friendly**: Jobs are associated with users via cookies
 - **Shareable**: Jobs can be shared via Job-ID
 - **Export**: Download results in TSV, JSON, FASTA, or GFF3 format
@@ -27,40 +30,43 @@ ai-db/
 │   ├── package.json
 │   ├── vite.config.ts
 │   ├── src/
-│   │   ├── App.vue             # Main app with navigation
-│   │   ├── main.ts             # Entry point
-│   │   ├── router/             # Vue router
+│   │   ├── App.vue                 # Main app with navigation
+│   │   ├── main.ts                 # Entry point
+│   │   ├── router/
 │   │   │   └── index.ts
-│   │   ├── api/                # API client
-│   │   │   └── jobs.ts
-│   │   ├── views/                 # Pages
-│   │   │   ├── HomeView.vue       # Landing page
-│   │   │   ├── SubmitJobView.vue  # FASTA upload
-│   │   │   ├── JobDetailView.vue  # Job details with annotation links
-│   │   │   └── JobListView.vue    # Jobs list (own jobs)
+│   │   ├── api/
+│   │   │   └── jobs.ts             # API client with types
+│   │   ├── views/
+│   │   │   ├── HomeView.vue        # Landing page
+│   │   │   ├── SubmitJobView.vue   # FASTA upload
+│   │   │   ├── JobDetailView.vue   # Job details with tabs, search & filter
+│   │   │   └── JobListView.vue     # Jobs list (own jobs)
 │   │   └── assets/
 │   │       └── main.css
 │   └── public/
-└── backend/                    # Rust/Axum Backend
+└── backend/                        # Rust/Axum Backend
     ├── Dockerfile
     ├── Cargo.toml
     └── src/
         ├── main.rs                 # Entry point, router, OpenAPI
         ├── auth.rs                 # Cookie-based authentication
         ├── state.rs                # AppState, DB connection
-        ├── models/                 # Data structures
+        ├── storage.rs              # SQLite job persistence
+        ├── models/
         │   ├── job.rs              # JobResponse, JobStatus
         │   ├── sequence.rs         # SequenceInfo, SequenceFilter
         │   ├── pagination.rs       # PaginationInfo, query types
+        │   ├── stats.rs            # FunctionalStats for analysis
         │   └── error.rs            # ErrorResponse
-        ├── handlers/               # API endpoints
+        ├── handlers/
         │   ├── jobs.rs             # CRUD operations
+        │   ├── stats.rs            # Functional analysis endpoint
         │   ├── download.rs         # Export handler
         │   └── health.rs           # Health check
-        ├── services/               # Business logic
+        ├── services/
         │   ├── fasta.rs            # FASTA parsing
         │   └── annotation.rs       # DB lookup, job processing
-        └── export/                 # Download formats
+        └── export/
             ├── tsv.rs
             ├── json.rs
             ├── fasta.rs
@@ -122,6 +128,7 @@ npm run dev
 |----------|-----------------------------------|-----------------------------|------------------|
 | `POST`   | `/api/job/`                       | Create new job              | Sets cookie      |
 | `GET`    | `/api/job/{id}`                   | Get job status (paginated)  | Public           |
+| `GET`    | `/api/job/{id}/stats`             | Get functional analysis     | Public           |
 | `GET`    | `/api/job/{id}/download/{format}` | Download results            | Owner only       |
 | `GET`    | `/api/jobs/`                      | List own jobs (paginated)   | Cookie required  |
 | `DELETE` | `/api/job/{id}`                   | Delete job                  | Owner only       |
@@ -132,21 +139,43 @@ npm run dev
 
 Both `/api/job/{id}` and `/api/jobs/` support pagination:
 
-| Parameter   | Description             | Default  | Max  |
-|-------------|-------------------------|----------|------|
-| `page`      | Page number (1-indexed) | 1        | -    |
-| `per_page`  | Items per page          | 20       | 100  |
+| Parameter   | Description             | Default  | Max   |
+|-------------|-------------------------|----------|-------|
+| `page`      | Page number (1-indexed) | 1        | -     |
+| `per_page`  | Items per page          | 20       | 10000 |
 
 ### Filtering (Job Details)
 
 The `/api/job/{id}` endpoint supports sequence filtering:
 
-| Parameter   | Values       | Description                           |
-|-------------|--------------|---------------------------------------|
-| `filter`    | `all`        | All sequences (default)               |
-|             | `hash_match` | Only sequences with hash matches      |
-|             | `alignment`  | Only sequences with alignment matches |
-|             | `none`       | Only sequences without annotations    |
+| Parameter     | Values                                   | Description                   |
+|---------------|------------------------------------------|-------------------------------|
+| `filter`      | `all`, `hash_match`, `alignment`, `none` | Filter by annotation source   |
+| `search`      | text                                     | Search in ID, gene, product   |
+| `min_length`  | number                                   | Minimum sequence length       |
+| `max_length`  | number                                   | Maximum sequence length       |
+| `cog`         | A-Z                                      | COG functional category       |
+| `ec_class`    | 1-7                                      | Enzyme class                  |
+| `has_gene`    | true/false                               | Only sequences with gene name |
+| `has_product` | true/false                               | Only sequences with product   |
+
+### Functional Analysis
+
+The `/api/job/{id}/stats` endpoint returns:
+
+```json
+{
+  "total_sequences": 4155,
+  "annotated_sequences": 4111,
+  "top_genes": [{"name": "rpsA", "count": 42}, ...],
+  "top_products": [{"name": "hypothetical protein", "count": 156}, ...],
+  "cog_categories": [{"code": "J", "name": "Translation", "count": 89}, ...],
+  "ec_classes": [{"name": "2 - Transferases", "count": 234}, ...],
+  "go_terms": {
+    "molecular_function": [{"name": "GO:0003735", "count": 45}, ...]
+  }
+}
+```
 
 ### Download Formats
 
@@ -180,146 +209,70 @@ curl -X POST "https://ai-db.computational.bio/api/job/" \
   -c cookies.txt
 ```
 
-**Response:**
-```json
-{
-  "job_id": "550e8400-e29b-41d4-a716-446655440000",
-  "status": "pending",
-  "message": "Job successfully created. Processing started.",
-  "sequence_count": 1
-}
-```
-
-### Example: Get Job with Pagination and Filter
+### Example: Get Functional Statistics
 
 ```bash
-curl "https://your-domain/api/job/550e8400-e29b-41d4-a716-446655440000?page=1&per_page=50&filter=hash_match"
+curl "https://ai-db.computational.bio/api/job/{id}/stats"
 ```
 
-**Response:**
-```json
-{
-  "job_id": "550e8400-e29b-41d4-a716-446655440000",
-  "status": "completed",
-  "created_at": "2026-01-13T10:30:00Z",
-  "updated_at": "2026-01-13T10:30:05Z",
-  "filename": "sequences.fasta",
-  "sequence_count": 4155,
-  "processed_count": 4155,
-  "hash_matches": 4111,
-  "alignment_matches": 0,
-  "filter": "hash_match",
-  "filtered_count": 4111,
-  "sequences": [...],
-  "pagination": {
-    "page": 1,
-    "per_page": 50,
-    "total_items": 4111,
-    "total_pages": 83,
-    "has_next": true,
-    "has_prev": false
-  }
-}
-```
+## Frontend Features
 
-### Example: Download Results
+### Job Detail View
 
-```bash
-# Download as TSV
-curl -b cookies.txt -O "https://ai-db.computational.bio/api/job/{id}/download/tsv"
+The job detail page features three tabs:
 
-# Download as GFF3
-curl -b cookies.txt -O "https://ai-db.computational.bio/api/job/{id}/download/gff3"
-```
+#### Overview Tab
+- Job metadata (ID, filename, timestamps)
+- Processing statistics
+- Download options (TSV, JSON, FASTA, GFF3)
 
-### Example: Check Database Status
+#### Sequences Tab
+- **Real-time search**: Filter by sequence ID, gene name, or product description
+- **Advanced filters**: Length range, COG category, EC class, annotation status
+- **Client-side filtering**: Instant results without server requests
+- **Pagination**: Navigate through large result sets
+- Clickable database links (UniParc, UniRef100, NCBI)
 
-```bash
-curl "https://ai-db.computational.bio/api/db/info"
-```
+#### Functional Analysis Tab
+- **Annotation Rate**: Visual progress indicator
+- **Top Genes**: Horizontal bar chart with sequential color palette
+- **Top Products**: Most common functional descriptions
+- **COG Categories**: Distribution across 23 functional categories
+- **EC Classes**: Enzyme classification distribution
+- **GO Terms**: Gene Ontology molecular functions
 
-**Response:**
-```json
-{
-  "available": true,
-  "path": "/bakta-db/bakta.db",
-  "ups_entries": 351847263,
-  "version": "6.0"
-}
-```
+## Job Persistence
 
-## Frontend Routes
+Jobs are stored in a SQLite database and **persist for 30 days**. The database survives container restarts and redeployments.
 
-| Route      | Component     | Description                           |
-|------------|---------------|---------------------------------------|
-| `/`        | HomeView      | Landing page with features            |
-| `/submit`  | SubmitJobView | FASTA upload page                     |
-| `/jobs`    | JobListView   | Paginated list of own jobs            |
-| `/job/:id` | JobDetailView | Job details with filtering & download |
-| `/docs`    | -             | Redirect to Swagger UI                |
-
-### Annotation Links
-
-Found annotations are displayed as clickable links to the respective databases:
-
-| Database     | URL Format                                      |
-|--------------|-------------------------------------------------|
-| UniRef100    | `https://www.uniprot.org/uniref/UniRef100_{id}` |
-| UniParc      | `https://www.uniprot.org/uniparc/{id}`          |
-| NCBI Protein | `https://www.ncbi.nlm.nih.gov/protein/{id}`     |
-
-## Rust Backend
-
-### Modular Architecture
-
-The backend is organized into focused modules:
-
-| Module      | Responsibility                           |
-|-------------|------------------------------------------|
-| `models/`   | Data structures, serialization           |
-| `handlers/` | HTTP request/response handling           |
-| `services/` | FASTA parsing, DB lookup, job processing |
-| `export/`   | TSV, JSON, FASTA, GFF3 generation        |
-| `state.rs`  | Application state, DB connection         |
-| `auth.rs`   | Cookie-based authentication              |
-
-### Build
-
-```bash
-cd backend
-cargo build --release
-```
-
-The release binary is located at `target/release/ai-db-api`.
-
-## Configuration
-
-### Environment Variables
-
-| Variable         | Description                                 | Default     |
-|------------------|---------------------------------------------|-------------|
-| `RUST_LOG`       | Log level (trace, debug, info, warn, error) | `info`      |
-| `BAKTA_DB`       | Path to Bakta database                      | `/bakta-db` |
-| `AI_DB_TEMP_DIR` | Directory for temporary upload files        | `/tmp`      |
-
-### Docker-Compose Volume Configuration
+### Volume Configuration
 
 ```yaml
 services:
   api:
     volumes:
-      - /mnt/bakta-db/db:/bakta-db:ro      # Bakta database (read-only)
-      - /mnt/ai-db-tmp:/tmp-data           # Temp storage for uploads
-    environment:
-      - BAKTA_DB=/bakta-db
-      - AI_DB_TEMP_DIR=/tmp-data
+      - jobs-data:/data  # Named volume for persistence
+
+volumes:
+  jobs-data:  # Docker-managed volume
 ```
 
-### Logo Files
+### Environment Variables
 
-- `frontend/src/assets/logo-light.png` - Logo for light mode
-- `frontend/src/assets/logo-dark.png` - Logo for dark mode
-- `frontend/public/favicon.png` - Browser favicon
+| Variable           | Description                                 | Default         |
+|--------------------|---------------------------------------------|-----------------|
+| `RUST_LOG`         | Log level (trace, debug, info, warn, error) | `info`          |
+| `BAKTA_DB`         | Path to Bakta database                      | `/bakta-db`     |
+| `AI_DB_TEMP_DIR`   | Directory for temporary upload files        | `/tmp`          |
+| `AI_DB_JOBS_PATH`  | Path to SQLite jobs database                | `/data/jobs.db` |
+
+### Verifying Persistence
+
+After deployment, check the logs:
+```bash
+docker logs ai-db-api | grep "Loaded.*jobs from database"
+# Should show: "Loaded X existing jobs from database"
+```
 
 ## FASTA Format
 
@@ -340,82 +293,18 @@ MRYILAAVLLPMFAQSYKVDQTGSGPKNTFFINSNQTGVPEQYGDL
 | `.txt`                          | Plain text FASTA      |
 | `.gz`                           | Gzip compressed FASTA |
 
-Compressed files are automatically detected via magic bytes.
-
-## Export Formats
-
-### TSV (Tab-Separated Values)
-
-Includes metadata header and data columns:
-- `sequence_id`, `length`, `md5_hash`, `annotation_source`
-- `annotation`, `uniparc_id`, `ncbi_nrp_id`, `uniref100_id`
-- Direct URLs to UniParc, NCBI, and UniRef100
-
-### JSON
-
-Structured export with:
-- Job metadata (ID, filename, timestamps)
-- Statistics (total, hash matches, alignment matches, no matches)
-- Sequences with database IDs and URLs
-
-### Annotated FASTA
-
-Original sequences with annotation info in headers:
-```
->WP_000001234.1 | source=hash_match | annotation=UniRef100:A0A003 | UniParc=UPI000 | length=486 | md5=a1b2c3
-MKFLILLFNILCLFPVLAADNHGVGPQGASGVDPITFDINSNQTGVASLLNFLGGTTVGS
-```
-
-### GFF3
-
-Standard genome feature format for genome browsers:
-```
-##gff-version 3
-#!annotation-source AI-DB v1.0
-##sequence-region WP_000001234.1 1 486
-###
-WP_000001234.1	ai-db	protein_match	1	486	.	.	.	ID=seq_000001;Name=WP_000001234.1;md5=a1b2c3;Dbxref=UniParc:UPI000,UniRef100:A0A003
-```
-
-## Bakta Database
-
-### Automatic Updates
-
-Set up a daily update job:
-
-```bash
-# /etc/cron.d/bakta-db-update
-0 3 * * * root /usr/local/bin/bakta-db-update.sh >> /var/log/bakta-db-update.log 2>&1
-```
-
-## ⚡ Performance & Memory Management
+## Performance & Memory Management
 
 - **Streaming Upload**: Files streamed to temp storage
 - **Iterator-based Parsing**: One sequence at a time
+- **Client-side Filtering**: Instant search without server requests
 - **Batch Progress**: Updates every 1,000 sequences
 - **Memory Limits**:
-    - 100 MB maximum upload size 
-    - 1M results max per job
-    - 5 MB max per sequence
-- **Gzip Support**: On-the-fly decompression
+  - 100 MB maximum upload size
+  - 1M results max per job
+  - 5 MB max per sequence
 
-
-### Temp Volume Setup
-
-A dedicated volume is required for temporary file storage:
-
-```bash
-# Format and mount temp volume
-sudo mkfs.ext4 <path/to/dest/partition>
-sudo mkdir -p /mnt/ai-db-tmp
-sudo mount <path/to/dest/partition> /mnt/ai-db-tmp
-sudo chmod 1777 /mnt/ai-db-tmp
-
-# Add to /etc/fstab for persistence
-echo '<path/to/dest/partition> /mnt/ai-db-tmp ext4 defaults 0 2' | sudo tee -a /etc/fstab
-```
-
-## 🛡️ Security
+## Security
 
 - HTTPS with Let's Encrypt
 - HTTP-Only cookies with SameSite=Lax
