@@ -33,7 +33,7 @@ services:
     volumes:
       - /mnt/bakta-db/db:/bakta-db:ro
       - /mnt/ai-db-tmp:/tmp-data
-      - /data:/data
+      - jobs-data:/data
     restart: unless-stopped
     networks:
       - app-network
@@ -53,6 +53,7 @@ services:
 volumes:
   certbot-webroot:
   certbot-certs:
+  jobs-data:
 
 networks:
   app-network:

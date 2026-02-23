@@ -40,6 +40,9 @@ RUN apt-get update && apt-get install -y \
 # Create non-root user
 RUN useradd -r -s /bin/false appuser
 
+# Create data directory for job persistence (BEFORE switching to appuser)
+RUN mkdir -p /data && chown appuser:appuser /data
+
 # Copy binary from builder
 COPY --from=builder /app/target/release/ai-db-api /app/ai-db-api
 
