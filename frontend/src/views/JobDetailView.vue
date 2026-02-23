@@ -331,11 +331,32 @@ function hasAnnotationLinks(seq: { uniparc_id?: string | null; ncbi_nrp_id?: str
   return !!(seq.uniparc_id || seq.ncbi_nrp_id || seq.uniref100_id)
 }
 
-const chartColors = [
-  '#00bd7e', '#2196f3', '#ff9800', '#9c27b0', '#f44336',
-  '#00bcd4', '#8bc34a', '#ffeb3b', '#795548', '#607d8b',
-  '#e91e63', '#3f51b5', '#009688', '#ff5722', '#cddc39'
+const sequentialColors = [
+  '#00bd7e', '#00ad73', '#009d68', '#008d5d', '#007d52',
+  '#006d47', '#005d3c', '#004d31', '#003d26', '#002d1b'
 ]
+
+
+const categoricalColors = [
+  '#00bd7e',
+  '#00a896',
+  '#028090',
+  '#05668d',
+  '#6b5b95',
+  '#d64161',
+  '#ff7b25',
+  '#f6ab3c',
+  '#3d5a80',
+  '#7eb77f',
+]
+
+function getSequentialColor(index: number): string {
+  return sequentialColors[Math.min(index, sequentialColors.length - 1)]
+}
+
+function getCategoricalColor(index: number): string {
+  return categoricalColors[index % categoricalColors.length]
+}
 
 onMounted(() => loadJob())
 onUnmounted(() => {
@@ -671,7 +692,7 @@ onUnmounted(() => {
                   <div v-for="(item, index) in stats.top_genes.slice(0, 12)" :key="item.name" class="bar-item">
                     <span class="bar-label">{{ item.name }}</span>
                     <div class="bar-wrapper">
-                      <div class="bar-fill" :style="{ width: `${(item.count / stats.top_genes[0].count) * 100}%`, backgroundColor: chartColors[index % chartColors.length] }"></div>
+                      <div class="bar-fill" :style="{ width: `${(item.count / stats.top_genes[0].count) * 100}%`, backgroundColor: getSequentialColor(index) }"></div>
                     </div>
                     <span class="bar-value">{{ item.count }}</span>
                   </div>
@@ -686,7 +707,7 @@ onUnmounted(() => {
                   <div v-for="(item, index) in stats.top_products.slice(0, 12)" :key="item.name" class="bar-item">
                     <span class="bar-label" :title="item.name">{{ item.name }}</span>
                     <div class="bar-wrapper">
-                      <div class="bar-fill" :style="{ width: `${(item.count / stats.top_products[0].count) * 100}%`, backgroundColor: chartColors[index % chartColors.length] }"></div>
+                      <div class="bar-fill" :style="{ width: `${(item.count / stats.top_products[0].count) * 100}%`, backgroundColor: getSequentialColor(index) }"></div>
                     </div>
                     <span class="bar-value">{{ item.count }}</span>
                   </div>
@@ -701,7 +722,7 @@ onUnmounted(() => {
                   <div v-for="(item, index) in stats.cog_categories" :key="item.code" class="bar-item">
                     <span class="bar-label"><span class="cog-code">{{ item.code }}</span> {{ item.name }}</span>
                     <div class="bar-wrapper">
-                      <div class="bar-fill" :style="{ width: `${(item.count / stats.cog_categories[0].count) * 100}%`, backgroundColor: chartColors[index % chartColors.length] }"></div>
+                      <div class="bar-fill" :style="{ width: `${(item.count / stats.cog_categories[0].count) * 100}%`, backgroundColor: getCategoricalColor(index) }"></div>
                     </div>
                     <span class="bar-value">{{ item.count }}</span>
                   </div>
@@ -716,7 +737,7 @@ onUnmounted(() => {
                   <div v-for="(item, index) in stats.ec_classes" :key="item.name" class="bar-item">
                     <span class="bar-label">{{ item.name }}</span>
                     <div class="bar-wrapper">
-                      <div class="bar-fill" :style="{ width: `${(item.count / stats.ec_classes[0].count) * 100}%`, backgroundColor: chartColors[index % chartColors.length] }"></div>
+                      <div class="bar-fill" :style="{ width: `${(item.count / stats.ec_classes[0].count) * 100}%`, backgroundColor: getCategoricalColor(index) }"></div>
                     </div>
                     <span class="bar-value">{{ item.count }}</span>
                   </div>
