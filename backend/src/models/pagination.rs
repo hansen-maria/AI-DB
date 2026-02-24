@@ -11,8 +11,8 @@ use chrono::{DateTime, Utc};
 
 /// Default items per page
 pub const DEFAULT_PER_PAGE: usize = 20;
-/// Maximum items per page
-pub const MAX_PER_PAGE: usize = 100;
+/// Maximum items per page (supports client-side filtering for up to 10k sequences)
+pub const MAX_PER_PAGE: usize = 10000;
 
 /// Pagination information
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

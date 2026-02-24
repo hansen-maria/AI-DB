@@ -41,7 +41,7 @@ fn get_temp_dir() -> PathBuf {
     params(
         ("job_id" = String, Path, description = "Unique job ID (UUID)"),
         ("page" = Option<usize>, Query, description = "Sequence page (1-indexed, default: 1)"),
-        ("per_page" = Option<usize>, Query, description = "Sequences per page (default: 20, max: 100)"),
+        ("per_page" = Option<usize>, Query, description = "Sequences per page (default: 20, max: 10000)"),
         ("filter" = Option<String>, Query, description = "Filter: all, hash_match, alignment, none"),
         ("search" = Option<String>, Query, description = "Search in ID, gene, product"),
         ("min_length" = Option<usize>, Query, description = "Minimum sequence length"),
