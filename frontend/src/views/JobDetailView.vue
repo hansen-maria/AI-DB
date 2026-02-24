@@ -1108,7 +1108,7 @@ tr.has-match { background: rgba(76, 175, 80, 0.03); }
 tbody tr { transition: background-color 0.1s ease; }
 tbody tr:hover { background: var(--color-background-soft); }
 .seq-id { font-family: monospace; color: hsla(160, 100%, 37%, 1); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.seq-length { font-family: monospace; text-align: right; }
+.seq-length { font-family: monospace; }
 .gene-name { font-family: monospace; font-weight: 600; color: #ff9800; background: rgba(255, 152, 0, 0.1); padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.85rem; }
 .seq-product { max-width: 300px; }
 .product-desc { font-size: 0.9rem; }
