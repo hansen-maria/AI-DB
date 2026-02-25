@@ -37,6 +37,7 @@ export interface SequenceInfo {
     id: string;
     md5_hash?: string;  // Optional - only used internally
     length: number;
+    sequence?: string | null;  // Amino acid sequence (for Psos analysis)
     annotation?: string | null;  // Legacy field
     annotation_source?: string | null;  // Used for filtering
     uniparc_id?: string | null;

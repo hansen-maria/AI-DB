@@ -6,6 +6,11 @@ import {
   type PaginatedJobResponse, type JobStatus,
   type SequenceFilter, type DownloadFormat, type FunctionalStats
 } from '../api/jobs.ts'
+import {
+  submitToPsos, pollPsosJob, getPsosJobUrl, getPsosFile, parsePsosResult,
+  openInPsos, downloadForPsos,
+  psosProfiles, type PsosProfile, type PsosAnnotation
+} from '../api/psos.ts'
 
 const route = useRoute()
 const router = useRouter()
@@ -27,6 +32,16 @@ const perPage = 20
 
 // Tab state
 const activeTab = ref<'overview' | 'sequences' | 'analysis'>('overview')
+
+// Psos integration state
+const selectedPsosProfile = ref<PsosProfile>('bacteria-gram-')
+const showPsosPanel = ref(false)
+const psosAnalyzing = ref(false)
+const psosProgress = ref(0)
+const psosTotal = ref(0)
+const psosError = ref('')
+const psosResults = ref<Map<string, PsosAnnotation>>(new Map())
+const psosCopied = ref(false)
 
 // Advanced filter state
 const showAdvancedFilters = ref(false)
@@ -114,6 +129,147 @@ const pagination = computed(() => {
     has_prev: currentPage.value > 1
   }
 })
+
+// Unmatched sequences for Psos analysis
+const unmatchedSequences = computed(() => {
+  return allSequences.value.filter(seq => !seq.annotation_source)
+})
+
+// Analyze unmatched sequences with Psos API
+async function analyzeWithPsos() {
+  if (unmatchedSequences.value.length === 0) return
+
+  psosAnalyzing.value = true
+  psosError.value = ''
+  psosProgress.value = 0
+  psosTotal.value = unmatchedSequences.value.length
+  psosResults.value.clear()
+
+  try {
+    // Process sequences one at a time to show progress
+    for (let i = 0; i < unmatchedSequences.value.length; i++) {
+      const seq = unmatchedSequences.value[i]
+
+      if (!seq.sequence) {
+        psosProgress.value = i + 1
+        continue
+      }
+
+      try {
+        // Submit to Psos
+        const psosJob = await submitToPsos(
+            seq.id,
+            seq.sequence,
+            selectedPsosProfile.value
+        )
+
+        // Poll for completion
+        const completedJob = await pollPsosJob(psosJob.id, undefined, 60, 3000)
+
+        const jobState = completedJob.state?.value?.toLowerCase() || ''
+        if (jobState === 'succeeded' && completedJob.data?.files) {
+          // Try to get the results file (type is lowercase 'result')
+          const resultFile = completedJob.data.files.find(f =>
+              f.type === 'result' && f.name.endsWith('.json') && f.name !== 'config.json'
+          )
+
+          if (resultFile) {
+            const content = await getPsosFile(psosJob.id, resultFile.name)
+            const data = JSON.parse(content)
+            const parsed = parsePsosResult(data)
+
+            const annotation: PsosAnnotation = {
+              sequenceId: seq.id,
+              psosJobId: psosJob.id,
+              ...parsed
+            }
+            psosResults.value.set(seq.id, annotation)
+          } else {
+            // No result file, but job finished - still store the job ID for linking
+            psosResults.value.set(seq.id, {
+              sequenceId: seq.id,
+              psosJobId: psosJob.id,
+            })
+          }
+        }
+      } catch (e) {
+        console.error(`Psos analysis failed for ${seq.id}:`, e)
+        // Continue with next sequence
+      }
+
+      psosProgress.value = i + 1
+    }
+  } catch (e) {
+    psosError.value = e instanceof Error ? e.message : 'Psos analysis failed'
+  } finally {
+    psosAnalyzing.value = false
+  }
+}
+
+// Fallback: Open unmatched sequences in Psos (clipboard method)
+async function handleOpenInPsos() {
+  const sequences = unmatchedSequences.value
+      .filter(seq => seq.sequence)
+      .map(seq => ({ id: seq.id, sequence: seq.sequence }))
+
+  if (sequences.length === 0) return
+
+  await openInPsos(sequences)
+  psosCopied.value = true
+  setTimeout(() => { psosCopied.value = false }, 3000)
+}
+
+// Fallback: Download unmatched sequences as FASTA
+function handleDownloadForPsos() {
+  const sequences = unmatchedSequences.value
+      .filter(seq => seq.sequence)
+      .map(seq => ({ id: seq.id, sequence: seq.sequence }))
+
+  if (sequences.length === 0) return
+
+  const filename = job.value?.filename
+      ? `${job.value.filename.replace(/\.[^.]+$/, '')}_unmatched.fasta`
+      : 'unmatched_sequences.fasta'
+
+  downloadForPsos(sequences, filename)
+}
+
+// Download Psos results as TSV
+function downloadPsosResults() {
+  if (psosResults.value.size === 0) return
+
+  const header = ['Sequence ID', 'Protein Name', 'Best Hit (dbxref)', 'E-value', 'Identity (%)', 'Signal Peptide', 'TM Domains', 'Psos URL']
+  const rows = [header.join('\t')]
+
+  for (const [seqId, result] of psosResults.value) {
+    const row = [
+      seqId,
+      result.proteinName || '',
+      result.bestHit?.dbxref || '',
+      result.bestHit?.evalue?.toExponential(2) || '',
+      result.bestHit?.percentIdentity?.toFixed(1) || '',
+      result.hasSignalPeptide ? 'Yes' : 'No',
+      result.transmembraneCount || '0',
+      getPsosJobUrl(result.psosJobId)
+    ]
+    rows.push(row.join('\t'))
+  }
+
+  const tsv = rows.join('\n')
+  const blob = new Blob([tsv], { type: 'text/tab-separated-values' })
+  const url = URL.createObjectURL(blob)
+
+  const filename = job.value?.filename
+      ? `${job.value.filename.replace(/\.[^.]+$/, '')}_psos_results.tsv`
+      : 'psos_results.tsv'
+
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+
+  URL.revokeObjectURL(url)
+}
 
 // Progress percentage
 const progressPercent = computed(() => {
@@ -640,6 +796,146 @@ onUnmounted(() => {
               </svg>
               <p>No sequences match the current filters.</p>
               <button class="btn btn-secondary" @click="clearFilters">Clear Filters</button>
+            </div>
+
+            <!-- Psos Analysis Panel -->
+            <div v-if="unmatchedSequences.length > 0" class="psos-panel">
+              <div class="psos-header" @click="showPsosPanel = !showPsosPanel">
+                <div class="psos-title">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+                  </svg>
+                  <span>Analyze {{ unmatchedSequences.length }} unmatched sequences with Psos</span>
+                </div>
+                <svg :class="{ 'rotated': showPsosPanel }" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="6 9 12 15 18 9"/>
+                </svg>
+              </div>
+
+              <div v-if="showPsosPanel" class="psos-content">
+                <p class="psos-description">
+                  <a href="https://psos.computational.bio" target="_blank">Psos</a> (Protein Sequence Observation Service)
+                  can analyze sequences that didn't match in the Bakta database. It provides signal peptide prediction,
+                  transmembrane domain detection, and subcellular localization.
+                </p>
+
+                <div class="psos-controls">
+                  <div class="psos-profile-select">
+                    <label>Organism Profile:</label>
+                    <select v-model="selectedPsosProfile" :disabled="psosAnalyzing">
+                      <option v-for="profile in psosProfiles" :key="profile.value" :value="profile.value">
+                        {{ profile.label }}
+                      </option>
+                    </select>
+                  </div>
+
+                  <div class="psos-buttons">
+                    <button
+                        class="btn btn-psos"
+                        @click="analyzeWithPsos"
+                        :disabled="psosAnalyzing || unmatchedSequences.length === 0"
+                    >
+                      <svg v-if="!psosAnalyzing" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polygon points="5 3 19 12 5 21 5 3"/>
+                      </svg>
+                      <div v-else class="spinner-small"></div>
+                      {{ psosAnalyzing ? `Analyzing ${psosProgress}/${psosTotal}...` : 'Analyze with Psos' }}
+                    </button>
+
+                    <button
+                        class="btn btn-secondary-psos"
+                        @click="handleOpenInPsos"
+                        :disabled="psosAnalyzing || unmatchedSequences.length === 0"
+                        title="Copy sequences to clipboard and open Psos"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
+                      </svg>
+                      {{ psosCopied ? 'Copied!' : 'Open Psos' }}
+                    </button>
+
+                    <button
+                        class="btn btn-secondary-psos"
+                        @click="handleDownloadForPsos"
+                        :disabled="psosAnalyzing || unmatchedSequences.length === 0"
+                        title="Download FASTA for manual upload"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+                      </svg>
+                      FASTA
+                    </button>
+                  </div>
+                </div>
+
+                <div v-if="psosError" class="psos-error">
+                  {{ psosError }}
+                  <p class="psos-error-hint">Try using "Open Psos" to manually analyze sequences.</p>
+                </div>
+
+                <div v-if="psosAnalyzing" class="psos-progress">
+                  <div class="progress-bar">
+                    <div class="progress-fill" :style="{ width: `${(psosProgress / psosTotal) * 100}%` }"></div>
+                  </div>
+                  <span class="progress-text">{{ psosProgress }} of {{ psosTotal }} sequences analyzed</span>
+                </div>
+
+                <!-- Psos Results Summary -->
+                <div v-if="psosResults.size > 0" class="psos-results">
+                  <div class="psos-results-header">
+                    <h4>Psos Results ({{ psosResults.size }} sequences analyzed)</h4>
+                    <button class="btn btn-download-psos" @click="downloadPsosResults">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+                      </svg>
+                      Download TSV
+                    </button>
+                  </div>
+                  <p class="psos-results-hint">
+                    Click "View in Psos" for detailed visualizations including signal peptide plots,
+                    transmembrane topology, and homology search results.
+                  </p>
+
+                  <div class="psos-results-table">
+                    <table>
+                      <thead>
+                      <tr>
+                        <th>Sequence ID</th>
+                        <th>Protein Name / Best Hit</th>
+                        <th>Features</th>
+                        <th>Details</th>
+                      </tr>
+                      </thead>
+                      <tbody>
+                      <tr v-for="[seqId, result] in psosResults" :key="seqId">
+                        <td class="seq-id">{{ seqId }}</td>
+                        <td>
+                          <div v-if="result.proteinName || result.bestHit" class="homology-hit">
+                            <span v-if="result.proteinName" class="protein-name">{{ result.proteinName }}</span>
+                            <span v-if="result.bestHit" class="hit-stats">
+                                {{ result.bestHit.dbxref }} ·
+                                {{ result.bestHit.percentIdentity.toFixed(1) }}% ·
+                                E={{ result.bestHit.evalue.toExponential(1) }}
+                              </span>
+                          </div>
+                          <span v-else class="no-data">No significant hits</span>
+                        </td>
+                        <td class="psos-features">
+                          <span v-if="result.hasSignalPeptide" class="feature-badge signal">Signal Peptide</span>
+                          <span v-if="result.transmembraneCount" class="feature-badge tm">{{ result.transmembraneCount }} TM</span>
+                          <span v-if="!result.hasSignalPeptide && !result.transmembraneCount" class="no-data">-</span>
+                        </td>
+                        <td>
+                          <a :href="getPsosJobUrl(result.psosJobId)" target="_blank" class="psos-link">
+                            View in Psos →
+                          </a>
+                        </td>
+                      </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
             </div>
 
             <!-- Pagination -->
@@ -1174,6 +1470,349 @@ tbody tr:hover { background: var(--color-background-soft); }
 
 .error-section { background: rgba(244, 67, 54, 0.1); border: 1px solid rgba(244, 67, 54, 0.3); border-radius: 8px; padding: 1.5rem; margin-bottom: 2rem; }
 .error-section h3 { margin: 0 0 0.5rem 0; color: #f44336; }
+
+/* Psos Integration Panel */
+.psos-panel {
+  margin-top: 2rem;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.psos-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 1.25rem;
+  background: var(--color-background-soft);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.psos-header:hover {
+  background: var(--color-background-mute);
+}
+
+.psos-title {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-weight: 600;
+  color: var(--color-heading);
+}
+
+.psos-title svg {
+  color: #9c27b0;
+}
+
+.psos-header > svg {
+  transition: transform 0.2s ease;
+  color: var(--color-text);
+  opacity: 0.6;
+}
+
+.psos-header > svg.rotated {
+  transform: rotate(180deg);
+}
+
+.psos-content {
+  padding: 1.25rem;
+  border-top: 1px solid var(--color-border);
+  animation: slideDown 0.2s ease;
+}
+
+.psos-description {
+  margin: 0 0 1.25rem 0;
+  color: var(--color-text);
+  line-height: 1.6;
+  font-size: 0.9rem;
+}
+
+.psos-description a {
+  color: #9c27b0;
+  font-weight: 600;
+}
+
+.psos-controls {
+  display: flex;
+  align-items: flex-end;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.psos-profile-select {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.psos-profile-select label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-text);
+  opacity: 0.8;
+}
+
+.psos-profile-select select {
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-background);
+  color: var(--color-text);
+  font-size: 0.9rem;
+  min-width: 180px;
+}
+
+.psos-buttons {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.btn-psos {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 1.25rem;
+  background: #9c27b0;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.btn-psos:hover:not(:disabled) {
+  background: #7b1fa2;
+}
+
+.btn-psos:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn-secondary-psos {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 1.25rem;
+  background: transparent;
+  color: #9c27b0;
+  border: 1px solid #9c27b0;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-secondary-psos:hover:not(:disabled) {
+  background: rgba(156, 39, 176, 0.1);
+}
+
+.btn-secondary-psos:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.spinner-small {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+.psos-error {
+  margin-top: 1rem;
+  padding: 0.75rem 1rem;
+  background: rgba(244, 67, 54, 0.1);
+  border: 1px solid rgba(244, 67, 54, 0.3);
+  border-radius: 6px;
+  color: #f44336;
+  font-size: 0.9rem;
+}
+
+.psos-error-hint {
+  margin: 0.5rem 0 0 0;
+  font-size: 0.85rem;
+  opacity: 0.9;
+}
+
+.psos-progress {
+  margin-top: 1rem;
+}
+
+.progress-bar {
+  height: 8px;
+  background: var(--color-background-mute);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: #9c27b0;
+  transition: width 0.3s ease;
+}
+
+.progress-text {
+  display: block;
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--color-text);
+  opacity: 0.8;
+}
+
+.psos-results {
+  margin-top: 1.5rem;
+}
+
+.psos-results-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.psos-results h4 {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--color-heading);
+}
+
+.btn-download-psos {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.75rem;
+  background: var(--color-background-soft);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-download-psos:hover {
+  background: var(--color-background-mute);
+  border-color: #9c27b0;
+  color: #9c27b0;
+}
+
+.psos-results-hint {
+  margin: 0.75rem 0 1rem 0;
+  font-size: 0.85rem;
+  color: var(--color-text);
+  opacity: 0.8;
+}
+
+.psos-results-table {
+  overflow-x: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+}
+
+.psos-results-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.psos-results-table th,
+.psos-results-table td {
+  padding: 0.6rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.psos-results-table th {
+  background: var(--color-background-soft);
+  font-weight: 600;
+}
+
+.psos-results-table tr:last-child td {
+  border-bottom: none;
+}
+
+.psos-features {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.feature-badge {
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.feature-badge.signal {
+  background: rgba(255, 152, 0, 0.15);
+  color: #f57c00;
+}
+
+.feature-badge.tm {
+  background: rgba(33, 150, 243, 0.15);
+  color: #1976d2;
+}
+
+.feature-badge.loc {
+  background: rgba(76, 175, 80, 0.15);
+  color: #388e3c;
+}
+
+.homology-hit {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.protein-name {
+  font-weight: 600;
+  color: var(--color-heading);
+}
+
+.hit-dbxref {
+  font-family: monospace;
+  font-size: 0.85rem;
+  color: var(--color-text);
+}
+
+.hit-stats {
+  font-size: 0.75rem;
+  color: var(--color-text);
+  opacity: 0.7;
+  font-family: monospace;
+}
+
+.psos-link {
+  color: #9c27b0;
+  text-decoration: none;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.psos-link:hover {
+  text-decoration: underline;
+}
+
+.psos-hint {
+  margin-top: 1rem;
+  padding: 0.75rem 1rem;
+  background: var(--color-background-soft);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  color: var(--color-text);
+  line-height: 1.6;
+}
 
 .actions { margin-top: 2rem; text-align: center; }
 .btn { padding: 0.75rem 1.5rem; font-size: 0.95rem; font-weight: 500; border-radius: 6px; cursor: pointer; text-decoration: none; display: inline-block; border: none; }
