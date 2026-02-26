@@ -1741,12 +1741,6 @@ tbody tr:hover { background: var(--color-background-soft); }
   border-bottom: none;
 }
 
-.psos-features {
-  display: flex;
-  gap: 0.4rem;
-  flex-wrap: wrap;
-}
-
 .feature-badge {
   padding: 0.2rem 0.5rem;
   border-radius: 4px;
