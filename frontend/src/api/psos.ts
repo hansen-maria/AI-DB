@@ -271,3 +271,142 @@ export function downloadForPsos(
 
   URL.revokeObjectURL(url);
 }
+
+// ============================================================================
+// Backend Persistence API
+// ============================================================================
+
+const API_BASE = '/api';
+
+/**
+ * Psos result structure for backend storage
+ */
+export interface StoredPsosResult {
+  sequenceId: string;
+  psosJobId: string;
+  proteinName?: string;
+  bestHitDbxref?: string;
+  bestHitEvalue?: number;
+  bestHitIdentity?: number;
+  hasSignalPeptide: boolean;
+  transmembraneCount: number;
+}
+
+/**
+ * Convert PsosAnnotation to StoredPsosResult for backend
+ */
+export function annotationToStoredResult(annotation: PsosAnnotation): StoredPsosResult {
+  return {
+    sequenceId: annotation.sequenceId,
+    psosJobId: annotation.psosJobId,
+    proteinName: annotation.proteinName,
+    bestHitDbxref: annotation.bestHit?.dbxref,
+    bestHitEvalue: annotation.bestHit?.evalue,
+    bestHitIdentity: annotation.bestHit?.percentIdentity,
+    hasSignalPeptide: annotation.hasSignalPeptide ?? false,
+    transmembraneCount: annotation.transmembraneCount ?? 0,
+  };
+}
+
+/**
+ * Convert StoredPsosResult back to PsosAnnotation
+ */
+export function storedResultToAnnotation(stored: StoredPsosResult): PsosAnnotation {
+  // Handle both camelCase (from backend with serde rename) and snake_case (fallback)
+  const seqId = stored.sequenceId || (stored as any).sequence_id;
+  const jobId = stored.psosJobId || (stored as any).psos_job_id;
+  const protName = stored.proteinName || (stored as any).protein_name;
+  const hitDbxref = stored.bestHitDbxref || (stored as any).best_hit_dbxref;
+  const hitEvalue = stored.bestHitEvalue ?? (stored as any).best_hit_evalue;
+  const hitIdentity = stored.bestHitIdentity ?? (stored as any).best_hit_identity;
+  const hasSigPep = stored.hasSignalPeptide ?? (stored as any).has_signal_peptide ?? false;
+  const tmCount = stored.transmembraneCount ?? (stored as any).transmembrane_count ?? 0;
+
+  const annotation: PsosAnnotation = {
+    sequenceId: seqId,
+    psosJobId: jobId,
+    proteinName: protName,
+    hasSignalPeptide: hasSigPep,
+    transmembraneCount: tmCount,
+  };
+
+  if (hitDbxref) {
+    annotation.bestHit = {
+      dbxref: hitDbxref,
+      evalue: hitEvalue ?? 0,
+      percentIdentity: hitIdentity ?? 0,
+    };
+    annotation.hasHomology = true;
+  }
+
+  return annotation;
+}
+
+/**
+ * Save Psos results to backend
+ */
+export async function savePsosResults(
+    jobId: string,
+    results: PsosAnnotation[]
+): Promise<{ savedCount: number; totalCount: number }> {
+  const storedResults = results.map(annotationToStoredResult);
+
+  console.log(`[Psos] Saving ${storedResults.length} results for job ${jobId}`, storedResults);
+
+  const response = await fetch(`${API_BASE}/job/${jobId}/psos`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ results: storedResults }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error(`[Psos] Save failed: ${response.status} ${response.statusText}`, errorText);
+    throw new Error(`Failed to save Psos results: ${response.statusText} - ${errorText}`);
+  }
+
+  const result = await response.json();
+  console.log(`[Psos] Save successful:`, result);
+  return result;
+}
+
+/**
+ * Load Psos results from backend
+ */
+export async function loadPsosResults(jobId: string): Promise<PsosAnnotation[]> {
+  console.log(`[Psos] Loading results for job ${jobId}`);
+
+  const response = await fetch(`${API_BASE}/job/${jobId}/psos`);
+
+  if (!response.ok) {
+    if (response.status === 404) {
+      console.log(`[Psos] No results found (404) for job ${jobId}`);
+      return []; // No results yet
+    }
+    const errorText = await response.text();
+    console.error(`[Psos] Load failed: ${response.status} ${response.statusText}`, errorText);
+    throw new Error(`Failed to load Psos results: ${response.statusText}`);
+  }
+
+  const data = await response.json();
+  console.log(`[Psos] Raw response:`, data);
+
+  const annotations = (data.results || []).map(storedResultToAnnotation);
+  console.log(`[Psos] Loaded ${annotations.length} results`);
+  return annotations;
+}
+
+/**
+ * Delete Psos results from backend
+ */
+export async function deletePsosResults(jobId: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/job/${jobId}/psos`, {
+    method: 'DELETE',
+  });
+
+  if (!response.ok && response.status !== 404) {
+    throw new Error(`Failed to delete Psos results: ${response.statusText}`);
+  }
+}

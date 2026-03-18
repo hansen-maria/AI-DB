@@ -31,10 +31,14 @@ use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
-use crate::handlers::{create_job, db_info, delete_job, download_job, get_job, get_job_stats, health_check, list_jobs};
+use crate::handlers::{
+    create_job, db_info, delete_job, delete_psos_results, download_job, get_job, get_job_stats,
+    get_psos_results, health_check, list_jobs, save_psos_results,
+};
 use crate::models::{
-    ErrorResponse, FunctionalStats, JobCreateResponse, JobResponse, JobStatus, JobSummary, PaginatedJobResponse,
-    PaginatedJobsResponse, PaginationInfo, SequenceInfo,
+    ErrorResponse, FunctionalStats, JobCreateResponse, JobResponse, JobStatus, JobSummary,
+    PaginatedJobResponse, PaginatedJobsResponse, PaginationInfo, PsosResult, PsosResultsResponse,
+    SavePsosResultsRequest, SavePsosResultsResponse, SequenceInfo,
 };
 use crate::state::AppState;
 
@@ -57,6 +61,7 @@ use crate::state::AppState;
     ),
     tags(
         (name = "Jobs", description = "Annotation job management - create and query jobs"),
+        (name = "psos", description = "Psos analysis results storage"),
         (name = "Health", description = "Health check and database info")
     ),
     paths(
@@ -66,6 +71,9 @@ use crate::state::AppState;
         handlers::jobs::delete_job,
         handlers::download::download_job,
         handlers::stats::get_job_stats,
+        handlers::psos::save_psos_results,
+        handlers::psos::get_psos_results,
+        handlers::psos::delete_psos_results,
         handlers::health::health_check,
         handlers::health::db_info
     ),
@@ -79,7 +87,11 @@ use crate::state::AppState;
         PaginatedJobsResponse,
         JobSummary,
         PaginatedJobResponse,
-        FunctionalStats
+        FunctionalStats,
+        PsosResult,
+        PsosResultsResponse,
+        SavePsosResultsRequest,
+        SavePsosResultsResponse
     ))
 )]
 struct ApiDoc;
@@ -122,6 +134,13 @@ async fn main() {
         .route("/api/job/{job_id}", get(get_job).delete(delete_job))
         .route("/api/job/{job_id}/download/{format}", get(download_job))
         .route("/api/job/{job_id}/stats", get(get_job_stats))
+        // Psos results routes
+        .route(
+            "/api/job/{job_id}/psos",
+            get(get_psos_results)
+                .post(save_psos_results)
+                .delete(delete_psos_results),
+        )
         .route("/api/jobs/", get(list_jobs))
         // Swagger UI
         .merge(SwaggerUi::new("/api/docs/").url("/api/openapi.json", ApiDoc::openapi()))

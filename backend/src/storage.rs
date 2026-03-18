@@ -134,7 +134,7 @@ pub fn load_job(conn: &Connection, job_id: &str) -> Result<Option<JobResponse>, 
             })
         },
     )
-    .optional()
+        .optional()
 }
 
 /// Load all jobs for a specific owner
@@ -221,4 +221,127 @@ pub fn count_jobs(conn: &Connection) -> Result<usize, rusqlite::Error> {
     conn.query_row("SELECT COUNT(*) FROM jobs", [], |row| {
         row.get::<_, i64>(0).map(|c| c as usize)
     })
+}
+
+// ============================================================================
+// Psos Results Storage
+// ============================================================================
+
+use crate::models::PsosResult;
+
+/// Initialize the psos_results table
+pub fn init_psos_table(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS psos_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT NOT NULL,
+            sequence_id TEXT NOT NULL,
+            psos_job_id TEXT NOT NULL,
+            protein_name TEXT,
+            best_hit_dbxref TEXT,
+            best_hit_evalue REAL,
+            best_hit_identity REAL,
+            has_signal_peptide INTEGER NOT NULL DEFAULT 0,
+            transmembrane_count INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            UNIQUE(job_id, sequence_id)
+        )",
+        [],
+    )?;
+
+    // Create index for faster job lookups
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_psos_job ON psos_results(job_id)",
+        [],
+    )?;
+
+    tracing::info!("Psos results table initialized");
+    Ok(())
+}
+
+/// Save a single Psos result
+pub fn save_psos_result(conn: &Connection, job_id: &str, result: &PsosResult) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "INSERT OR REPLACE INTO psos_results
+         (job_id, sequence_id, psos_job_id, protein_name, best_hit_dbxref,
+          best_hit_evalue, best_hit_identity, has_signal_peptide, transmembrane_count, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![
+            job_id,
+            result.sequence_id,
+            result.psos_job_id,
+            result.protein_name,
+            result.best_hit_dbxref,
+            result.best_hit_evalue,
+            result.best_hit_identity,
+            result.has_signal_peptide as i32,
+            result.transmembrane_count as i32,
+            Utc::now().to_rfc3339(),
+        ],
+    )?;
+    Ok(())
+}
+
+/// Save multiple Psos results at once
+pub fn save_psos_results(conn: &Connection, job_id: &str, results: &[PsosResult]) -> Result<(), rusqlite::Error> {
+    for result in results {
+        save_psos_result(conn, job_id, result)?;
+    }
+    Ok(())
+}
+
+/// Load all Psos results for a job
+pub fn load_psos_results(conn: &Connection, job_id: &str) -> Result<Vec<PsosResult>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT sequence_id, psos_job_id, protein_name, best_hit_dbxref,
+                best_hit_evalue, best_hit_identity, has_signal_peptide, transmembrane_count
+         FROM psos_results WHERE job_id = ?1 ORDER BY sequence_id",
+    )?;
+
+    let results = stmt
+        .query_map([job_id], |row| {
+            Ok(PsosResult {
+                sequence_id: row.get(0)?,
+                psos_job_id: row.get(1)?,
+                protein_name: row.get(2)?,
+                best_hit_dbxref: row.get(3)?,
+                best_hit_evalue: row.get(4)?,
+                best_hit_identity: row.get(5)?,
+                has_signal_peptide: row.get::<_, i32>(6)? != 0,
+                transmembrane_count: row.get::<_, i32>(7)? as usize,
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    Ok(results)
+}
+
+/// Delete all Psos results for a job
+pub fn delete_psos_results(conn: &Connection, job_id: &str) -> Result<usize, rusqlite::Error> {
+    let rows_deleted = conn.execute("DELETE FROM psos_results WHERE job_id = ?1", [job_id])?;
+    Ok(rows_deleted)
+}
+
+/// Cleanup Psos results for deleted jobs (orphaned results)
+pub fn cleanup_orphaned_psos_results(conn: &Connection) -> Result<usize, rusqlite::Error> {
+    let rows_deleted = conn.execute(
+        "DELETE FROM psos_results WHERE job_id NOT IN (SELECT job_id FROM jobs)",
+        [],
+    )?;
+
+    if rows_deleted > 0 {
+        tracing::info!("Cleaned up {} orphaned Psos results", rows_deleted);
+    }
+
+    Ok(rows_deleted)
+}
+
+/// Count Psos results for a job
+pub fn count_psos_results(conn: &Connection, job_id: &str) -> Result<usize, rusqlite::Error> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM psos_results WHERE job_id = ?1",
+        [job_id],
+        |row| row.get::<_, i64>(0).map(|c| c as usize),
+    )
 }

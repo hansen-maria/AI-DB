@@ -69,9 +69,19 @@ impl AppState {
         let jobs_db =
             storage::init_database(&jobs_db_path).expect("Failed to initialize jobs database");
 
+        // Initialize psos_results table
+        if let Err(e) = storage::init_psos_table(&jobs_db) {
+            tracing::warn!("Failed to initialize psos_results table: {}", e);
+        }
+
         // Cleanup old jobs on startup
         if let Err(e) = storage::cleanup_old_jobs(&jobs_db) {
             tracing::warn!("Failed to cleanup old jobs: {}", e);
+        }
+
+        // Cleanup orphaned psos results
+        if let Err(e) = storage::cleanup_orphaned_psos_results(&jobs_db) {
+            tracing::warn!("Failed to cleanup orphaned psos results: {}", e);
         }
 
         // Load existing jobs into memory
@@ -161,7 +171,7 @@ impl AppState {
     }
 
     /// Opens a new connection to the jobs database
-    fn open_jobs_db(&self) -> Option<Connection> {
+    pub fn open_jobs_db(&self) -> Option<Connection> {
         Connection::open(&self.jobs_db_path)
             .map_err(|e| {
                 tracing::error!("Failed to open jobs database: {}", e);
@@ -212,6 +222,13 @@ impl AppState {
 
     /// Deletes a job from both memory and database
     pub fn delete_job(&self, job_id: &str) -> bool {
+        // Delete psos results first
+        if let Some(conn) = self.open_jobs_db() {
+            if let Err(e) = storage::delete_psos_results(&conn, job_id) {
+                tracing::warn!("Failed to delete psos results for job {}: {}", job_id, e);
+            }
+        }
+
         // Delete from database
         let db_deleted = if let Some(conn) = self.open_jobs_db() {
             storage::delete_job(&conn, job_id).unwrap_or(false)
@@ -223,6 +240,40 @@ impl AppState {
         let mem_deleted = self.jobs.write().remove(job_id).is_some();
 
         db_deleted || mem_deleted
+    }
+
+    // ========================================================================
+    // Psos Results Methods
+    // ========================================================================
+
+    /// Save Psos results to database
+    pub fn save_psos_results(&self, job_id: &str, results: &[crate::models::PsosResult]) -> Result<usize, String> {
+        let conn = self.open_jobs_db()
+            .ok_or_else(|| "Failed to open database".to_string())?;
+
+        storage::save_psos_results(&conn, job_id, results)
+            .map_err(|e| format!("Failed to save psos results: {}", e))?;
+
+        let count = storage::count_psos_results(&conn, job_id)
+            .map_err(|e| format!("Failed to count psos results: {}", e))?;
+
+        Ok(count)
+    }
+
+    /// Load Psos results from database
+    pub fn load_psos_results(&self, job_id: &str) -> Result<Vec<crate::models::PsosResult>, String> {
+        let conn = self.open_jobs_db()
+            .ok_or_else(|| "Failed to open database".to_string())?;
+
+        storage::load_psos_results(&conn, job_id)
+            .map_err(|e| format!("Failed to load psos results: {}", e))
+    }
+
+    /// Count Psos results for a job
+    pub fn count_psos_results(&self, job_id: &str) -> usize {
+        self.open_jobs_db()
+            .and_then(|conn| storage::count_psos_results(&conn, job_id).ok())
+            .unwrap_or(0)
     }
 }
 

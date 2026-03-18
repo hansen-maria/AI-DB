@@ -9,7 +9,8 @@ import {
 import {
   submitToPsos, pollPsosJob, getPsosJobUrl, getPsosFile, parsePsosResult,
   openInPsos, downloadForPsos,
-  psosProfiles, type PsosProfile, type PsosAnnotation
+  psosProfiles, type PsosProfile, type PsosAnnotation,
+  savePsosResults, loadPsosResults
 } from '../api/psos.ts'
 
 const route = useRoute()
@@ -199,6 +200,19 @@ async function analyzeWithPsos() {
 
       psosProgress.value = i + 1
     }
+
+    // Save results to backend for persistence
+    if (psosResults.value.size > 0) {
+      try {
+        const resultsArray = Array.from(psosResults.value.values())
+        console.log(`[Psos] Attempting to save ${resultsArray.length} results...`)
+        const { savedCount, totalCount } = await savePsosResults(jobId.value, resultsArray)
+        console.log(`[Psos] Successfully saved ${savedCount} results, total: ${totalCount}`)
+      } catch (e) {
+        console.error('[Psos] Failed to save results:', e)
+        psosError.value = 'Ergebnisse konnten nicht gespeichert werden. Sie gehen beim Neuladen verloren.'
+      }
+    }
   } catch (e) {
     psosError.value = e instanceof Error ? e.message : 'Psos analysis failed'
   } finally {
@@ -378,13 +392,30 @@ async function loadJob() {
 
     if (response.status === 'pending' || response.status === 'processing') {
       startPolling()
-    } else if (response.status === 'completed' && !stats.value) {
-      loadStats()
+    } else if (response.status === 'completed') {
+      if (!stats.value) {
+        loadStats()
+      }
+      // Load existing Psos results
+      loadExistingPsosResults()
     }
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Failed to load job'
   } finally {
     loading.value = false
+  }
+}
+
+async function loadExistingPsosResults() {
+  try {
+    const results = await loadPsosResults(jobId.value)
+    if (results.length > 0) {
+      psosResults.value = new Map(results.map(r => [r.sequenceId, r]))
+      showPsosPanel.value = true  // Automatisch Panel anzeigen wenn Ergebnisse existieren
+      console.log(`Loaded ${results.length} existing Psos results`)
+    }
+  } catch (e) {
+    console.error('Failed to load Psos results:', e)
   }
 }
 

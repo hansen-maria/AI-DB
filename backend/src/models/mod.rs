@@ -6,6 +6,7 @@ pub mod error;
 pub mod health;
 pub mod job;
 pub mod pagination;
+pub mod psos;
 pub mod sequence;
 pub mod stats;
 
@@ -16,5 +17,6 @@ pub use pagination::{
     GetJobQuery, ListJobsQuery, PaginatedJobResponse, PaginatedJobsResponse, PaginationInfo,
     DEFAULT_PER_PAGE, MAX_PER_PAGE,
 };
+pub use psos::{PsosResult, PsosResultsResponse, SavePsosResultsRequest, SavePsosResultsResponse};
 pub use sequence::{AdvancedSequenceFilter, HashLookupResult, SequenceFilter, SequenceInfo};
 pub use stats::{cog_category_name, ec_class_name, CogCategory, CountItem, FunctionalStats, GoTermStats};
