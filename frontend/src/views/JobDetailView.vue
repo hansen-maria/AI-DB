@@ -210,7 +210,7 @@ async function analyzeWithPsos() {
         console.log(`[Psos] Successfully saved ${savedCount} results, total: ${totalCount}`)
       } catch (e) {
         console.error('[Psos] Failed to save results:', e)
-        psosError.value = 'Ergebnisse konnten nicht gespeichert werden. Sie gehen beim Neuladen verloren.'
+        psosError.value = 'The results could not be saved. They will be lost when the page reloads.'
       }
     }
   } catch (e) {
@@ -394,10 +394,10 @@ async function loadJob() {
       startPolling()
     } else if (response.status === 'completed') {
       if (!stats.value) {
-        loadStats()
+        await loadStats()
       }
       // Load existing Psos results
-      loadExistingPsosResults()
+      await loadExistingPsosResults()
     }
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Failed to load job'
@@ -411,7 +411,7 @@ async function loadExistingPsosResults() {
     const results = await loadPsosResults(jobId.value)
     if (results.length > 0) {
       psosResults.value = new Map(results.map(r => [r.sequenceId, r]))
-      showPsosPanel.value = true  // Automatisch Panel anzeigen wenn Ergebnisse existieren
+      showPsosPanel.value = true  // Automatically display the panel if results exist
       console.log(`Loaded ${results.length} existing Psos results`)
     }
   } catch (e) {
@@ -459,7 +459,7 @@ function startPolling() {
       allSequences.value = response.sequences || []
       if (response.status === 'completed' || response.status === 'failed') {
         stopPolling()
-        if (response.status === 'completed') loadStats()
+        if (response.status === 'completed') await loadStats()
       }
     } catch (e) {
       stopPolling()

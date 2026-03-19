@@ -161,7 +161,7 @@ async function submitJob() {
     }
 
     // Navigate to job detail page
-    router.push({ name: 'job', params: { id: response.job_id } })
+    await router.push({name: 'job', params: {id: response.job_id}})
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : 'An error occured.'
   } finally {
