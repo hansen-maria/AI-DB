@@ -5,6 +5,18 @@ import { RouterLink, RouterView, useRoute } from 'vue-router'
 const isDarkMode = ref(false)
 const route = useRoute()
 const mobileMenuOpen = ref(false)
+const alertDismissed = ref(false)
+
+const activeAlert = {
+  id: 'psos-downtime-2026-04',
+  type: 'warning' as 'warning' | 'info' | 'error',
+  message: 'Scheduled maintenance: The Psos service may be unavailable starting Thursday (2nd April 2026) due to cluster maintenance. Jobs submitted before then will not be affected.',
+}
+
+const dismissAlert = () => {
+  alertDismissed.value = true
+  localStorage.setItem(`alert-dismissed-${activeAlert.id}`, 'true')
+}
 
 const toggleTheme = () => {
   isDarkMode.value = !isDarkMode.value
@@ -32,11 +44,35 @@ onMounted(() => {
     isDarkMode.value = window.matchMedia('(prefers-color-scheme: dark)').matches
   }
   updateTheme()
+
+  if (localStorage.getItem(`alert-dismissed-${activeAlert.id}`) === 'true') {
+    alertDismissed.value = true
+  }
 })
 </script>
 
 <template>
   <div class="app-container">
+    <!-- Alert Banner -->
+    <div v-if="!alertDismissed" :class="['alert-banner', `alert-banner--${activeAlert.type}`]">
+      <div class="alert-banner__content">
+        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="alert-banner__icon">
+          <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+          <line x1="12" y1="9" x2="12" y2="13"/>
+          <line x1="12" y1="17" x2="12.01" y2="17"/>
+        </svg>
+        <span>{{ activeAlert.message }}</span>
+      </div>
+      <button class="alert-banner__close" @click="dismissAlert" aria-label="Dismiss notification">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="18" y1="6" x2="6" y2="18"/>
+          <line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+
     <!-- Global Header -->
     <header class="global-header">
       <div class="header-content">
@@ -57,6 +93,7 @@ onMounted(() => {
           <RouterLink to="/submit" :class="{ active: route.name === 'submit' }">Submit Job</RouterLink>
           <RouterLink to="/jobs" :class="{ active: route.name === 'jobs' }">Jobs</RouterLink>
           <a href="/api/docs" target="_blank" rel="noopener">API Docs</a>
+          <RouterLink to="/contact" :class="{ active: route.name === 'contact' }">Contact</RouterLink>
         </nav>
 
         <div class="header-actions">
@@ -98,6 +135,7 @@ onMounted(() => {
         <RouterLink to="/submit" @click="closeMobileMenu" :class="{ active: route.name === 'submit' }">Submit Job</RouterLink>
         <RouterLink to="/jobs" @click="closeMobileMenu" :class="{ active: route.name === 'jobs' }">Jobs</RouterLink>
         <a href="/api/docs" target="_blank" rel="noopener" @click="closeMobileMenu">API Docs</a>
+        <RouterLink to="/contact" @click="closeMobileMenu" :class="{ active: route.name === 'contact' }">Contact</RouterLink>
       </nav>
     </header>
 
@@ -118,6 +156,79 @@ onMounted(() => {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+}
+
+/* Alert Banner */
+.alert-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.6rem 2rem;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.alert-banner--warning {
+  background: hsla(38, 100%, 50%, 0.12);
+  border-bottom: 1px solid hsla(38, 100%, 50%, 0.35);
+  color: hsl(32, 80%, 35%);
+}
+
+.alert-banner--info {
+  background: hsla(210, 100%, 56%, 0.1);
+  border-bottom: 1px solid hsla(210, 100%, 56%, 0.3);
+  color: hsl(210, 70%, 35%);
+}
+
+.alert-banner--error {
+  background: hsla(0, 80%, 55%, 0.1);
+  border-bottom: 1px solid hsla(0, 80%, 55%, 0.3);
+  color: hsl(0, 70%, 40%);
+}
+
+html.dark .alert-banner--warning {
+  color: hsl(38, 100%, 70%);
+}
+
+html.dark .alert-banner--info {
+  color: hsl(210, 100%, 75%);
+}
+
+html.dark .alert-banner--error {
+  color: hsl(0, 90%, 72%);
+}
+
+.alert-banner__content {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex: 1;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.alert-banner__icon {
+  flex-shrink: 0;
+}
+
+.alert-banner__close {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: inherit;
+  opacity: 0.6;
+  padding: 0.25rem;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.2s;
+}
+
+.alert-banner__close:hover {
+  opacity: 1;
 }
 
 /* Global Header */
@@ -316,6 +427,10 @@ onMounted(() => {
   .logo-img {
     width: 40px;
     height: 40px;
+  }
+
+  .alert-banner {
+    padding: 0.6rem 1rem;
   }
 }
 </style>

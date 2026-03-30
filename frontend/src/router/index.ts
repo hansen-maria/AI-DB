@@ -37,6 +37,14 @@ const router = createRouter({
             }
         },
         {
+            path: '/contact',
+            name: 'contact',
+            component: () => import('@/views/ContactView.vue'),
+            meta: {
+                title: 'Contact - AI-DB'
+            }
+        },
+        {
             path: '/docs',
             name: 'api-docs',
             beforeEnter() {
