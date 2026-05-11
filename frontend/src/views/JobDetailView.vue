@@ -12,6 +12,10 @@ import {
   psosProfiles, type PsosProfile, type PsosAnnotation,
   savePsosResults, loadPsosResults
 } from '../api/psos.ts'
+import {
+  runBaktaAnnotation, groupFeaturesByType,
+  type BaktaJobOptions, type BaktaAnnotationSummary
+} from '../api/bakta.ts'
 
 const route = useRoute()
 const router = useRouter()
@@ -43,6 +47,19 @@ const psosTotal = ref(0)
 const psosError = ref('')
 const psosResults = ref<Map<string, PsosAnnotation>>(new Map())
 const psosCopied = ref(false)
+
+// Bakta integration state
+const showBaktaPanel = ref(false)
+const baktaAnalyzing = ref(false)
+const baktaProgressLabel = ref('')
+const baktaProgressPercent = ref(0)
+const baktaError = ref('')
+const baktaResult = ref<BaktaAnnotationSummary | null>(null)
+const baktaAbortController = ref<AbortController | null>(null)
+// Config form
+const baktaGenus = ref('')
+const baktaSpecies = ref('')
+const baktaCompleteGenome = ref(false)
 
 // Advanced filter state
 const showAdvancedFilters = ref(false)
@@ -246,6 +263,44 @@ function handleDownloadForPsos() {
       : 'unmatched_sequences.fasta'
 
   downloadForPsos(sequences, filename)
+}
+
+// Analyze unmatched sequences with Bakta API
+async function analyzeWithBakta() {
+  const sequences = unmatchedSequences.value.filter(seq => seq.sequence)
+  if (sequences.length === 0) return
+
+  baktaAnalyzing.value = true
+  baktaError.value = ''
+  baktaResult.value = null
+  baktaProgressPercent.value = 0
+  baktaProgressLabel.value = 'Starting…'
+  baktaAbortController.value = new AbortController()
+
+  const config: BaktaJobOptions = { completeGenome: baktaCompleteGenome.value }
+  if (baktaGenus.value.trim()) config.genus = baktaGenus.value.trim()
+  if (baktaSpecies.value.trim()) config.species = baktaSpecies.value.trim()
+
+  try {
+    baktaResult.value = await runBaktaAnnotation(
+        sequences.map(s => ({ id: s.id, sequence: s.sequence })),
+        config,
+        (stage, pct) => {
+          baktaProgressLabel.value = stage
+          baktaProgressPercent.value = pct
+        },
+        baktaAbortController.value.signal
+    )
+  } catch (e) {
+    if (e instanceof Error && e.message === 'Aborted') {
+      baktaError.value = 'Analysis cancelled.'
+    } else {
+      baktaError.value = e instanceof Error ? e.message : 'Bakta analysis failed.'
+    }
+  } finally {
+    baktaAnalyzing.value = false
+    baktaAbortController.value = null
+  }
 }
 
 // Download Psos results as TSV
@@ -965,6 +1020,174 @@ onUnmounted(() => {
                       </tbody>
                     </table>
                   </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Bakta Analysis Panel -->
+            <div v-if="unmatchedSequences.length > 0" class="bakta-panel">
+              <div class="bakta-header" @click="showBaktaPanel = !showBaktaPanel">
+                <div class="bakta-title">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24"
+                       fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M3 3c9 0 9 18 18 18"/>
+                    <path d="M21 3C12 3 12 21 3 21"/>
+                    <path d="M7 8h4"/><path d="M13 16h4"/>
+                    <path d="M7.5 12H10"/><path d="M14 12h2.5"/>
+                  </svg>
+                  <span>Analyze {{ unmatchedSequences.length }} unmatched sequences with Bakta</span>
+                  <span v-if="baktaResult" class="bakta-badge bakta-badge--done">✓ Done</span>
+                  <span v-else-if="baktaAnalyzing" class="bakta-badge bakta-badge--running">Running…</span>
+                </div>
+                <svg :class="{ 'rotated': showBaktaPanel }" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24"
+                     fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="6 9 12 15 18 9"/>
+                </svg>
+              </div>
+
+              <div v-if="showBaktaPanel" class="bakta-content">
+                <p class="bakta-description">
+                  <a href="https://bakta.computational.bio" target="_blank">Bakta</a>
+                  is a rapid, standardized bacterial genome annotation tool. It performs full annotation
+                  (CDSs, tRNAs, rRNAs, ncRNAs, CRISPRs) via the free Bakta Web API.
+                  <strong>Input must be nucleotide sequences.</strong>
+                </p>
+
+                <!-- Config form (only before first run) -->
+                <div v-if="!baktaAnalyzing && !baktaResult" class="bakta-form">
+                  <div class="bakta-form-row">
+                    <div class="bakta-field">
+                      <label>Genus <span class="bakta-optional">(optional)</span></label>
+                      <input v-model="baktaGenus" type="text" placeholder="e.g. Escherichia" class="bakta-input" />
+                    </div>
+                    <div class="bakta-field">
+                      <label>Species <span class="bakta-optional">(optional)</span></label>
+                      <input v-model="baktaSpecies" type="text" placeholder="e.g. coli" class="bakta-input" />
+                    </div>
+                    <div class="bakta-field bakta-field--inline">
+                      <label class="bakta-checkbox-label">
+                        <input v-model="baktaCompleteGenome" type="checkbox" />
+                        Complete genome
+                      </label>
+                    </div>
+                  </div>
+
+                  <button
+                      class="btn btn-bakta"
+                      :disabled="unmatchedSequences.filter(s => s.sequence).length === 0"
+                      @click="analyzeWithBakta"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
+                         fill="none" stroke="currentColor" stroke-width="2">
+                      <polygon points="5 3 19 12 5 21 5 3"/>
+                    </svg>
+                    Run Bakta Annotation ({{ unmatchedSequences.filter(s => s.sequence).length }} sequences)
+                  </button>
+                </div>
+
+                <!-- Progress -->
+                <div v-if="baktaAnalyzing" class="bakta-progress">
+                  <div class="bakta-progress-label">{{ baktaProgressLabel }}</div>
+                  <div class="bakta-progress-bar">
+                    <div class="bakta-progress-fill" :style="{ width: baktaProgressPercent + '%' }"></div>
+                  </div>
+                  <span class="bakta-progress-pct">{{ baktaProgressPercent }}%</span>
+                  <p class="bakta-note">Bakta annotation typically takes 10–15 minutes depending on genome size.</p>
+                  <button class="btn btn-secondary-psos" style="margin-top: 0.5rem"
+                          @click="baktaAbortController?.abort()">Cancel</button>
+                </div>
+
+                <!-- Error -->
+                <div v-if="baktaError && !baktaAnalyzing" class="psos-error">
+                  <pre class="bakta-error-text">{{ baktaError }}</pre>
+                  <p class="psos-error-hint">
+                    <button class="btn btn-secondary-psos" style="margin-top: 0.5rem" @click="analyzeWithBakta">Retry</button>
+                  </p>
+                </div>
+
+                <!-- Results -->
+                <div v-if="baktaResult && !baktaAnalyzing" class="bakta-results">
+                  <!-- Web viewer link -->
+                  <a :href="baktaResult.webViewerUrl" target="_blank" class="bakta-viewer-link">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
+                         fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+                      <polyline points="15 3 21 3 21 9"/>
+                      <line x1="10" y1="14" x2="21" y2="3"/>
+                    </svg>
+                    Open in Bakta Web Viewer →
+                  </a>
+
+                  <!-- Stats -->
+                  <div v-if="baktaResult.stats" class="bakta-stats-grid">
+                    <div v-if="baktaResult.stats.no_cdss !== undefined" class="bakta-stat">
+                      <span class="bakta-stat__value">{{ baktaResult.stats.no_cdss }}</span>
+                      <span class="bakta-stat__label">CDSs</span>
+                    </div>
+                    <div v-if="baktaResult.stats.no_hypotheticals !== undefined" class="bakta-stat">
+                      <span class="bakta-stat__value">{{ baktaResult.stats.no_hypotheticals }}</span>
+                      <span class="bakta-stat__label">Hypotheticals</span>
+                    </div>
+                    <div v-if="baktaResult.stats.no_trnas !== undefined" class="bakta-stat">
+                      <span class="bakta-stat__value">{{ baktaResult.stats.no_trnas }}</span>
+                      <span class="bakta-stat__label">tRNAs</span>
+                    </div>
+                    <div v-if="baktaResult.stats.no_rrnas !== undefined" class="bakta-stat">
+                      <span class="bakta-stat__value">{{ baktaResult.stats.no_rrnas }}</span>
+                      <span class="bakta-stat__label">rRNAs</span>
+                    </div>
+                    <div v-if="baktaResult.stats.no_ncrnas !== undefined" class="bakta-stat">
+                      <span class="bakta-stat__value">{{ baktaResult.stats.no_ncrnas }}</span>
+                      <span class="bakta-stat__label">ncRNAs</span>
+                    </div>
+                    <div v-if="baktaResult.stats.no_pseudogenes !== undefined" class="bakta-stat">
+                      <span class="bakta-stat__value">{{ baktaResult.stats.no_pseudogenes }}</span>
+                      <span class="bakta-stat__label">Pseudogenes</span>
+                    </div>
+                    <div v-if="baktaResult.stats.gc !== undefined" class="bakta-stat">
+                      <span class="bakta-stat__value">{{ (baktaResult.stats.gc * 100).toFixed(1) }}%</span>
+                      <span class="bakta-stat__label">GC content</span>
+                    </div>
+                    <div v-if="baktaResult.stats.size !== undefined" class="bakta-stat">
+                      <span class="bakta-stat__value">{{ Math.round(baktaResult.stats.size / 1000) }} kb</span>
+                      <span class="bakta-stat__label">Genome size</span>
+                    </div>
+                  </div>
+
+                  <!-- Feature type breakdown -->
+                  <div v-if="baktaResult.features && baktaResult.features.length > 0" class="bakta-feature-types">
+                    <h4 class="bakta-section-title">Feature types</h4>
+                    <div class="bakta-feature-grid">
+                      <div
+                          v-for="[type, count] in Object.entries(groupFeaturesByType(baktaResult.features)).sort((a,b) => b[1]-a[1])"
+                          :key="type"
+                          class="bakta-feature-type"
+                      >
+                        <span class="bakta-feature-type__name">{{ type }}</span>
+                        <span class="bakta-feature-type__count">{{ count }}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Download links -->
+                  <div v-if="baktaResult.resultFiles" class="bakta-downloads">
+                    <h4 class="bakta-section-title">Download results</h4>
+                    <div class="bakta-download-links">
+                      <a v-if="baktaResult.resultFiles.TSV" :href="baktaResult.resultFiles.TSV" target="_blank" class="bakta-dl-link">TSV</a>
+                      <a v-if="baktaResult.resultFiles.GFF3" :href="baktaResult.resultFiles.GFF3" target="_blank" class="bakta-dl-link">GFF3</a>
+                      <a v-if="baktaResult.resultFiles.GBFF" :href="baktaResult.resultFiles.GBFF" target="_blank" class="bakta-dl-link">GenBank</a>
+                      <a v-if="baktaResult.resultFiles.FAA" :href="baktaResult.resultFiles.FAA" target="_blank" class="bakta-dl-link">FAA (proteins)</a>
+                      <a v-if="baktaResult.resultFiles.EMBL" :href="baktaResult.resultFiles.EMBL" target="_blank" class="bakta-dl-link">EMBL</a>
+                      <a v-if="baktaResult.resultFiles.JSON" :href="baktaResult.resultFiles.JSON" target="_blank" class="bakta-dl-link">JSON</a>
+                      <a v-if="baktaResult.resultFiles.TXTLogs" :href="baktaResult.resultFiles.TXTLogs" target="_blank" class="bakta-dl-link">Log</a>
+                    </div>
+                  </div>
+
+                  <!-- Re-run -->
+                  <button class="btn btn-secondary-psos" style="margin-top: 0.5rem; align-self: flex-start"
+                          @click="baktaResult = null; baktaError = ''">
+                    Re-run with different settings
+                  </button>
                 </div>
               </div>
             </div>
@@ -1844,6 +2067,202 @@ tbody tr:hover { background: var(--color-background-soft); }
 .btn-primary { background: hsla(160, 100%, 37%, 1); color: white; }
 .btn-primary:hover { background: hsla(160, 100%, 32%, 1); }
 .btn-secondary { background: transparent; color: hsla(160, 100%, 37%, 1); border: 1px solid hsla(160, 100%, 37%, 1); }
+
+/* ── Bakta Panel ──────────────────────────────────────────────────────────── */
+.bakta-panel {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  overflow: hidden;
+  margin-top: 1.5rem;
+  background: var(--color-background-soft);
+}
+
+.bakta-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.25rem;
+  cursor: pointer;
+  user-select: none;
+  gap: 0.75rem;
+  transition: background 0.15s;
+}
+.bakta-header:hover { background: rgba(56, 161, 105, 0.06); }
+
+.bakta-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 500;
+  color: var(--color-heading);
+}
+.bakta-title svg { color: #38a169; flex-shrink: 0; }
+
+.bakta-badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.15rem 0.5rem;
+  border-radius: 9999px;
+}
+.bakta-badge--done { background: rgba(56, 161, 105, 0.15); color: #38a169; }
+.bakta-badge--running { background: rgba(59, 130, 246, 0.15); color: #3b82f6; }
+
+.bakta-content {
+  padding: 0 1.25rem 1.25rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.bakta-description {
+  margin: 0.875rem 0 1rem;
+  font-size: 0.875rem;
+  color: var(--color-text);
+  opacity: 0.85;
+  line-height: 1.5;
+}
+.bakta-description a { color: #38a169; font-weight: 600; text-decoration: none; }
+.bakta-description a:hover { text-decoration: underline; }
+
+.bakta-form { display: flex; flex-direction: column; gap: 0.75rem; }
+.bakta-form-row { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: flex-end; }
+
+.bakta-field { display: flex; flex-direction: column; gap: 0.3rem; flex: 1; min-width: 140px; }
+.bakta-field label { font-size: 0.8rem; font-weight: 600; color: var(--color-text); opacity: 0.8; }
+.bakta-optional { font-weight: 400; }
+.bakta-field--inline { flex: unset; min-width: unset; justify-content: center; }
+
+.bakta-input {
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-background);
+  color: var(--color-text);
+  font-size: 0.9rem;
+}
+.bakta-input:focus { outline: 2px solid #38a169; outline-offset: -1px; }
+
+.bakta-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.875rem;
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.btn-bakta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 1.25rem;
+  background: #38a169;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  align-self: flex-start;
+  transition: background 0.15s;
+}
+.btn-bakta:hover:not(:disabled) { background: #2f855a; }
+.btn-bakta:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Progress */
+.bakta-progress { display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.75rem; }
+.bakta-progress-label { font-size: 0.85rem; color: var(--color-text); opacity: 0.8; }
+.bakta-progress-bar {
+  height: 6px;
+  background: var(--color-background-mute);
+  border-radius: 9999px;
+  overflow: hidden;
+}
+.bakta-progress-fill {
+  height: 100%;
+  background: #38a169;
+  border-radius: 9999px;
+  transition: width 0.4s ease;
+}
+.bakta-progress-pct { font-size: 0.75rem; color: var(--color-text); opacity: 0.7; text-align: right; }
+.bakta-note { font-size: 0.78rem; color: var(--color-text); opacity: 0.65; margin: 0; }
+
+/* Results */
+.bakta-results { display: flex; flex-direction: column; gap: 1rem; margin-top: 1rem; }
+
+.bakta-viewer-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.55rem 1rem;
+  background: rgba(56, 161, 105, 0.1);
+  border: 1px solid rgba(56, 161, 105, 0.35);
+  border-radius: 6px;
+  color: #38a169;
+  text-decoration: none;
+  font-size: 0.875rem;
+  font-weight: 600;
+  align-self: flex-start;
+  transition: background 0.15s;
+}
+.bakta-viewer-link:hover { background: rgba(56, 161, 105, 0.2); }
+
+.bakta-stats-grid { display: flex; flex-wrap: wrap; gap: 0.6rem; }
+.bakta-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0.5rem 0.9rem;
+  background: var(--color-background);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  min-width: 80px;
+}
+.bakta-stat__value { font-size: 1.25rem; font-weight: 700; color: #38a169; line-height: 1.2; }
+.bakta-stat__label { font-size: 0.7rem; color: var(--color-text); opacity: 0.7; text-align: center; margin-top: 0.15rem; }
+
+.bakta-section-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-text);
+  opacity: 0.7;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin: 0 0 0.5rem;
+}
+
+.bakta-feature-grid { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.bakta-feature-type {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.65rem;
+  background: var(--color-background);
+  border: 1px solid var(--color-border);
+  border-radius: 9999px;
+  font-size: 0.78rem;
+}
+.bakta-feature-type__name { color: var(--color-text); }
+.bakta-feature-type__count { font-weight: 700; color: #38a169; }
+
+.bakta-download-links { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.bakta-dl-link {
+  padding: 0.3rem 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  font-size: 0.8rem;
+  color: var(--color-text);
+  text-decoration: none;
+  transition: border-color 0.15s, color 0.15s;
+}
+.bakta-dl-link:hover { border-color: #38a169; color: #38a169; }
+
+.bakta-error-text {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: monospace;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
 
 @media (max-width: 900px) { .charts-grid { grid-template-columns: 1fr; } }
 @media (max-width: 600px) {
