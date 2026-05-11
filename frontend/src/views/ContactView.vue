@@ -8,6 +8,9 @@ const contact = {
   orcid: 'https://orcid.org/0009-0001-3265-8654',
   linkedin: 'https://www.linkedin.com/in/maria-hansen-3aab551a9',
 }
+const github_refs = {
+  ai_db_repository: 'https://github.com/hansen-maria/AI-DB',
+}
 </script>
 
 <template>
@@ -106,7 +109,7 @@ const contact = {
         <line x1="12" y1="16" x2="12.01" y2="16"/>
       </svg>
       For bug reports and feature requests, please open an issue on
-      <a :href="contact.github + '/issues'" target="_blank" rel="noopener noreferrer">GitHub</a>.
+      <a :href="github_refs.ai_db_repository + '/issues'" target="_blank" rel="noopener noreferrer">GitHub</a>.
     </div>
   </div>
 </template>
