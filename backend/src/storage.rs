@@ -345,3 +345,120 @@ pub fn count_psos_results(conn: &Connection, job_id: &str) -> Result<usize, rusq
         |row| row.get::<_, i64>(0).map(|c| c as usize),
     )
 }
+
+// ============================================================================
+// Bakta Job State Storage
+// ============================================================================
+
+use crate::models::{StoredBaktaJob, SaveBaktaJobRequest};
+
+/// Initialize the bakta_jobs table.
+/// One row per AI-DB job (UNIQUE on job_id) – upserted on every progress step.
+pub fn init_bakta_table(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS bakta_jobs (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id            TEXT    NOT NULL UNIQUE,
+            bakta_job_id      TEXT    NOT NULL,
+            bakta_secret      TEXT    NOT NULL,
+            sequence_type     TEXT    NOT NULL,
+            status            TEXT    NOT NULL DEFAULT 'INIT',
+            progress_label    TEXT    NOT NULL DEFAULT '',
+            progress_percent  INTEGER NOT NULL DEFAULT 0,
+            result_json       TEXT,
+            created_at        TEXT    NOT NULL,
+            updated_at        TEXT    NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_bakta_jobs_job_id  ON bakta_jobs(job_id);
+        CREATE INDEX IF NOT EXISTS idx_bakta_jobs_updated ON bakta_jobs(updated_at);",
+    )?;
+
+    tracing::info!("Bakta jobs table initialized");
+    Ok(())
+}
+
+/// Upsert Bakta job state (INSERT … ON CONFLICT … DO UPDATE).
+/// Safe to call on every progress tick.
+pub fn upsert_bakta_job(
+    conn: &Connection,
+    job_id: &str,
+    req: &SaveBaktaJobRequest,
+) -> Result<(), rusqlite::Error> {
+    let now = Utc::now().to_rfc3339();
+
+    conn.execute(
+        "INSERT INTO bakta_jobs
+             (job_id, bakta_job_id, bakta_secret, sequence_type,
+              status, progress_label, progress_percent, result_json,
+              created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)
+         ON CONFLICT(job_id) DO UPDATE SET
+             bakta_job_id     = excluded.bakta_job_id,
+             bakta_secret     = excluded.bakta_secret,
+             sequence_type    = excluded.sequence_type,
+             status           = excluded.status,
+             progress_label   = excluded.progress_label,
+             progress_percent = excluded.progress_percent,
+             result_json      = excluded.result_json,
+             updated_at       = excluded.updated_at",
+        params![
+            job_id,
+            req.bakta_job_id,
+            req.bakta_secret,
+            req.sequence_type,
+            req.status,
+            req.progress_label,
+            req.progress_percent,
+            req.result_json,
+            now,
+        ],
+    )?;
+
+    Ok(())
+}
+
+/// Load persisted Bakta state for an AI-DB job. Returns None when no row exists.
+pub fn load_bakta_job(
+    conn: &Connection,
+    job_id: &str,
+) -> Result<Option<StoredBaktaJob>, rusqlite::Error> {
+    conn.query_row(
+        "SELECT job_id, bakta_job_id, bakta_secret, sequence_type,
+                status, progress_label, progress_percent, result_json,
+                created_at, updated_at
+         FROM bakta_jobs WHERE job_id = ?1",
+        [job_id],
+        |row| {
+            Ok(StoredBaktaJob {
+                job_id:           row.get(0)?,
+                bakta_job_id:     row.get(1)?,
+                bakta_secret:     row.get(2)?,
+                sequence_type:    row.get(3)?,
+                status:           row.get(4)?,
+                progress_label:   row.get(5)?,
+                progress_percent: row.get(6)?,
+                result_json:      row.get(7)?,
+                created_at:       row.get(8)?,
+                updated_at:       row.get(9)?,
+            })
+        },
+    )
+        .optional()
+}
+
+/// Delete Bakta state for an AI-DB job. Idempotent.
+pub fn delete_bakta_job(conn: &Connection, job_id: &str) -> Result<usize, rusqlite::Error> {
+    conn.execute("DELETE FROM bakta_jobs WHERE job_id = ?1", [job_id])
+}
+
+/// Delete orphaned Bakta rows whose parent job no longer exists.
+pub fn cleanup_orphaned_bakta_jobs(conn: &Connection) -> Result<usize, rusqlite::Error> {
+    let rows = conn.execute(
+        "DELETE FROM bakta_jobs WHERE job_id NOT IN (SELECT job_id FROM jobs)",
+        [],
+    )?;
+    if rows > 0 {
+        tracing::info!("Cleaned up {} orphaned Bakta job states", rows);
+    }
+    Ok(rows)
+}

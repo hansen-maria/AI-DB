@@ -34,11 +34,13 @@ use utoipa_swagger_ui::SwaggerUi;
 use crate::handlers::{
     create_job, db_info, delete_job, delete_psos_results, download_job, get_job, get_job_stats,
     get_psos_results, health_check, list_jobs, save_psos_results,
+    save_bakta_job, get_bakta_job, delete_bakta_job,
 };
 use crate::models::{
     ErrorResponse, FunctionalStats, JobCreateResponse, JobResponse, JobStatus, JobSummary,
     PaginatedJobResponse, PaginatedJobsResponse, PaginationInfo, PsosResult, PsosResultsResponse,
     SavePsosResultsRequest, SavePsosResultsResponse, SequenceInfo,
+    StoredBaktaJob, SaveBaktaJobRequest, SaveBaktaJobResponse, BaktaJobStateResponse,
 };
 use crate::state::AppState;
 
@@ -62,6 +64,7 @@ use crate::state::AppState;
     tags(
         (name = "Jobs", description = "Annotation job management - create and query jobs"),
         (name = "psos", description = "Psos analysis results storage"),
+        (name = "bakta", description = "Bakta job state persistence"),
         (name = "Health", description = "Health check and database info")
     ),
     paths(
@@ -74,6 +77,9 @@ use crate::state::AppState;
         handlers::psos::save_psos_results,
         handlers::psos::get_psos_results,
         handlers::psos::delete_psos_results,
+        handlers::bakta::save_bakta_job,
+        handlers::bakta::get_bakta_job,
+        handlers::bakta::delete_bakta_job,
         handlers::health::health_check,
         handlers::health::db_info
     ),
@@ -91,7 +97,11 @@ use crate::state::AppState;
         PsosResult,
         PsosResultsResponse,
         SavePsosResultsRequest,
-        SavePsosResultsResponse
+        SavePsosResultsResponse,
+        StoredBaktaJob,
+        SaveBaktaJobRequest,
+        SaveBaktaJobResponse,
+        BaktaJobStateResponse,
     ))
 )]
 struct ApiDoc;
@@ -140,6 +150,13 @@ async fn main() {
             get(get_psos_results)
                 .post(save_psos_results)
                 .delete(delete_psos_results),
+        )
+        // Bakta job state routes
+        .route(
+            "/api/job/{job_id}/bakta",
+            get(get_bakta_job)
+                .post(save_bakta_job)
+                .delete(delete_bakta_job),
         )
         .route("/api/jobs/", get(list_jobs))
         // Swagger UI

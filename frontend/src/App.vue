@@ -5,7 +5,7 @@ import { RouterLink, RouterView, useRoute } from 'vue-router'
 const isDarkMode = ref(false)
 const route = useRoute()
 const mobileMenuOpen = ref(false)
-const alertDismissed = ref(false)
+const alertDismissed = ref(true)
 
 const activeAlert = {
   id: 'psos-downtime-2026-04',

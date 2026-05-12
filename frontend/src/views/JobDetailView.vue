@@ -13,7 +13,8 @@ import {
   savePsosResults, loadPsosResults
 } from '../api/psos.ts'
 import {
-  runBaktaAnnotation, groupFeaturesByType, detectSequenceType,
+  runBaktaAnnotation, resumeBaktaAnnotation, groupFeaturesByType, detectSequenceType,
+  loadBaktaState, deleteBaktaState,
   type BaktaJobOptions, type BaktaAnnotationSummary, type SequenceType
 } from '../api/bakta.ts'
 
@@ -296,7 +297,8 @@ async function analyzeWithBakta() {
           baktaProgressLabel.value = stage
           baktaProgressPercent.value = pct
         },
-        baktaAbortController.value.signal
+        baktaAbortController.value.signal,
+        jobId.value,  // AI-DB job ID for state persistence
     )
   } catch (e) {
     if (e instanceof Error && e.message === 'Aborted') {
@@ -460,6 +462,8 @@ async function loadJob() {
       }
       // Load existing Psos results
       await loadExistingPsosResults()
+      // Load existing Bakta state (restores result or resumes polling)
+      await loadExistingBaktaState()
     }
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Failed to load job'
@@ -479,6 +483,66 @@ async function loadExistingPsosResults() {
   } catch (e) {
     console.error('Failed to load Psos results:', e)
   }
+}
+
+async function loadExistingBaktaState() {
+  const persisted = await loadBaktaState(jobId.value)
+  if (!persisted) return
+
+  console.log('[Bakta] Persisted state found | status:', persisted.status, '| type:', persisted.sequence_type)
+  showBaktaPanel.value = true
+
+  // Already done – restore result from JSON
+  if (persisted.status === 'SUCCESSFUL' && persisted.result_json) {
+    try {
+      baktaResult.value = JSON.parse(persisted.result_json) as BaktaAnnotationSummary
+      baktaProgressPercent.value = 100
+      baktaProgressLabel.value = 'Done'
+      console.log('[Bakta] Restored completed result from persisted state')
+    } catch {
+      console.warn('[Bakta] Failed to parse persisted result JSON')
+    }
+    return
+  }
+
+  // Error state – restore error message
+  if (persisted.status === 'ERROR') {
+    baktaError.value = 'Bakta job had previously ended with status: ERROR'
+    baktaProgressPercent.value = persisted.progress_percent
+    baktaProgressLabel.value = persisted.progress_label
+    return
+  }
+
+  // Still running – restore progress and resume polling in background
+  baktaProgressPercent.value = persisted.progress_percent
+  baktaProgressLabel.value = persisted.progress_label + ' (resuming…)'
+  baktaAnalyzing.value = true
+  baktaError.value = ''
+  baktaAbortController.value = new AbortController()
+
+  console.log('[Bakta] Resuming background polling…')
+
+  resumeBaktaAnnotation(
+      jobId.value,
+      persisted,
+      (stage, pct) => {
+        baktaProgressLabel.value = stage
+        baktaProgressPercent.value = pct
+      },
+      baktaAbortController.value.signal,
+  )
+      .then(summary => { baktaResult.value = summary })
+      .catch(e => {
+        if (e instanceof Error && e.message === 'Aborted') {
+          baktaError.value = 'Analysis cancelled.'
+        } else {
+          baktaError.value = e instanceof Error ? e.message : 'Bakta analysis failed.'
+        }
+      })
+      .finally(() => {
+        baktaAnalyzing.value = false
+        baktaAbortController.value = null
+      })
 }
 
 async function loadStats() {
@@ -1221,8 +1285,8 @@ onUnmounted(() => {
 
                   <!-- Re-run -->
                   <button class="btn btn-secondary-psos" style="margin-top: 0.5rem; align-self: flex-start"
-                          @click="baktaResult = null; baktaError = ''">
-                    Re-run with different settings
+                          @click="deleteBaktaState(jobId); baktaResult = null; baktaError = ''">
+                    Re-run job
                   </button>
                 </div>
               </div>

@@ -74,6 +74,11 @@ impl AppState {
             tracing::warn!("Failed to initialize psos_results table: {}", e);
         }
 
+        // Initialize bakta_jobs table
+        if let Err(e) = storage::init_bakta_table(&jobs_db) {
+            tracing::warn!("Failed to initialize bakta_jobs table: {}", e);
+        }
+
         // Cleanup old jobs on startup
         if let Err(e) = storage::cleanup_old_jobs(&jobs_db) {
             tracing::warn!("Failed to cleanup old jobs: {}", e);
@@ -82,6 +87,11 @@ impl AppState {
         // Cleanup orphaned psos results
         if let Err(e) = storage::cleanup_orphaned_psos_results(&jobs_db) {
             tracing::warn!("Failed to cleanup orphaned psos results: {}", e);
+        }
+
+        // Cleanup orphaned bakta job states
+        if let Err(e) = storage::cleanup_orphaned_bakta_jobs(&jobs_db) {
+            tracing::warn!("Failed to cleanup orphaned bakta job states: {}", e);
         }
 
         // Load existing jobs into memory
@@ -229,6 +239,13 @@ impl AppState {
             }
         }
 
+        // Delete bakta state
+        if let Some(conn) = self.open_jobs_db() {
+            if let Err(e) = storage::delete_bakta_job(&conn, job_id) {
+                tracing::warn!("Failed to delete bakta state for job {}: {}", job_id, e);
+            }
+        }
+
         // Delete from database
         let db_deleted = if let Some(conn) = self.open_jobs_db() {
             storage::delete_job(&conn, job_id).unwrap_or(false)
@@ -274,6 +291,48 @@ impl AppState {
         self.open_jobs_db()
             .and_then(|conn| storage::count_psos_results(&conn, job_id).ok())
             .unwrap_or(0)
+    }
+
+    // ========================================================================
+    // Bakta Job State Methods
+    // ========================================================================
+
+    /// Upsert Bakta job state (called on every progress step).
+    pub fn upsert_bakta_job(
+        &self,
+        job_id: &str,
+        req: &crate::models::SaveBaktaJobRequest,
+    ) -> Result<(), String> {
+        let conn = self
+            .open_jobs_db()
+            .ok_or_else(|| "Failed to open database".to_string())?;
+
+        storage::upsert_bakta_job(&conn, job_id, req)
+            .map_err(|e| format!("Failed to upsert bakta job state: {e}"))
+    }
+
+    /// Load persisted Bakta state for an AI-DB job.
+    pub fn load_bakta_job(
+        &self,
+        job_id: &str,
+    ) -> Result<Option<crate::models::StoredBaktaJob>, String> {
+        let conn = self
+            .open_jobs_db()
+            .ok_or_else(|| "Failed to open database".to_string())?;
+
+        storage::load_bakta_job(&conn, job_id)
+            .map_err(|e| format!("Failed to load bakta job state: {e}"))
+    }
+
+    /// Delete persisted Bakta state for an AI-DB job. Idempotent.
+    pub fn delete_bakta_job(&self, job_id: &str) -> Result<(), String> {
+        let conn = self
+            .open_jobs_db()
+            .ok_or_else(|| "Failed to open database".to_string())?;
+
+        storage::delete_bakta_job(&conn, job_id)
+            .map(|_| ())
+            .map_err(|e| format!("Failed to delete bakta job state: {e}"))
     }
 }
 
