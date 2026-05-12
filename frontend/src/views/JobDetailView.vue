@@ -13,8 +13,8 @@ import {
   savePsosResults, loadPsosResults
 } from '../api/psos.ts'
 import {
-  runBaktaAnnotation, groupFeaturesByType,
-  type BaktaJobOptions, type BaktaAnnotationSummary
+  runBaktaAnnotation, groupFeaturesByType, detectSequenceType,
+  type BaktaJobOptions, type BaktaAnnotationSummary, type SequenceType
 } from '../api/bakta.ts'
 
 const route = useRoute()
@@ -148,9 +148,16 @@ const pagination = computed(() => {
   }
 })
 
-// Unmatched sequences for Psos analysis
+// Unmatched sequences for Psos / Bakta analysis
 const unmatchedSequences = computed(() => {
   return allSequences.value.filter(seq => !seq.annotation_source)
+})
+
+// Auto-detect whether unmatched sequences are protein or nucleotide
+const detectedSequenceType = computed<SequenceType>(() => {
+  const seqs = unmatchedSequences.value.filter(s => s.sequence)
+  if (seqs.length === 0) return 'protein'
+  return detectSequenceType(seqs.map(s => ({ sequence: s.sequence })))
 })
 
 // Analyze unmatched sequences with Psos API
@@ -1048,29 +1055,42 @@ onUnmounted(() => {
               <div v-if="showBaktaPanel" class="bakta-content">
                 <p class="bakta-description">
                   <a href="https://bakta.computational.bio" target="_blank">Bakta</a>
-                  is a rapid, standardized bacterial genome annotation tool. It performs full annotation
-                  (CDSs, tRNAs, rRNAs, ncRNAs, CRISPRs) via the free Bakta Web API.
-                  <strong>Input must be nucleotide sequences.</strong>
+                  is a rapid, standardized annotation tool for bacterial genomes and proteins.
+                  <span v-if="detectedSequenceType === 'protein'">
+                    Sequences detected as <strong>protein</strong> — using the
+                    <strong>bakta_proteins</strong> workflow (V2 API). No additional configuration needed.
+                  </span>
+                  <span v-else>
+                    Sequences detected as <strong>nucleotide</strong> — using the full
+                    <strong>genome annotation</strong> workflow (V1 API).
+                  </span>
                 </p>
 
                 <!-- Config form (only before first run) -->
                 <div v-if="!baktaAnalyzing && !baktaResult" class="bakta-form">
-                  <div class="bakta-form-row">
-                    <div class="bakta-field">
-                      <label>Genus <span class="bakta-optional">(optional)</span></label>
-                      <input v-model="baktaGenus" type="text" placeholder="e.g. Escherichia" class="bakta-input" />
+                  <!-- Nucleotide-only options -->
+                  <template v-if="detectedSequenceType === 'nucleotide'">
+                    <div class="bakta-form-row">
+                      <div class="bakta-field">
+                        <label>Genus <span class="bakta-optional">(optional)</span></label>
+                        <input v-model="baktaGenus" type="text" placeholder="e.g. Escherichia" class="bakta-input" />
+                      </div>
+                      <div class="bakta-field">
+                        <label>Species <span class="bakta-optional">(optional)</span></label>
+                        <input v-model="baktaSpecies" type="text" placeholder="e.g. coli" class="bakta-input" />
+                      </div>
+                      <div class="bakta-field bakta-field--inline">
+                        <label class="bakta-checkbox-label">
+                          <input v-model="baktaCompleteGenome" type="checkbox" />
+                          Complete genome
+                        </label>
+                      </div>
                     </div>
-                    <div class="bakta-field">
-                      <label>Species <span class="bakta-optional">(optional)</span></label>
-                      <input v-model="baktaSpecies" type="text" placeholder="e.g. coli" class="bakta-input" />
-                    </div>
-                    <div class="bakta-field bakta-field--inline">
-                      <label class="bakta-checkbox-label">
-                        <input v-model="baktaCompleteGenome" type="checkbox" />
-                        Complete genome
-                      </label>
-                    </div>
-                  </div>
+                  </template>
+                  <!-- Protein: no configurable options (EmptyConfig) -->
+                  <p v-else class="bakta-note" style="margin-bottom: 0.5rem;">
+                    The bakta_proteins workflow requires no additional configuration.
+                  </p>
 
                   <button
                       class="btn btn-bakta"
@@ -1092,7 +1112,10 @@ onUnmounted(() => {
                     <div class="bakta-progress-fill" :style="{ width: baktaProgressPercent + '%' }"></div>
                   </div>
                   <span class="bakta-progress-pct">{{ baktaProgressPercent }}%</span>
-                  <p class="bakta-note">Bakta annotation typically takes 10–15 minutes depending on genome size.</p>
+                  <p class="bakta-note">
+                    <span v-if="detectedSequenceType === 'protein'">Protein annotation typically takes 2–5 minutes.</span>
+                    <span v-else>Genome annotation typically takes 10–15 minutes.</span>
+                  </p>
                   <button class="btn btn-secondary-psos" style="margin-top: 0.5rem"
                           @click="baktaAbortController?.abort()">Cancel</button>
                 </div>
@@ -1169,17 +1192,30 @@ onUnmounted(() => {
                     </div>
                   </div>
 
-                  <!-- Download links -->
-                  <div v-if="baktaResult.resultFiles" class="bakta-downloads">
+                  <!-- Download links – nucleotide (V1) -->
+                  <div v-if="baktaResult.resultFilesNucleotide" class="bakta-downloads">
                     <h4 class="bakta-section-title">Download results</h4>
                     <div class="bakta-download-links">
-                      <a v-if="baktaResult.resultFiles.TSV" :href="baktaResult.resultFiles.TSV" target="_blank" class="bakta-dl-link">TSV</a>
-                      <a v-if="baktaResult.resultFiles.GFF3" :href="baktaResult.resultFiles.GFF3" target="_blank" class="bakta-dl-link">GFF3</a>
-                      <a v-if="baktaResult.resultFiles.GBFF" :href="baktaResult.resultFiles.GBFF" target="_blank" class="bakta-dl-link">GenBank</a>
-                      <a v-if="baktaResult.resultFiles.FAA" :href="baktaResult.resultFiles.FAA" target="_blank" class="bakta-dl-link">FAA (proteins)</a>
-                      <a v-if="baktaResult.resultFiles.EMBL" :href="baktaResult.resultFiles.EMBL" target="_blank" class="bakta-dl-link">EMBL</a>
-                      <a v-if="baktaResult.resultFiles.JSON" :href="baktaResult.resultFiles.JSON" target="_blank" class="bakta-dl-link">JSON</a>
-                      <a v-if="baktaResult.resultFiles.TXTLogs" :href="baktaResult.resultFiles.TXTLogs" target="_blank" class="bakta-dl-link">Log</a>
+                      <a v-if="baktaResult.resultFilesNucleotide.TSV"    :href="baktaResult.resultFilesNucleotide.TSV"    target="_blank" class="bakta-dl-link">TSV</a>
+                      <a v-if="baktaResult.resultFilesNucleotide.GFF3"   :href="baktaResult.resultFilesNucleotide.GFF3"   target="_blank" class="bakta-dl-link">GFF3</a>
+                      <a v-if="baktaResult.resultFilesNucleotide.GBFF"   :href="baktaResult.resultFilesNucleotide.GBFF"   target="_blank" class="bakta-dl-link">GenBank</a>
+                      <a v-if="baktaResult.resultFilesNucleotide.FAA"    :href="baktaResult.resultFilesNucleotide.FAA"    target="_blank" class="bakta-dl-link">FAA (proteins)</a>
+                      <a v-if="baktaResult.resultFilesNucleotide.FFN"    :href="baktaResult.resultFilesNucleotide.FFN"    target="_blank" class="bakta-dl-link">FFN (genes)</a>
+                      <a v-if="baktaResult.resultFilesNucleotide.FNA"    :href="baktaResult.resultFilesNucleotide.FNA"    target="_blank" class="bakta-dl-link">FNA</a>
+                      <a v-if="baktaResult.resultFilesNucleotide.EMBL"   :href="baktaResult.resultFilesNucleotide.EMBL"   target="_blank" class="bakta-dl-link">EMBL</a>
+                      <a v-if="baktaResult.resultFilesNucleotide.JSON"   :href="baktaResult.resultFilesNucleotide.JSON"   target="_blank" class="bakta-dl-link">JSON</a>
+                      <a v-if="baktaResult.resultFilesNucleotide.TXTLogs" :href="baktaResult.resultFilesNucleotide.TXTLogs" target="_blank" class="bakta-dl-link">Log</a>
+                    </div>
+                  </div>
+
+                  <!-- Download links – protein (V2) -->
+                  <div v-if="baktaResult.resultFilesProtein" class="bakta-downloads">
+                    <h4 class="bakta-section-title">Download results</h4>
+                    <div class="bakta-download-links">
+                      <a v-if="baktaResult.resultFilesProtein.tsv"              :href="baktaResult.resultFilesProtein.tsv"              target="_blank" class="bakta-dl-link">TSV</a>
+                      <a v-if="baktaResult.resultFilesProtein.faa"              :href="baktaResult.resultFilesProtein.faa"              target="_blank" class="bakta-dl-link">FAA (proteins)</a>
+                      <a v-if="baktaResult.resultFilesProtein.hypotheticals_tsv" :href="baktaResult.resultFilesProtein.hypotheticals_tsv" target="_blank" class="bakta-dl-link">Hypotheticals TSV</a>
+                      <a v-if="baktaResult.resultFilesProtein.json"             :href="baktaResult.resultFilesProtein.json"             target="_blank" class="bakta-dl-link">JSON</a>
                     </div>
                   </div>
 
