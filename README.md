@@ -3,21 +3,25 @@
 Hash-Based Annotation Service for Microbial Sequencing Data
 
 AI-DB accelerates the analysis of microbial sequencing data through cryptographic hash-based annotations
-using the [Bakta](https://github.com/oschwengers/bakta) database (~350 million protein sequences).
+using the [Bakta](https://github.com/oschwengers/bakta) database (~350 million protein sequences) alongside a custom, 
+user-expandable AI-DB Annotations Database.
 
 ## Features
 
 - **Fast**: Hash-based annotations in seconds instead of hours
 - **Privacy**: Sequence data is processed locally as MD5 hashes
 - **Comprehensive**: Access to UniRef100, UniParc, and NCBI protein annotations
+- **Extensible Knowledge Base**: Further analyze unmatched sequences using Psos and Bakta. 
+    You can ingest new Bakta results directly into the custom AI-DB annotations database 
+    to continuously build and grow the knowledge base.
 - **Functional Analysis**: Interactive visualizations of COG categories, EC classes, and top genes/products
 - **Advanced Search**: Real-time client-side filtering by sequence ID, gene name, product, length, and functional categories
-- **Persistent**: Jobs are stored for 30 days and survive container restarts
+- **Persistent**: Jobs are stored for 30 days
 - **User-friendly**: Jobs are associated with users via cookies
 - **Shareable**: Jobs can be shared via Job-ID
 - **Export**: Download results in TSV, JSON, FASTA, or GFF3 format
 - **Pagination**: Efficient browsing of large result sets
-- **Filtering**: Filter sequences by annotation source (hash match, alignment, no match)
+- **Filtering**: Filter sequences by annotation source (hash match, no match)
 
 ## Project Structure
 
@@ -35,14 +39,18 @@ ai-db/
 │   │   ├── router/
 │   │   │   └── index.ts
 │   │   ├── api/
-│   │   │   └── jobs.ts             # API client with types
+│   │   │   ├── bakta.ts            # API client for Bakta analysis
+│   │   │   ├── jobs.ts             # API client with types
+│   │   │   └── psos.ts             # API client for Psos analysis
 │   │   ├── views/
 │   │   │   ├── HomeView.vue        # Landing page
+│   │   │   ├── ContactView.vue     # Contact page
 │   │   │   ├── SubmitJobView.vue   # FASTA upload
-│   │   │   ├── JobDetailView.vue   # Job details with tabs, search & filter
+│   │   │   ├── JobDetailView.vue   # Job details with tabs, search, analysis & ingestion
 │   │   │   └── JobListView.vue     # Jobs list (own jobs)
 │   │   └── assets/
-│   │       └── main.css
+│   │       ├── main.css
+│   │       └── logo-*.png
 │   └── public/
 └── backend/                        # Rust/Axum Backend
     ├── Dockerfile
@@ -50,23 +58,29 @@ ai-db/
     └── src/
         ├── main.rs                 # Entry point, router, OpenAPI
         ├── auth.rs                 # Cookie-based authentication
-        ├── state.rs                # AppState, DB connection
-        ├── storage.rs              # SQLite job persistence
-        ├── models/
+        ├── state.rs                # AppState, DB connection, job management
+        ├── storage.rs              # SQLite job persistence (30 days)
+        ├── models/                 # Data structures
+        │   ├── bakta.rs            # Models for Bakta analysis
+        │   ├── custom_db.rs        # Models for custom AI-DB annotations
         │   ├── job.rs              # JobResponse, JobStatus
+        │   ├── psos.rs             # Models for Psos analysis
         │   ├── sequence.rs         # SequenceInfo, SequenceFilter
         │   ├── pagination.rs       # PaginationInfo, query types
         │   ├── stats.rs            # FunctionalStats for analysis
+        │   ├── health.rs           # Health check types
         │   └── error.rs            # ErrorResponse
-        ├── handlers/
-        │   ├── jobs.rs             # CRUD operations
+        ├── handlers/               # API endpoints
+        │   ├── jobs.rs             # CRUD operations for jobs
+        │   ├── bakta.rs            # Bakta analysis & data ingestion endpoints
+        │   ├── psos.rs             # Psos analysis endpoints
         │   ├── stats.rs            # Functional analysis endpoint
         │   ├── download.rs         # Export handler
-        │   └── health.rs           # Health check
-        ├── services/
-        │   ├── fasta.rs            # FASTA parsing
-        │   └── annotation.rs       # DB lookup, job processing
-        └── export/
+        │   └── health.rs           # Health check & DB info
+        ├── services/               # Business Logic
+        │   ├── fasta.rs            # FASTA parsing & MD5 computation
+        │   └── annotation.rs       # DB lookup (Bakta -> Custom DB), job processing
+        └── export/                 # Download Formats
             ├── tsv.rs
             ├── json.rs
             ├── fasta.rs
@@ -110,7 +124,7 @@ docker-compose up -d --build
 **Start backend (Rust):**
 ```bash
 cd backend
-BAKTA_DB=/mnt/bakta-db/db cargo run
+BAKTA_DB=/mnt/bakta-db/db AI_DB_CUSTOM_ANNOTATIONS_PATH=/path/to/custom_annotations.db cargo run
 # Server runs on http://localhost:8000
 # Swagger UI: http://localhost:8000/api/docs/
 ```
@@ -124,16 +138,35 @@ npm run dev
 
 ## REST API Endpoints
 
-| Method   | Endpoint                          | Description                 | Authentication   |
-|----------|-----------------------------------|-----------------------------|------------------|
-| `POST`   | `/api/job/`                       | Create new job              | Sets cookie      |
-| `GET`    | `/api/job/{id}`                   | Get job status (paginated)  | Public           |
-| `GET`    | `/api/job/{id}/stats`             | Get functional analysis     | Public           |
-| `GET`    | `/api/job/{id}/download/{format}` | Download results            | Owner only       |
-| `GET`    | `/api/jobs/`                      | List own jobs (paginated)   | Cookie required  |
-| `DELETE` | `/api/job/{id}`                   | Delete job                  | Owner only       |
-| `GET`    | `/api/health`                     | Health check with DB status | Public           |
-| `GET`    | `/api/db/info`                    | Database information        | Public           |
+| Method   | Endpoint                          | Description                           | Authentication  |
+|----------|-----------------------------------|---------------------------------------|-----------------|
+| `JOBS`   |                                   |                                       |                 |
+| `POST`   | `/api/job/`                       | Create new job                        | Sets cookie     |
+| `GET`    | `/api/job/{id}`                   | Get job status (paginated)            | Public          |
+| `GET`    | `/api/job/{id}/stats`             | Get functional analysis               | Public          |
+| `GET`    | `/api/job/{id}/download/{format}` | Download results                      | Owner only      |
+| `GET`    | `/api/jobs/`                      | List own jobs (paginated)             | Cookie required |
+| `DELETE` | `/api/job/{id}`                   | Delete job                            | Owner only      |
+| `PSOS`   |                                   |                                       |                 |
+| `GET`    | `/api/job/{id}/psos`              | Get Psos analysis results             | Public          |
+| `POST`   | `/api/job/{id}/psos`              | Run Psos analysis for unmatched seqs  | Owner only      |
+| `DELETE` | `/api/job/{id}/psos`              | Delete Psos analysis results          | Owner only      |
+| `BAKTA`  |                                   |                                       |                 |
+| `GET`    | `/api/job/{id}/bakta`             | Get Bakta analysis results            | Public          |
+| `POST`   | `/api/job/{id}/bakta`             | Run Bakta analysis for unmatched seqs | Owner only      |
+| `DELETE` | `/api/job/{id}/bakta`             | Delete Bakta analysis results         | Owner only      |
+| `POST`   | `/api/job/{id}/bakta/ingest`      | Ingest Bakta results into Custom DB   | Owner only      |
+| `INFO`   |                                   |                                       |                 |
+| `GET`    | `/api/health`                     | Health check with DB status           | Public          |
+| `GET`    | `/api/db/info`                    | Database information                  | Public          |
+
+### Database Lookup Chain
+
+Sequences are processed rapidly using their MD5 hashes:
+
+1. MD5(seq) → Search in Bakta DB? (If yes, annotate).
+2. MD5(seq) → Search in custom AI-DB (If yes, annotate).
+3. No match. (These can then be analyzed via Psos/Bakta).
 
 ### Pagination Parameters
 
@@ -148,16 +181,16 @@ Both `/api/job/{id}` and `/api/jobs/` support pagination:
 
 The `/api/job/{id}` endpoint supports sequence filtering:
 
-| Parameter     | Values                                   | Description                   |
-|---------------|------------------------------------------|-------------------------------|
-| `filter`      | `all`, `hash_match`, `alignment`, `none` | Filter by annotation source   |
-| `search`      | text                                     | Search in ID, gene, product   |
-| `min_length`  | number                                   | Minimum sequence length       |
-| `max_length`  | number                                   | Maximum sequence length       |
-| `cog`         | A-Z                                      | COG functional category       |
-| `ec_class`    | 1-7                                      | Enzyme class                  |
-| `has_gene`    | true/false                               | Only sequences with gene name |
-| `has_product` | true/false                               | Only sequences with product   |
+| Parameter     | Values                       | Description                   |
+|---------------|------------------------------|-------------------------------|
+| `filter`      | `all`, `hash_match`, `none`  | Filter by annotation source   |
+| `search`      | text                         | Search in ID, gene, product   |
+| `min_length`  | number                       | Minimum sequence length       |
+| `max_length`  | number                       | Maximum sequence length       |
+| `cog`         | A-Z                          | COG functional category       |
+| `ec_class`    | 1-7                          | Enzyme class                  |
+| `has_gene`    | true/false                   | Only sequences with gene name |
+| `has_product` | true/false                   | Only sequences with product   |
 
 ### Functional Analysis
 
@@ -191,6 +224,7 @@ The `/api/job/{id}/stats` endpoint returns:
 - On first job submission, an `ai_db_owner` cookie is automatically set (valid for 1 year)
 - The job list shows only your own jobs
 - Jobs can only be deleted by their creator
+- Analysis triggers (Psos/Bakta) and ingestion require ownership
 - Downloads require ownership
 - Anyone with the Job-ID can view a job (for sharing)
 
@@ -232,6 +266,9 @@ The job detail page features three tabs:
 - **Client-side filtering**: Instant results without server requests
 - **Pagination**: Navigate through large result sets
 - Clickable database links (UniParc, UniRef100, NCBI)
+- **Analyse Unmatched**: Options to further evaluate unannotated sequences via Psos or Bakta. 
+  Successful Bakta analyses can be ingested directly into the custom AI-DB annotations 
+  database to grow the knowledge base.
 
 #### Functional Analysis Tab
 - **Annotation Rate**: Visual progress indicator
@@ -243,7 +280,8 @@ The job detail page features three tabs:
 
 ## Job Persistence
 
-Jobs are stored in a SQLite database and **persist for 30 days**. The database survives container restarts and redeployments.
+Jobs are stored in a SQLite database and **persist for 30 days**. 
+The database survives container restarts and redeployments.
 
 ### Volume Configuration
 
@@ -259,12 +297,13 @@ volumes:
 
 ### Environment Variables
 
-| Variable           | Description                                 | Default         |
-|--------------------|---------------------------------------------|-----------------|
-| `RUST_LOG`         | Log level (trace, debug, info, warn, error) | `info`          |
-| `BAKTA_DB`         | Path to Bakta database                      | `/bakta-db`     |
-| `AI_DB_TEMP_DIR`   | Directory for temporary upload files        | `/tmp`          |
-| `AI_DB_JOBS_PATH`  | Path to SQLite jobs database                | `/data/jobs.db` |
+| Variable                        | Description                                 | Default                            |
+|---------------------------------|---------------------------------------------|------------------------------------|
+| `RUST_LOG`                      | Log level (trace, debug, info, warn, error) | `info`                             |
+| `BAKTA_DB`                      | Path to Bakta database                      | `/bakta-db`                        |
+| `AI_DB_TEMP_DIR`                | Directory for temporary upload files        | `/tmp`                             |
+| `AI_DB_JOBS_PATH`               | Path to SQLite jobs database                | `/data/jobs.db`                    |
+| `AI_DB_CUSTOM_ANNOTATIONS_PATH` | Path to AI-DB annotations database          | `/custom-db/custom_annotations.db` |
 
 ### Verifying Persistence
 
@@ -312,7 +351,7 @@ MRYILAAVLLPMFAQSYKVDQTGSGPKNTFFINSNQTGVPEQYGDL
 - CORS with explicit origins
 - Non-root container user
 - Memory-safe Rust backend
-- Read-only database mount
+- Read-only Bakta database mount
 
 ## License
 
