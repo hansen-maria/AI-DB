@@ -34,13 +34,14 @@ use utoipa_swagger_ui::SwaggerUi;
 use crate::handlers::{
     create_job, db_info, delete_job, delete_psos_results, download_job, get_job, get_job_stats,
     get_psos_results, health_check, list_jobs, save_psos_results,
-    save_bakta_job, get_bakta_job, delete_bakta_job,
+    save_bakta_job, get_bakta_job, delete_bakta_job, ingest_bakta_results,
 };
 use crate::models::{
     ErrorResponse, FunctionalStats, JobCreateResponse, JobResponse, JobStatus, JobSummary,
     PaginatedJobResponse, PaginatedJobsResponse, PaginationInfo, PsosResult, PsosResultsResponse,
     SavePsosResultsRequest, SavePsosResultsResponse, SequenceInfo,
     StoredBaktaJob, SaveBaktaJobRequest, SaveBaktaJobResponse, BaktaJobStateResponse,
+    CustomAnnotationEntry, IngestCustomAnnotationsRequest, IngestCustomAnnotationsResponse,
 };
 use crate::state::AppState;
 
@@ -57,7 +58,7 @@ use crate::state::AppState;
             - **Privacy**: Sequence data processed as MD5 hashes\n\
             - **Fast**: Hash-based annotations in seconds instead of hours\n\
             - **Comprehensive**: Access to Bakta UniRef protein annotations (~350M sequences)\n\
-            - **Fallback**: Diamond alignment for novel sequences (planned)",
+            - **Fallback**: LookUp in the AI-DB database",
         license(name = "MIT", url = "https://opensource.org/licenses/MIT"),
         contact(name = "AI-DB Team", url = "https://github.com/hansen-maria/AI-DB-Web")
     ),
@@ -80,6 +81,7 @@ use crate::state::AppState;
         handlers::bakta::save_bakta_job,
         handlers::bakta::get_bakta_job,
         handlers::bakta::delete_bakta_job,
+        handlers::bakta::ingest_bakta_results,
         handlers::health::health_check,
         handlers::health::db_info
     ),
@@ -102,6 +104,9 @@ use crate::state::AppState;
         SaveBaktaJobRequest,
         SaveBaktaJobResponse,
         BaktaJobStateResponse,
+        CustomAnnotationEntry,
+        IngestCustomAnnotationsRequest,
+        IngestCustomAnnotationsResponse,
     ))
 )]
 struct ApiDoc;
@@ -158,6 +163,8 @@ async fn main() {
                 .post(save_bakta_job)
                 .delete(delete_bakta_job),
         )
+        // Bakta → custom annotations ingest
+        .route("/api/job/{job_id}/bakta/ingest", post(ingest_bakta_results))
         .route("/api/jobs/", get(list_jobs))
         // Swagger UI
         .merge(SwaggerUi::new("/api/docs/").url("/api/openapi.json", ApiDoc::openapi()))

@@ -13,8 +13,8 @@ use crate::models::{HashLookupResult, JobStatus, SequenceInfo};
 use crate::services::fasta::{compute_md5, FastaIterator, BATCH_SIZE, MAX_RESULTS};
 use crate::state::AppState;
 
-/// Performs hash lookup in the Bakta database
-pub fn lookup_hash_in_bakta(
+/// Performs hash lookup in a single database connection (Bakta or AI-DB annotations DB).
+fn lookup_in_db(
     conn: &Connection,
     hash_bytes: &[u8],
     seq_length: usize,
@@ -47,7 +47,6 @@ pub fn lookup_hash_in_bakta(
                     );
                 }
             }
-
             // Try to get annotation information via IPS → PSC lookup
             if let Some(ref uniref_id) = result.uniref100_id {
                 if let Some(annotation) = lookup_full_annotation(conn, uniref_id) {
@@ -58,7 +57,6 @@ pub fn lookup_hash_in_bakta(
                     result.go_ids = annotation.go_ids;
                 }
             }
-
             result
         }
         Err(rusqlite::Error::QueryReturnedNoRows) => HashLookupResult::default(),
@@ -67,6 +65,45 @@ pub fn lookup_hash_in_bakta(
             HashLookupResult::default()
         }
     }
+}
+
+/// Performs hash lookup in the Bakta database (kept for backward compat).
+pub fn lookup_hash_in_bakta(
+    conn: &Connection,
+    hash_bytes: &[u8],
+    seq_length: usize,
+) -> HashLookupResult {
+    lookup_in_db(conn, hash_bytes, seq_length)
+}
+
+/// Performs hash lookup: checks Bakta DB first, then falls back to AI-DB annotations DB.
+/// Call this in process_job_from_file instead of lookup_hash_in_bakta directly.
+///
+/// Returns `(result, source)` where `source` is:
+///   - `"bakta_db"`  – found in the official Bakta database
+///   - `"aidb_db"`   – found in the local AI-DB annotations database
+///   - `""`          – not found in either database (unmatched)
+pub fn lookup_hash(
+    bakta_conn: Option<&Connection>,
+    aidb_conn: Option<&Connection>,
+    hash_bytes: &[u8],
+    seq_length: usize,
+) -> (HashLookupResult, &'static str) {
+    // 1. Try official Bakta DB first
+    if let Some(conn) = bakta_conn {
+        let result = lookup_in_db(conn, hash_bytes, seq_length);
+        if result.found {
+            return (result, "bakta_db");
+        }
+    }
+    // 2. Fall back to AI-DB annotations DB
+    if let Some(conn) = aidb_conn {
+        let result = lookup_in_db(conn, hash_bytes, seq_length);
+        if result.found {
+            return (result, "aidb_db");
+        }
+    }
+    (HashLookupResult::default(), "")
 }
 
 /// Full annotation data from IPS and PSC tables
@@ -236,14 +273,24 @@ pub fn process_job_from_file(state: &AppState, job_id: &str, file_path: &Path, i
         }
     }
 
-    // Try to open database connection
+    // Try to open database connections
     let db_conn = state.open_db_connection();
-    let db_available = db_conn.is_some();
+    let aidb_conn = state.open_custom_annotations_db();
+    let db_available = db_conn.is_some() || aidb_conn.is_some();
 
-    if db_available {
-        tracing::info!("Processing job {} with Bakta database lookup", job_id);
-    } else {
-        tracing::warn!("Processing job {} without database", job_id);
+    match (db_conn.is_some(), aidb_conn.is_some()) {
+        (true,  true)  => tracing::info!(
+            "Job {}: Bakta DB ✓  AI-DB annotations DB ✓  (two-tier lookup active)", job_id
+        ),
+        (true,  false) => tracing::info!(
+            "Job {}: Bakta DB ✓  AI-DB annotations DB –  (custom_annotations.db not found, run setup script)", job_id
+        ),
+        (false, true)  => tracing::warn!(
+            "Job {}: Bakta DB –  AI-DB annotations DB ✓  (Bakta DB unavailable, using AI-DB annotations DB only)", job_id
+        ),
+        (false, false) => tracing::warn!(
+            "Job {}: Bakta DB –  AI-DB annotations DB –  (no database available, all sequences will be unmatched)", job_id
+        ),
     }
 
     // Open file for streaming (second pass for actual processing)
@@ -272,7 +319,8 @@ pub fn process_job_from_file(state: &AppState, job_id: &str, file_path: &Path, i
 
     // Process without pre-allocation (we don't know the count)
     let mut sequence_infos = Vec::new();
-    let mut hash_matches = 0;
+    let mut bakta_db_matches: usize = 0;
+    let mut aidb_db_matches: usize = 0;
     let alignment_matches = 0;
     let mut processed_count = 0;
     let mut batch_count = 0;
@@ -282,21 +330,25 @@ pub fn process_job_from_file(state: &AppState, job_id: &str, file_path: &Path, i
         let (hash_hex, hash_bytes) = compute_md5(&seq);
         let seq_length = seq.len();
 
-        // Perform database lookup if available
-        let lookup_result = if let Some(ref conn) = db_conn {
-            lookup_hash_in_bakta(conn, &hash_bytes, seq_length)
-        } else {
-            HashLookupResult::default()
-        };
+        // Lookup: Bakta DB first, AI-DB annotations DB as automatic fallback.
+        // Sequences not found in either DB are listed as unmatched.
+        let (lookup_result, lookup_source) = lookup_hash(
+            db_conn.as_ref(),
+            aidb_conn.as_ref(),
+            &hash_bytes,
+            seq_length,
+        );
 
-        let (annotation, annotation_source) = if lookup_result.found {
-            hash_matches += 1;
-            (
-                format_annotation(&lookup_result),
-                Some("hash_match".to_string()),
-            )
-        } else {
-            (None, None)
+        let (annotation, annotation_source) = match lookup_source {
+            "bakta_db" => {
+                bakta_db_matches += 1;
+                (format_annotation(&lookup_result), Some("bakta_db".to_string()))
+            }
+            "aidb_db" => {
+                aidb_db_matches += 1;
+                (format_annotation(&lookup_result), Some("aidb_db".to_string()))
+            }
+            _ => (None, None),
         };
 
         // Only store results if we haven't hit the limit
@@ -325,25 +377,32 @@ pub fn process_job_from_file(state: &AppState, job_id: &str, file_path: &Path, i
         // Update progress every BATCH_SIZE sequences
         if batch_count >= BATCH_SIZE {
             batch_count = 0;
+            let total_matches = bakta_db_matches + aidb_db_matches;
             {
                 let mut jobs = state.jobs_mut();
                 if let Some(job) = jobs.get_mut(job_id) {
                     job.processed_count = processed_count;
-                    job.hash_matches = hash_matches;
+                    job.hash_matches = total_matches;
                     job.updated_at = Utc::now();
                 }
             }
             tracing::debug!(
-                "Job {} progress: {}/{} sequences processed",
+                "Job {} progress: {}/{} sequences | Bakta DB: {} | AI-DB annotations DB: {} | Unmatched so far: {}",
                 job_id,
                 processed_count,
-                total_sequences
+                total_sequences,
+                bakta_db_matches,
+                aidb_db_matches,
+                processed_count.saturating_sub(total_matches),
             );
         }
     }
 
     // Shrink to fit to release unused memory
     sequence_infos.shrink_to_fit();
+
+    let total_matches = bakta_db_matches + aidb_db_matches;
+    let unmatched = processed_count.saturating_sub(total_matches);
 
     // Final update with results
     let final_job = {
@@ -355,9 +414,9 @@ pub fn process_job_from_file(state: &AppState, job_id: &str, file_path: &Path, i
                 JobStatus::Failed
             };
             job.updated_at = Utc::now();
-            job.sequence_count = processed_count; // Final accurate count
+            job.sequence_count = processed_count;
             job.processed_count = processed_count;
-            job.hash_matches = hash_matches;
+            job.hash_matches = total_matches;
             job.alignment_matches = alignment_matches;
 
             // Add warning if results were truncated
@@ -383,9 +442,29 @@ pub fn process_job_from_file(state: &AppState, job_id: &str, file_path: &Path, i
     }
 
     tracing::info!(
-        "Job {} completed: {} sequences processed, {} hash matches",
+        "Job {} completed: {} sequences | {} Bakta DB | {} AI-DB annotations DB | {} unmatched ({:.1}% matched)",
         job_id,
         processed_count,
-        hash_matches
+        bakta_db_matches,
+        aidb_db_matches,
+        unmatched,
+        if processed_count > 0 {
+            total_matches as f64 / processed_count as f64 * 100.0
+        } else {
+            0.0
+        },
     );
+
+    if aidb_db_matches > 0 {
+        tracing::info!(
+            "Job {} AI-DB annotations DB contribution: {} sequences ({:.1}% of all matches)",
+            job_id,
+            aidb_db_matches,
+            if total_matches > 0 {
+                aidb_db_matches as f64 / total_matches as f64 * 100.0
+            } else {
+                0.0
+            },
+        );
+    }
 }

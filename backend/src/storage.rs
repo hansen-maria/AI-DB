@@ -355,6 +355,7 @@ use crate::models::{StoredBaktaJob, SaveBaktaJobRequest};
 /// Initialize the bakta_jobs table.
 /// One row per AI-DB job (UNIQUE on job_id) – upserted on every progress step.
 pub fn init_bakta_table(conn: &Connection) -> Result<(), rusqlite::Error> {
+    // Create table without result_files_json first (for compatibility with existing DBs)
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS bakta_jobs (
             id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -365,6 +366,7 @@ pub fn init_bakta_table(conn: &Connection) -> Result<(), rusqlite::Error> {
             status            TEXT    NOT NULL DEFAULT 'INIT',
             progress_label    TEXT    NOT NULL DEFAULT '',
             progress_percent  INTEGER NOT NULL DEFAULT 0,
+            result_files_json TEXT,
             result_json       TEXT,
             created_at        TEXT    NOT NULL,
             updated_at        TEXT    NOT NULL
@@ -372,6 +374,23 @@ pub fn init_bakta_table(conn: &Connection) -> Result<(), rusqlite::Error> {
         CREATE INDEX IF NOT EXISTS idx_bakta_jobs_job_id  ON bakta_jobs(job_id);
         CREATE INDEX IF NOT EXISTS idx_bakta_jobs_updated ON bakta_jobs(updated_at);",
     )?;
+
+    // Migration: add result_files_json to tables created before this column existed.
+    // We intentionally ignore the error here: SQLite returns "duplicate column name"
+    // when the column already exists, which is the normal case after the first migration.
+    // `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` requires SQLite >= 3.37.0 and is
+    // therefore not used here for maximum compatibility.
+    if let Err(e) = conn.execute(
+        "ALTER TABLE bakta_jobs ADD COLUMN result_files_json TEXT",
+        [],
+    ) {
+        // "duplicate column name" → already migrated, nothing to do
+        if !e.to_string().contains("duplicate column name") {
+            tracing::warn!("Unexpected error during bakta_jobs migration: {}", e);
+        }
+    } else {
+        tracing::info!("Bakta jobs table: migrated – added result_files_json column");
+    }
 
     tracing::info!("Bakta jobs table initialized");
     Ok(())
@@ -389,18 +408,20 @@ pub fn upsert_bakta_job(
     conn.execute(
         "INSERT INTO bakta_jobs
              (job_id, bakta_job_id, bakta_secret, sequence_type,
-              status, progress_label, progress_percent, result_json,
+              status, progress_label, progress_percent,
+              result_files_json, result_json,
               created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)
          ON CONFLICT(job_id) DO UPDATE SET
-             bakta_job_id     = excluded.bakta_job_id,
-             bakta_secret     = excluded.bakta_secret,
-             sequence_type    = excluded.sequence_type,
-             status           = excluded.status,
-             progress_label   = excluded.progress_label,
-             progress_percent = excluded.progress_percent,
-             result_json      = excluded.result_json,
-             updated_at       = excluded.updated_at",
+             bakta_job_id      = excluded.bakta_job_id,
+             bakta_secret      = excluded.bakta_secret,
+             sequence_type     = excluded.sequence_type,
+             status            = excluded.status,
+             progress_label    = excluded.progress_label,
+             progress_percent  = excluded.progress_percent,
+             result_files_json = excluded.result_files_json,
+             result_json       = excluded.result_json,
+             updated_at        = excluded.updated_at",
         params![
             job_id,
             req.bakta_job_id,
@@ -409,6 +430,7 @@ pub fn upsert_bakta_job(
             req.status,
             req.progress_label,
             req.progress_percent,
+            req.result_files_json,
             req.result_json,
             now,
         ],
@@ -424,22 +446,24 @@ pub fn load_bakta_job(
 ) -> Result<Option<StoredBaktaJob>, rusqlite::Error> {
     conn.query_row(
         "SELECT job_id, bakta_job_id, bakta_secret, sequence_type,
-                status, progress_label, progress_percent, result_json,
+                status, progress_label, progress_percent,
+                result_files_json, result_json,
                 created_at, updated_at
          FROM bakta_jobs WHERE job_id = ?1",
         [job_id],
         |row| {
             Ok(StoredBaktaJob {
-                job_id:           row.get(0)?,
-                bakta_job_id:     row.get(1)?,
-                bakta_secret:     row.get(2)?,
-                sequence_type:    row.get(3)?,
-                status:           row.get(4)?,
-                progress_label:   row.get(5)?,
-                progress_percent: row.get(6)?,
-                result_json:      row.get(7)?,
-                created_at:       row.get(8)?,
-                updated_at:       row.get(9)?,
+                job_id:            row.get(0)?,
+                bakta_job_id:      row.get(1)?,
+                bakta_secret:      row.get(2)?,
+                sequence_type:     row.get(3)?,
+                status:            row.get(4)?,
+                progress_label:    row.get(5)?,
+                progress_percent:  row.get(6)?,
+                result_files_json: row.get(7)?,
+                result_json:       row.get(8)?,
+                created_at:        row.get(9)?,
+                updated_at:        row.get(10)?,
             })
         },
     )
@@ -461,4 +485,122 @@ pub fn cleanup_orphaned_bakta_jobs(conn: &Connection) -> Result<usize, rusqlite:
         tracing::info!("Cleaned up {} orphaned Bakta job states", rows);
     }
     Ok(rows)
+}
+
+// ============================================================================
+// AI-DB Annotations DB
+// Mirrors the Bakta DB schema (ups / ips / psc) so the same lookup code works.
+//
+// The database file and schema are created by setup-custom-annotations-db.sh.
+// This module only reads and writes data – never creates or migrates the DB.
+// ============================================================================
+
+use crate::models::CustomAnnotationEntry;
+
+/// Decode a 32-char hex MD5 string into a 16-byte Vec.
+fn hex_to_bytes(hex: &str) -> Option<Vec<u8>> {
+    if hex.len() != 32 {
+        return None;
+    }
+    (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
+        .collect()
+}
+
+/// Insert one entry into the AI-DB annotations DB.
+///
+/// Populates all three tables of the Bakta DB schema:
+///   ups  – hash → IDs                           (always)
+///   ips  – UniRef90 ID → gene / product / EC / GO  (when uniref100_id is present)
+///   psc  – UniRef90 ID → COG category           (when uniref90_id is present)
+///
+/// Returns `true` when the hash was new (inserted), `false` when already known (skipped).
+/// Uses INSERT OR IGNORE so duplicate hashes are silently dropped.
+pub fn ingest_custom_annotation(
+    conn: &Connection,
+    entry: &CustomAnnotationEntry,
+) -> Result<bool, rusqlite::Error> {
+    let hash_bytes = match hex_to_bytes(&entry.md5_hash) {
+        Some(b) => b,
+        None => {
+            tracing::warn!("AI-DB annotations DB: invalid MD5 hex '{}' – skipping", entry.md5_hash);
+            return Ok(false);
+        }
+    };
+
+    // ups – one row per unique protein hash.
+    // uniref100_id stores the UniRef90 ID as the lookup-chain key.
+    let inserted = conn.execute(
+        "INSERT OR IGNORE INTO ups (hash, length, uniparc_id, ncbi_nrp_id, uniref100_id)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            hash_bytes,
+            entry.length as i64,
+            entry.uniparc_id,
+            entry.ncbi_nrp_id,
+            entry.uniref100_id,
+        ],
+    )? > 0;
+
+    // ips – keyed by uniref100_id (= UniRef90 ID for Bakta protein workflow results).
+    // The uniref90_id column enables the ips→psc lookup chain.
+    if let Some(ref uniref100) = entry.uniref100_id {
+        conn.execute(
+            "INSERT OR IGNORE INTO ips
+                 (uniref100_id, uniref90_id, gene, product, ec_ids, go_ids)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                uniref100,
+                entry.uniref90_id,
+                entry.gene,
+                entry.product,
+                entry.ec_ids,
+                entry.go_ids,
+            ],
+        )?;
+    }
+
+    // psc – provides COG category; keyed by uniref90_id.
+    if let Some(ref uniref90) = entry.uniref90_id {
+        conn.execute(
+            "INSERT OR IGNORE INTO psc
+                 (uniref90_id, gene, product, cog_category, ec_ids, go_ids)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                uniref90,
+                entry.gene,
+                entry.product,
+                entry.cog_category,
+                entry.ec_ids,
+                entry.go_ids,
+            ],
+        )?;
+    }
+
+    Ok(inserted)
+}
+
+/// Bulk-ingest a slice of entries into the AI-DB annotations DB.
+/// Returns (ingested, skipped).
+pub fn ingest_custom_annotations(
+    conn: &Connection,
+    entries: &[CustomAnnotationEntry],
+) -> Result<(usize, usize), rusqlite::Error> {
+    let mut ingested = 0usize;
+    let mut skipped = 0usize;
+    for entry in entries {
+        if ingest_custom_annotation(conn, entry)? {
+            ingested += 1;
+        } else {
+            skipped += 1;
+        }
+    }
+    if ingested > 0 {
+        tracing::info!(
+            "AI-DB annotations DB: {} new entries ingested, {} skipped (already known)",
+            ingested, skipped
+        );
+    }
+    Ok((ingested, skipped))
 }

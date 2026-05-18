@@ -10,6 +10,7 @@ pub mod psos;
 pub mod sequence;
 pub mod stats;
 pub mod bakta;
+mod custom_db;
 
 pub use error::ErrorResponse;
 pub use health::{BaktaDbHealth, DbInfoResponse, HealthCheckResponse};
@@ -22,3 +23,4 @@ pub use psos::{PsosResult, PsosResultsResponse, SavePsosResultsRequest, SavePsos
 pub use bakta::{StoredBaktaJob, SaveBaktaJobRequest, SaveBaktaJobResponse, BaktaJobStateResponse};
 pub use sequence::{AdvancedSequenceFilter, HashLookupResult, SequenceFilter, SequenceInfo};
 pub use stats::{cog_category_name, ec_class_name, CogCategory, CountItem, FunctionalStats, GoTermStats};
+pub use custom_db::{CustomAnnotationEntry, IngestCustomAnnotationsRequest, IngestCustomAnnotationsResponse};

@@ -30,8 +30,10 @@ services:
       - BAKTA_DB=/bakta-db
       - AI_DB_TEMP_DIR=/tmp-data
       - AI_DB_JOBS_PATH=/data/jobs.db
+      - AI_DB_CUSTOM_ANNOTATIONS_PATH=/custom-db/custom_annotations.db
     volumes:
       - /mnt/bakta-db/db:/bakta-db:ro
+      - /mnt/ai-db-custom:/custom-db
       - /mnt/ai-db-tmp:/tmp-data
       - jobs-data:/data
     restart: unless-stopped

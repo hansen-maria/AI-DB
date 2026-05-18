@@ -15,7 +15,9 @@ import {
 import {
   runBaktaAnnotation, resumeBaktaAnnotation, groupFeaturesByType, detectSequenceType,
   loadBaktaState, deleteBaktaState,
-  type BaktaJobOptions, type BaktaAnnotationSummary, type SequenceType
+  ingestBaktaResults, buildIngestEntries,
+  type BaktaJobOptions, type BaktaAnnotationSummary, type SequenceType,
+  type IngestResponse, type BaktaProteinFeature,
 } from '../api/bakta.ts'
 
 const route = useRoute()
@@ -61,6 +63,11 @@ const baktaAbortController = ref<AbortController | null>(null)
 const baktaGenus = ref('')
 const baktaSpecies = ref('')
 const baktaCompleteGenome = ref(false)
+
+// Ingest state
+const baktaIngesting = ref(false)
+const baktaIngestResult = ref<IngestResponse | null>(null)
+const baktaIngestError = ref('')
 
 // Advanced filter state
 const showAdvancedFilters = ref(false)
@@ -271,6 +278,59 @@ function handleDownloadForPsos() {
       : 'unmatched_sequences.fasta'
 
   downloadForPsos(sequences, filename)
+}
+
+// Ingest Bakta results into the AI-DB annotations DB
+async function ingestBaktaAnnotations() {
+  if (!baktaResult.value || baktaIngesting.value) return
+
+  baktaIngesting.value = true
+  baktaIngestError.value = ''
+  baktaIngestResult.value = null
+
+  try {
+    // Use features from the cached result. If only 200 were stored but more
+    // exist (featureCount > features.length), try to fetch the full JSON from S3.
+    let features = baktaResult.value.features as unknown as BaktaProteinFeature[] ?? []
+    const cachedCount = features.length
+    const totalCount = baktaResult.value.featureCount ?? cachedCount
+
+    if (totalCount > cachedCount) {
+      const jsonUrl = baktaResult.value.resultFilesProtein?.json
+          ?? baktaResult.value.resultFilesNucleotide?.JSON
+      if (jsonUrl) {
+        try {
+          const resp = await fetch(jsonUrl)
+          if (resp.ok) {
+            const fullJson = await resp.json()
+            features = (fullJson.features ?? features) as BaktaProteinFeature[]
+            console.log(`[AI-DB Ingest] Fetched full JSON: ${features.length} features (cached: ${cachedCount})`)
+          }
+        } catch {
+          console.warn('[AI-DB Ingest] Could not fetch full JSON from S3, using cached features')
+        }
+      }
+    }
+
+    if (features.length === 0) {
+      baktaIngestError.value = 'No features available to ingest.'
+      return
+    }
+
+    const entries = buildIngestEntries(features)
+
+    if (entries.length === 0) {
+      baktaIngestError.value = 'No CDS features with aa_hexdigest found.'
+      return
+    }
+
+    baktaIngestResult.value = await ingestBaktaResults(jobId.value, entries)
+    console.log('[AI-DB Ingest] Result:', baktaIngestResult.value)
+  } catch (e) {
+    baktaIngestError.value = e instanceof Error ? e.message : 'Ingest failed.'
+  } finally {
+    baktaIngesting.value = false
+  }
 }
 
 // Analyze unmatched sequences with Bakta API
@@ -492,16 +552,31 @@ async function loadExistingBaktaState() {
   console.log('[Bakta] Persisted state found | status:', persisted.status, '| type:', persisted.sequence_type)
   showBaktaPanel.value = true
 
-  // Already done – restore result from JSON
-  if (persisted.status === 'SUCCESSFUL' && persisted.result_json) {
-    try {
-      baktaResult.value = JSON.parse(persisted.result_json) as BaktaAnnotationSummary
-      baktaProgressPercent.value = 100
-      baktaProgressLabel.value = 'Done'
-      console.log('[Bakta] Restored completed result from persisted state')
-    } catch {
-      console.warn('[Bakta] Failed to parse persisted result JSON')
-    }
+  // Already done – resume handles URL refresh and fallback to cache
+  if (persisted.status === 'SUCCESSFUL') {
+    baktaProgressPercent.value = 100
+    baktaProgressLabel.value = 'Done'
+    baktaAnalyzing.value = true   // show brief loading state while URLs refresh
+    baktaAbortController.value = new AbortController()
+
+    resumeBaktaAnnotation(
+        jobId.value,
+        persisted,
+        (_stage, _pct) => { /* silent – user just sees the result appear */ },
+        baktaAbortController.value.signal,
+    )
+        .then(summary => {
+          baktaResult.value = summary
+          console.log('[Bakta] Restored completed result with fresh URLs')
+        })
+        .catch(e => {
+          baktaError.value = e instanceof Error ? e.message : 'Failed to restore Bakta results.'
+          console.warn('[Bakta] Could not restore result:', e)
+        })
+        .finally(() => {
+          baktaAnalyzing.value = false
+          baktaAbortController.value = null
+        })
     return
   }
 
@@ -1283,9 +1358,59 @@ onUnmounted(() => {
                     </div>
                   </div>
 
+                  <!-- Ingest into AI-DB annotations DB -->
+                  <div class="bakta-ingest">
+                    <h4 class="bakta-section-title">Add to AI-DB annotations DB</h4>
+                    <p class="bakta-description" style="margin: 0 0 0.6rem;">
+                      Write Bakta annotations back into the AI-DB annotations DB so future jobs
+                      recognize these sequences via hash lookup — without re-running Bakta.
+                      Even hypothetical proteins are stored in AI-DB so they are not re-submitted.
+                    </p>
+
+                    <!-- Success -->
+                    <div v-if="baktaIngestResult" class="bakta-ingest-result">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
+                           fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="20 6 9 17 4 12"/>
+                      </svg>
+                      <span>
+                        <strong>{{ baktaIngestResult.ingested }}</strong> new sequences added to AI-DB annotations DB,
+                        <strong>{{ baktaIngestResult.skipped }}</strong> already known
+                        ({{ baktaIngestResult.total }} total)
+                      </span>
+                    </div>
+
+                    <!-- Error -->
+                    <div v-else-if="baktaIngestError" class="bakta-error" style="margin-bottom: 0.5rem;">
+                      <pre class="bakta-error-text">{{ baktaIngestError }}</pre>
+                    </div>
+
+                    <!-- Ingest button (shown until successfully ingested) -->
+                    <button
+                        v-if="!baktaIngestResult"
+                        class="btn btn-bakta"
+                        :disabled="baktaIngesting"
+                        style="margin-top: 0.25rem"
+                        @click="ingestBaktaAnnotations"
+                    >
+                      <svg v-if="baktaIngesting" xmlns="http://www.w3.org/2000/svg" width="16" height="16"
+                           viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                           style="animation: spin 1s linear infinite">
+                        <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+                      </svg>
+                      <svg v-else xmlns="http://www.w3.org/2000/svg" width="16" height="16"
+                           viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                        <polyline points="7 10 12 15 17 10"/>
+                        <line x1="12" y1="15" x2="12" y2="3"/>
+                      </svg>
+                      {{ baktaIngesting ? 'Ingesting…' : `Add ${(baktaResult?.featureCount ?? baktaResult?.features?.length ?? 0)} features to AI-DB annotations DB` }}
+                    </button>
+                  </div>
+
                   <!-- Re-run -->
                   <button class="btn btn-secondary-psos" style="margin-top: 0.5rem; align-self: flex-start"
-                          @click="deleteBaktaState(jobId); baktaResult = null; baktaError = ''">
+                          @click="deleteBaktaState(jobId); baktaResult = null; baktaError = ''; baktaIngestResult = null">
                     Re-run job
                   </button>
                 </div>
@@ -2354,6 +2479,31 @@ tbody tr:hover { background: var(--color-background-soft); }
   transition: border-color 0.15s, color 0.15s;
 }
 .bakta-dl-link:hover { border-color: #38a169; color: #38a169; }
+
+.bakta-ingest {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.875rem;
+  background: var(--color-background);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+.bakta-ingest-result {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: rgba(56, 161, 105, 0.1);
+  border: 1px solid rgba(56, 161, 105, 0.3);
+  border-radius: 6px;
+  font-size: 0.875rem;
+  color: var(--color-text);
+}
+.bakta-ingest-result svg { color: #38a169; flex-shrink: 0; }
+
+@keyframes spin { to { transform: rotate(360deg); } }
 
 .bakta-error-text {
   margin: 0;

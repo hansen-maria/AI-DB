@@ -15,6 +15,7 @@ use axum::{
 
 use crate::models::{
     BaktaJobStateResponse, ErrorResponse, SaveBaktaJobRequest, SaveBaktaJobResponse,
+    IngestCustomAnnotationsRequest, IngestCustomAnnotationsResponse,
 };
 use crate::state::AppState;
 
@@ -121,4 +122,60 @@ pub async fn delete_bakta_job(
     })?;
 
     Ok(StatusCode::OK)
+}
+
+// ── POST /api/job/:job_id/bakta/ingest ────────────────────────────────────────
+
+/// Ingest Bakta annotation results into the custom annotations DB.
+///
+/// The frontend constructs one entry per unmatched sequence by matching the
+/// original sequence (with its MD5 hash) against the Bakta JSON result features.
+/// Sequences that Bakta couldn't annotate are still recorded (with null IDs)
+/// so they are not re-submitted in future jobs.
+#[utoipa::path(
+    post,
+    path = "/api/job/{job_id}/bakta/ingest",
+    params(("job_id" = String, Path, description = "AI-DB job ID")),
+    request_body = IngestCustomAnnotationsRequest,
+    responses(
+        (status = 200, description = "Entries ingested",   body = IngestCustomAnnotationsResponse),
+        (status = 404, description = "Job not found",      body = ErrorResponse),
+        (status = 500, description = "Database error",     body = ErrorResponse),
+    ),
+    tag = "bakta"
+)]
+pub async fn ingest_bakta_results(
+    State(state): State<AppState>,
+    Path(job_id): Path<String>,
+    Json(request): Json<IngestCustomAnnotationsRequest>,
+) -> Result<Json<IngestCustomAnnotationsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    if !state.jobs().contains_key(&job_id) {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse::new(format!("Job not found: {job_id}"))),
+        ));
+    }
+
+    let total = request.entries.len();
+
+    tracing::info!(
+        "Ingesting {} Bakta entries for job {job_id} into AI-DB annotations DB",
+        total
+    );
+
+    let (ingested, skipped) = state
+        .ingest_custom_annotations(&request.entries)
+        .map_err(|e| {
+            tracing::error!("Ingest failed for job {job_id}: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse::new(e)),
+            )
+        })?;
+
+    Ok(Json(IngestCustomAnnotationsResponse {
+        ingested,
+        skipped,
+        total,
+    }))
 }

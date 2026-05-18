@@ -17,7 +17,11 @@ pub struct StoredBaktaJob {
     pub status: String,
     pub progress_label: String,
     pub progress_percent: i64,
-    /// Serialised BaktaAnnotationSummary JSON – present only when status = SUCCESSFUL
+    /// JSON of BaktaResultFiles | BaktaProteinsResultFiles (all S3 URLs).
+    /// Refreshed on every reload of a completed job so presigned URLs stay valid.
+    pub result_files_json: Option<String>,
+    /// Full BaktaAnnotationSummary JSON (stats + features + file URLs).
+    /// Set once on first SUCCESSFUL completion.
     pub result_json: Option<String>,
     pub created_at: String,
     pub updated_at: String,
@@ -32,6 +36,9 @@ pub struct SaveBaktaJobRequest {
     pub status: String,
     pub progress_label: String,
     pub progress_percent: i64,
+    /// Fresh S3 result file URLs – sent whenever new URLs are obtained from Bakta.
+    pub result_files_json: Option<String>,
+    /// Full summary JSON – sent once on first successful completion.
     pub result_json: Option<String>,
 }
 

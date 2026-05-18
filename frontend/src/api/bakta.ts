@@ -655,6 +655,7 @@ async function runNucleotideAnnotation(
     bakta_job_id: jobRef.jobID, bakta_secret: jobRef.secret,
     sequence_type: 'nucleotide', status: 'SUCCESSFUL',
     progress_label: 'Done', progress_percent: 100,
+    result_files_json: JSON.stringify(resultResp.ResultFiles),
     result_json: JSON.stringify(summary),
   })
 
@@ -792,6 +793,7 @@ async function runProteinAnnotation(
     bakta_job_id: jobRef.job_id, bakta_secret: jobRef.secret,
     sequence_type: 'protein', status: 'SUCCESSFUL',
     progress_label: 'Done', progress_percent: 100,
+    result_files_json: JSON.stringify(files),
     result_json: JSON.stringify(summary),
   })
 
@@ -848,7 +850,11 @@ export interface BaktaPersistedState {
   status: BaktaJobStatusEnum
   progress_label: string
   progress_percent: number
-  /** Serialised BaktaAnnotationSummary – present when status === 'SUCCESSFUL' */
+  /** JSON of BaktaResultFiles | BaktaProteinsResultFiles – all S3 URLs.
+   *  Refreshed on every reload of a completed job. */
+  result_files_json?: string | null
+  /** Full BaktaAnnotationSummary JSON (stats + features + files).
+   *  Set once on first SUCCESSFUL completion. */
   result_json?: string | null
 }
 
@@ -940,11 +946,83 @@ export async function resumeBaktaAnnotation(
   console.log(`[Bakta] ID: ${persisted.bakta_job_id}`)
   console.log(`[Bakta] Last known status: ${persisted.status} @ ${persisted.progress_percent}%`)
 
-  // If already done, deserialise + return immediately
-  if (persisted.status === 'SUCCESSFUL' && persisted.result_json) {
-    console.log('[Bakta] Already SUCCESSFUL – returning persisted result')
-    console.groupEnd()
-    return JSON.parse(persisted.result_json) as BaktaAnnotationSummary
+  // If already done – re-fetch fresh S3 URLs (presigned URLs expire),
+  // update result_files_json in storage, then return the full summary.
+  if (persisted.status === 'SUCCESSFUL') {
+    console.log('[Bakta] Already SUCCESSFUL – refreshing S3 result URLs')
+
+    try {
+      // Get fresh presigned URLs from Bakta
+      const freshFiles = isProtein
+        ? (await getV2Result(v2Ref)).result.files
+        : (await getBaktaResult(jobRef)).ResultFiles
+
+      console.log('[Bakta] Fresh URLs obtained | Files:', Object.keys(freshFiles).join(', '))
+
+      // Rebuild summary: restore stats/features from result_json, use fresh URLs
+      let summary: BaktaAnnotationSummary
+      if (persisted.result_json) {
+        summary = JSON.parse(persisted.result_json) as BaktaAnnotationSummary
+        // Replace stored (possibly expired) URLs with fresh ones
+        if (isProtein) {
+          summary.resultFilesProtein = freshFiles as BaktaProteinsResultFiles
+        } else {
+          summary.resultFilesNucleotide = freshFiles as BaktaResultFiles
+        }
+      } else {
+        // No cached summary – build minimal one from fresh URLs alone
+        summary = {
+          jobID: persisted.bakta_job_id,
+          secret: persisted.bakta_secret,
+          jobStatus: 'SUCCESSFUL',
+          sequenceType: persisted.sequence_type,
+          webViewerUrl,
+          ...(isProtein
+            ? { resultFilesProtein: freshFiles as BaktaProteinsResultFiles }
+            : { resultFilesNucleotide: freshFiles as BaktaResultFiles }),
+        }
+      }
+
+      // Persist fresh URLs back to storage so next reload gets them too
+      await saveBaktaState(aidbJobId, {
+        bakta_job_id: persisted.bakta_job_id,
+        bakta_secret: persisted.bakta_secret,
+        sequence_type: persisted.sequence_type,
+        status: 'SUCCESSFUL',
+        progress_label: 'Done',
+        progress_percent: 100,
+        result_files_json: JSON.stringify(freshFiles),
+        result_json: JSON.stringify(summary),
+      })
+
+      console.groupEnd()
+      return summary
+    } catch (e) {
+      // Bakta result endpoint failed (job expired?) – fall back to cached data
+      console.warn('[Bakta] Could not refresh URLs, falling back to cached result:', e)
+      if (persisted.result_json) {
+        console.groupEnd()
+        return JSON.parse(persisted.result_json) as BaktaAnnotationSummary
+      }
+      // No cached data at all – show cached file URLs from result_files_json if available
+      if (persisted.result_files_json) {
+        const cachedFiles = JSON.parse(persisted.result_files_json)
+        console.warn('[Bakta] Serving potentially expired URLs from cache')
+        console.groupEnd()
+        return {
+          jobID: persisted.bakta_job_id,
+          secret: persisted.bakta_secret,
+          jobStatus: 'SUCCESSFUL',
+          sequenceType: persisted.sequence_type,
+          webViewerUrl,
+          ...(isProtein
+            ? { resultFilesProtein: cachedFiles as BaktaProteinsResultFiles }
+            : { resultFilesNucleotide: cachedFiles as BaktaResultFiles }),
+        }
+      }
+      console.groupEnd()
+      throw new Error('Bakta results are no longer available (job may have expired on the Bakta server)')
+    }
   }
 
   // If ERROR, throw so the UI shows the error state
@@ -1077,7 +1155,10 @@ export async function resumeBaktaAnnotation(
   console.log('[Bakta] Resume complete')
   console.groupEnd()
 
-  // Persist the completed result
+  // Determine which files object to serialise
+  const freshFiles = isProtein ? summary.resultFilesProtein : summary.resultFilesNucleotide
+
+  // Persist the completed result with fresh URLs
   await saveBaktaState(aidbJobId, {
     bakta_job_id: persisted.bakta_job_id,
     bakta_secret: persisted.bakta_secret,
@@ -1085,8 +1166,204 @@ export async function resumeBaktaAnnotation(
     status: 'SUCCESSFUL',
     progress_label: 'Done',
     progress_percent: 100,
+    result_files_json: freshFiles ? JSON.stringify(freshFiles) : undefined,
     result_json: JSON.stringify(summary),
   })
 
   return summary
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AI-DB Annotations DB Ingest
+// API: POST /api/job/{aidbJobId}/bakta/ingest
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * PSC (Protein Sequence Cluster) data from a Bakta protein JSON feature.
+ * Present on annotated CDS features; absent on hypothetical proteins.
+ */
+export interface BaktaPscData {
+  uniref90_id?: string
+  uniref50_id?: string
+  gene?: string
+  product?: string
+  ec_ids?: string[]
+  go_ids?: string[]
+  cog_id?: string
+  cog_category?: string
+  kegg_orthology_id?: string
+  identity?: number
+  score?: number
+  evalue?: number
+  query_cov?: number
+  subject_cov?: number
+  valid?: boolean
+}
+
+/**
+ * A single CDS feature from the Bakta protein workflow JSON result.
+ *
+ * Key field: `aa_hexdigest` – the MD5 hex digest of the protein sequence.
+ * This matches exactly what AI-DB computes via `compute_md5`, so no
+ * sequence matching by ID is needed for ingestion.
+ */
+export interface BaktaProteinFeature {
+  id: string
+  description?: string
+  aa?: string                    // Amino acid sequence
+  length: number
+  type: string                   // "cds" for protein coding sequences
+  locus?: string
+  /** MD5 hex digest of the amino acid sequence – direct lookup key for ups table */
+  aa_hexdigest?: string
+  hypothetical?: boolean
+  gene?: string | null
+  genes?: string[]
+  product?: string
+  db_xrefs?: string[]
+  psc?: BaktaPscData             // Present when Bakta found a PSC match
+  pscc?: {
+    uniref50_id?: string
+    db_xrefs?: string[]
+    product?: string
+  }
+  seq_stats?: {
+    molecular_weight?: number
+    isoelectric_point?: number
+  }
+}
+
+export interface CustomAnnotationEntry {
+  /** MD5 hex digest (aa_hexdigest from Bakta JSON) – direct key for ups table */
+  md5_hash: string
+  length: number
+  uniparc_id?: string | null
+  ncbi_nrp_id?: string | null
+  /** UniRef90 ID stored as lookup-chain key (Bakta protein workflow has no UniRef100) */
+  uniref100_id?: string | null
+  uniref90_id?: string | null
+  gene?: string | null
+  product?: string | null
+  ec_ids?: string | null
+  go_ids?: string | null
+  cog_category?: string | null
+}
+
+export interface IngestResponse {
+  ingested: number
+  skipped: number
+  total: number
+}
+
+/**
+ * POST /api/job/{aidbJobId}/bakta/ingest
+ * Sends annotation entries to the backend for insertion into the AI-DB annotations DB.
+ */
+export async function ingestBaktaResults(
+  aidbJobId: string,
+  entries: CustomAnnotationEntry[],
+): Promise<IngestResponse> {
+  const resp = await fetch(`${API_BASE}/job/${aidbJobId}/bakta/ingest`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ entries }),
+  })
+  if (!resp.ok) {
+    const detail = await resp.text().catch(() => '')
+    throw new Error(`Ingest failed (${resp.status}): ${detail || resp.statusText}`)
+  }
+  return resp.json() as Promise<IngestResponse>
+}
+
+/**
+ * Build ingest entries directly from Bakta protein JSON features.
+ *
+ * Uses `aa_hexdigest` as the direct MD5 lookup key – no sequence ID matching needed.
+ *
+ * Lookup chain built for each annotated CDS:
+ *   ups  : aa_hexdigest → uniref90_id (stored as uniref100_id)
+ *   ips  : uniref90_id  → gene, product, ec_ids, go_ids
+ *   psc  : uniref90_id  → cog_category, gene, product
+ *
+ * Hypothetical proteins (no psc) are stored in ups only – ensuring they are
+ * found as "known" on the next lookup and won't be re-submitted to Bakta.
+ *
+ * Data sources (in priority order):
+ *   Gene / product  → feature.gene / feature.product  (top-level, already resolved)
+ *   EC numbers      → psc.ec_ids  (array → comma-separated)
+ *   GO terms        → psc.go_ids  (array → comma-separated)
+ *   COG category    → psc.cog_category  OR  db_xrefs "COG:X" (single letter)
+ *   UniRef90 ID     → psc.uniref90_id
+ */
+export function buildIngestEntries(
+  features: BaktaProteinFeature[],
+): CustomAnnotationEntry[] {
+  const entries: CustomAnnotationEntry[] = []
+  let annotated = 0
+  let hypothetical = 0
+
+  for (const feature of features) {
+    if (feature.type !== 'cds') continue
+    if (!feature.aa_hexdigest) {
+      console.warn('[AI-DB Ingest] Feature missing aa_hexdigest, skipping:', feature.id)
+      continue
+    }
+
+    const psc = feature.psc
+
+    // UniRef90 ID – used as the lookup-chain key in both ups and ips tables
+    const uniref90_id = psc?.uniref90_id ?? null
+
+    // EC numbers: prefer structured psc.ec_ids, fall back to db_xrefs parsing
+    let ec_ids: string | null = null
+    if (psc?.ec_ids?.length) {
+      ec_ids = psc.ec_ids.join(',')
+    } else if (feature.db_xrefs?.length) {
+      const ecRefs = feature.db_xrefs.filter(x => x.startsWith('EC:'))
+      if (ecRefs.length) ec_ids = ecRefs.map(x => x.slice(3)).join(',')
+    }
+
+    // GO terms: prefer structured psc.go_ids, fall back to db_xrefs parsing
+    let go_ids: string | null = null
+    if (psc?.go_ids?.length) {
+      go_ids = psc.go_ids.join(',')
+    } else if (feature.db_xrefs?.length) {
+      const goRefs = feature.db_xrefs.filter(x => x.startsWith('GO:'))
+      if (goRefs.length) go_ids = goRefs.join(',')
+    }
+
+    // COG functional category: single letter (e.g. "H", "J", "K")
+    // Prefer psc.cog_category; fall back to db_xrefs "COG:X" (exactly 5 chars → single letter)
+    let cog_category: string | null = psc?.cog_category ?? null
+    if (!cog_category && feature.db_xrefs?.length) {
+      const cogRef = feature.db_xrefs.find(x => x.startsWith('COG:') && x.length === 5)
+      if (cogRef) cog_category = cogRef.slice(4)
+    }
+
+    if (uniref90_id) annotated++
+    else hypothetical++
+
+    entries.push({
+      md5_hash:     feature.aa_hexdigest,
+      length:       feature.length,
+      // Store UniRef90 ID as uniref100_id for the ups→ips lookup chain
+      uniref100_id: uniref90_id,
+      uniref90_id,
+      // Use top-level gene/product (Bakta already resolves the best name)
+      // Hypotheticals have product = "hypothetical protein" → store as null
+      gene:         feature.hypothetical ? null : (feature.gene ?? null),
+      product:      feature.hypothetical ? null : (feature.product ?? null),
+      ec_ids,
+      go_ids,
+      cog_category,
+    })
+  }
+
+  console.log(
+    `[AI-DB Ingest] ${entries.length} entries built:`,
+    `${annotated} annotated (ups+ips+psc),`,
+    `${hypothetical} hypothetical (ups only)`,
+  )
+
+  return entries
 }

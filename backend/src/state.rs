@@ -17,10 +17,12 @@ const DEFAULT_JOBS_DB: &str = "/data/jobs.db";
 pub struct AppState {
     /// In-memory job cache
     jobs: Arc<RwLock<HashMap<String, JobResponse>>>,
-    /// Path to Bakta SQLite database
+    /// Path to Bakta SQLite database (read-only)
     bakta_db_path: Option<PathBuf>,
     /// Path to jobs database (open connections on-demand)
     jobs_db_path: PathBuf,
+    /// Path to AI-DB annotations DB (read-write, same schema as Bakta DB)
+    custom_annotations_db_path: PathBuf,
 }
 
 impl AppState {
@@ -58,6 +60,17 @@ impl AppState {
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from(DEFAULT_JOBS_DB));
 
+        // Initialize AI-DB annotations DB path
+        // Defaults to same directory as jobs DB so it ends up in the same volume
+        let custom_annotations_db_path = env::var("AI_DB_CUSTOM_ANNOTATIONS_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                jobs_db_path
+                    .parent()
+                    .unwrap_or(std::path::Path::new("/data"))
+                    .join("custom_annotations.db")
+            });
+
         // Ensure parent directory exists
         if let Some(parent) = jobs_db_path.parent() {
             if !parent.exists() {
@@ -77,6 +90,22 @@ impl AppState {
         // Initialize bakta_jobs table
         if let Err(e) = storage::init_bakta_table(&jobs_db) {
             tracing::warn!("Failed to initialize bakta_jobs table: {}", e);
+        }
+
+        // AI-DB annotations DB is created by setup-custom-annotations-db.sh on the host.
+        // We only check existence here – the Rust code never creates or migrates it.
+        if custom_annotations_db_path.exists() {
+            tracing::info!(
+                "AI-DB annotations DB found at {:?}",
+                custom_annotations_db_path
+            );
+        } else {
+            tracing::warn!(
+                "AI-DB annotations DB not found at {:?}. \
+                 Hash lookups will use the Bakta DB only. \
+                 Run ./setup-custom-annotations-db.sh on the server to enable ingestion.",
+                custom_annotations_db_path
+            );
         }
 
         // Cleanup old jobs on startup
@@ -107,6 +136,7 @@ impl AppState {
             jobs: Arc::new(RwLock::new(jobs_map)),
             bakta_db_path,
             jobs_db_path,
+            custom_annotations_db_path,
         }
     }
 
@@ -200,6 +230,34 @@ impl AppState {
                 })
                 .ok()
         })
+    }
+
+    /// Opens a read-write connection to the AI-DB annotations DB.
+    /// Returns None if the DB file does not exist (setup script not yet run)
+    /// or if the connection cannot be established.
+    pub fn open_custom_annotations_db(&self) -> Option<Connection> {
+        if !self.custom_annotations_db_path.exists() {
+            // Logged at startup already; no need to repeat on every call
+            return None;
+        }
+        Connection::open(&self.custom_annotations_db_path)
+            .map_err(|e| {
+                tracing::error!("Failed to open AI-DB annotations DB: {}", e);
+                e
+            })
+            .ok()
+    }
+
+    /// Ingest custom annotation entries into the AI-DB annotations DB.
+    pub fn ingest_custom_annotations(
+        &self,
+        entries: &[crate::models::CustomAnnotationEntry],
+    ) -> Result<(usize, usize), String> {
+        let conn = self
+            .open_custom_annotations_db()
+            .ok_or_else(|| "Failed to open AI-DB annotations DB".to_string())?;
+        storage::ingest_custom_annotations(&conn, entries)
+            .map_err(|e| format!("Ingest failed: {e}"))
     }
 
     /// Returns the Bakta database path if configured
