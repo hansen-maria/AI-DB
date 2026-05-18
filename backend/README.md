@@ -13,18 +13,24 @@ backend/src/
 │
 ├── models/              # Data structures 
 │   ├── mod.rs           
+│   ├── bakta.rs         # Data models for Bakta job persistence
+│   ├── custom_db.rs     # Data models for AI-DB Annotations
 │   ├── error.rs         # ErrorResponse
+│   ├── health.rs        # Health-Check types and responses
 │   ├── job.rs           # JobResponse, JobStatus, JobSummary, JobCreateResponse
-│   ├── sequence.rs      # SequenceInfo, SequenceFilter, AdvancedSequenceFilter
 │   ├── pagination.rs    # PaginationInfo, PaginatedJobsResponse, Query types
+│   ├── psos.rs          # Psos analysis result models
+│   ├── sequence.rs      # SequenceInfo, SequenceFilter, AdvancedSequenceFilter
 │   └── stats.rs         # FunctionalStats, CountItem, CogCategory, GoTerms
 │
 ├── handlers/            # API endpoints 
 │   ├── mod.rs           
-│   ├── jobs.rs          # get_job, create_job, list_jobs, delete_job
-│   ├── stats.rs         # get_job_stats (functional analysis)
+│   ├── bakta.rs         # save_bakta_job, get_bakta_job, delete_bakta_job
 │   ├── download.rs      # download_job
-│   └── health.rs        # health_check, db_info
+│   ├── health.rs        # health_check, db_info
+│   ├── jobs.rs          # get_job, create_job, list_jobs, delete_job
+│   ├── psos.rs          # save_psos_results, get_psos_results, delete_psos_results
+│   └── stats.rs         # get_job_stats (functional analysis)
 │
 ├── services/            # Business logic 
 │   ├── mod.rs           
@@ -64,12 +70,19 @@ Jobs are persisted to SQLite and survive container restarts:
 ### Database Schema
 
 ```sql
-CREATE TABLE jobs (
+CREATE TABLE IF NOT EXISTS jobs (
     job_id TEXT PRIMARY KEY,
-    owner_id TEXT NOT NULL,
-    data TEXT NOT NULL,      -- JSON serialized JobResponse
+    owner_id TEXT,
+    status TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    filename TEXT,
+    sequence_count INTEGER NOT NULL DEFAULT 0,
+    processed_count INTEGER NOT NULL DEFAULT 0,
+    hash_matches INTEGER NOT NULL DEFAULT 0,
+    alignment_matches INTEGER NOT NULL DEFAULT 0,
+    error_message TEXT,
+    sequences TEXT
 );
 ```
 
@@ -81,16 +94,27 @@ CREATE TABLE jobs (
 
 ## API Endpoints
 
-| Method   | Endpoint                          | Handler                            |
-|----------|-----------------------------------|------------------------------------|
-| `POST`   | `/api/job/`                       | `handlers::jobs::create_job`       |
-| `GET`    | `/api/job/{id}`                   | `handlers::jobs::get_job`          |
-| `GET`    | `/api/job/{id}/stats`             | `handlers::stats::get_job_stats`   |
-| `GET`    | `/api/job/{id}/download/{format}` | `handlers::download::download_job` |
-| `GET`    | `/api/jobs/`                      | `handlers::jobs::list_jobs`        |
-| `DELETE` | `/api/job/{id}`                   | `handlers::jobs::delete_job`       |
-| `GET`    | `/api/health`                     | `handlers::health::health_check`   |
-| `GET`    | `/api/db/info`                    | `handlers::health::db_info`        |
+| Method   | Endpoint                          | Handler                                 |
+|----------|-----------------------------------|-----------------------------------------|
+| `JOBS`   |                                   |                                         |
+| `POST`   | `/api/job/`                       | `handlers::jobs::create_job`            |
+| `GET`    | `/api/job/{id}`                   | `handlers::jobs::get_job`               |
+| `DELETE` | `/api/job/{id}`                   | `handlers::jobs::delete_job`            |
+| `GET`    | `/api/job/{id}/download/{format}` | `handlers::download::download_job`      |
+| `GET`    | `/api/job/{id}/stats`             | `handlers::stats::get_job_stats`        |
+| `GET`    | `/api/jobs/`                      | `handlers::jobs::list_jobs`             |
+| `PSOS`   |                                   |                                         |
+| `GET`    | `/api/job/{id}/psos`              | `handlers::psos::get_psos_results`      |
+| `POST`   | `/api/job/{id}/psos`              | `handlers::psos::save_psos_results`     |
+| `DELETE` | `/api/job/{id}/psos`              | `handlers::psos::delete_psos_results`   |
+| `BAKTA`  |                                   |                                         |
+| `GET`    | `/api/job/{id}/bakta`             | `handlers::bakta::get_bakta_job`        |
+| `POST`   | `/api/job/{id}/bakta`             | `handlers::bakta::save_bakta_job`       |
+| `DELETE` | `/api/job/{id}/bakta`             | `handlers::bakta::delete_bakta_job`     |
+| `POST`   | `/api/job/{id}/bakta/ingest`      | `handlers::bakta::ingest_bakta_results` |
+| `HEALTH` |                                   |                                         |
+| `GET`    | `/api/health`                     | `handlers::health::health_check`        |
+| `GET`    | `/api/db/info`                    | `handlers::health::db_info`             |
 
 ## Functional Analysis
 
@@ -106,9 +130,10 @@ The `/api/job/{id}/stats` endpoint queries the Bakta database for:
 
 ```
 sequence.aa_hash (MD5)
-    → PSC table (uniref100_id)
-    → IPS table (uniref90_id lookup)
-    → Functional annotations (COG, EC, GO)
+    → Hash lookup (per sequence during job processing):
+      1. MD5(seq) → hash in Bakta DB?        → Annotation, else Step 2
+      2. MD5(seq) → hash in AI-DB?           → Annotation, else Step 3
+      3. No match
 ```
 
 ## Advanced Filtering
@@ -127,14 +152,15 @@ The `AdvancedSequenceFilter` supports:
 
 ## Environment Variables
 
-| Variable           | Description                                 | Default         |
-|--------------------|---------------------------------------------|-----------------|
-| `RUST_LOG`         | Log level (trace, debug, info, warn, error) | `info`          |
-| `BAKTA_DB`         | Path to Bakta database directory            | `/bakta-db`     |
-| `AI_DB_TEMP_DIR`   | Directory for temporary upload files        | `/tmp`          |
-| `AI_DB_JOBS_PATH`  | Path to SQLite jobs database                | `/data/jobs.db` |
-| `AI_DB_PORT`       | HTTP server port                            | `8000`          |
-| `AI_DB_HOST`       | HTTP server bind address                    | `0.0.0.0`       |
+| Variable                        | Description                                 | Default                            |
+|---------------------------------|---------------------------------------------|------------------------------------|
+| `RUST_LOG`                      | Log level (trace, debug, info, warn, error) | `info`                             |
+| `BAKTA_DB`                      | Path to Bakta database directory            | `/bakta-db`                        |
+| `AI_DB_TEMP_DIR`                | Directory for temporary upload files        | `/tmp`                             |
+| `AI_DB_JOBS_PATH`               | Path to SQLite jobs database                | `/data/jobs.db`                    |
+| `AI_DB_PORT`                    | HTTP server port                            | `8000`                             |
+| `AI_DB_HOST`                    | HTTP server bind address                    | `0.0.0.0`                          |
+| `AI_DB_CUSTOM_ANNOTATIONS_PATH` | Path to custom AI-DB database               | `/custom-db/custom_annotations.db` |
 
 ## Usage
 
@@ -151,7 +177,8 @@ RUST_LOG=debug cargo run
 # With custom paths
 AI_DB_TEMP_DIR=/mnt/ai-db-tmp \
 AI_DB_JOBS_PATH=/data/jobs.db \
-BAKTA_DB=/path/to/bakta \
+AI_DB_CUSTOM_ANNOTATIONS_PATH=/custom-db/custom_annotations.db \
+BAKTA_DB=/bakta-db \
 cargo run
 ```
 
