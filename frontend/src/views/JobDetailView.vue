@@ -130,9 +130,9 @@ const filteredSequences = computed(() => {
     if (hasGeneOnly.value && (!seq.gene || seq.gene === '')) return false
 
     // Has product filter
-    if (hasProductOnly.value && (!seq.product || seq.product === '')) return false
+    return !(hasProductOnly.value && (!seq.product || seq.product === ''));
 
-    return true
+
   })
 })
 

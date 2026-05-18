@@ -338,7 +338,7 @@ export async function fetchBaktaJsonResult(jsonUrl: string): Promise<BaktaJsonRe
   try {
     const resp = await fetch(jsonUrl)
     if (!resp.ok) return null
-    return resp.json() as Promise<BaktaJsonResult>
+    return await resp.json() as Promise<BaktaJsonResult>
   } catch {
     return null
   }
@@ -362,7 +362,7 @@ export async function initBaktaJob(
     const detail = await resp.text().catch(() => '')
     throw new Error(`Bakta V1 init failed (${resp.status}): ${detail || resp.statusText}`)
   }
-  return resp.json() as Promise<BaktaInitResponse>
+  return await resp.json() as Promise<BaktaInitResponse>
 }
 
 /** POST /api/v1/job/start */
@@ -406,7 +406,7 @@ export async function getBaktaResult(job: BaktaJobRef): Promise<BaktaResultRespo
     const detail = await resp.text().catch(() => '')
     throw new Error(`Bakta V1 result failed (${resp.status}): ${detail || resp.statusText}`)
   }
-  return resp.json() as Promise<BaktaResultResponse>
+  return await resp.json() as Promise<BaktaResultResponse>
 }
 
 /** GET /api/v1/job/logs?jobID=&secret= */
@@ -450,7 +450,7 @@ export async function initV2Job(name: string): Promise<V2InitResponse> {
     const detail = await resp.text().catch(() => '')
     throw new Error(`Bakta V2 init failed (${resp.status}): ${detail || resp.statusText}`)
   }
-  return resp.json() as Promise<V2InitResponse>
+  return await resp.json() as Promise<V2InitResponse>
 }
 
 /** POST /api/v2/job/start – config is EmptyConfig ({}) for bakta_proteins */
@@ -494,7 +494,7 @@ export async function getV2Result(job: JobReference): Promise<V2ResultResponse> 
     const detail = await resp.text().catch(() => '')
     throw new Error(`Bakta V2 result failed (${resp.status}): ${detail || resp.statusText}`)
   }
-  return resp.json() as Promise<V2ResultResponse>
+  return await resp.json() as Promise<V2ResultResponse>
 }
 
 /** GET /api/v2/job/logs?job_id=&secret= – returns all stage logs concatenated */
@@ -807,6 +807,7 @@ async function runProteinAnnotation(
  * @param options    V1 job config options (ignored for protein sequences)
  * @param onProgress Progress callback (stage label, 0–100 %)
  * @param signal     AbortSignal to cancel
+ * @param aidbJobId  ID of AI-DB Job
  */
 export async function runBaktaAnnotation(
   sequences: Array<{ id: string; sequence: string }>,
@@ -1272,7 +1273,7 @@ export async function ingestBaktaResults(
     const detail = await resp.text().catch(() => '')
     throw new Error(`Ingest failed (${resp.status}): ${detail || resp.statusText}`)
   }
-  return resp.json() as Promise<IngestResponse>
+  return await resp.json() as Promise<IngestResponse>
 }
 
 /**
