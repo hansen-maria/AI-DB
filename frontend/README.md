@@ -30,12 +30,15 @@ frontend/
     ├── router/
     │   └── index.ts           # Route definitions
     ├── api/
-    │   └── jobs.ts            # API client with TypeScript types
+    │   ├── bakta.ts           # API client for bakta jobs
+    │   ├── jobs.ts            # API client with TypeScript types
+    │   └── psos.ts            # API client for psos jobs
     ├── views/
+    │   ├── ContactView.vue    # Contact Page
     │   ├── HomeView.vue       # Landing page
-    │   ├── SubmitJobView.vue  # FASTA upload form
     │   ├── JobDetailView.vue  # Job results with tabs, search & analysis
-    │   └── JobListView.vue    # Paginated job list
+    │   ├── JobListView.vue    # Paginated job list
+    │   └── SubmitJobView.vue  # FASTA upload form
     └── assets/
         ├── main.css           # Global styles
         ├── logo-light.png     # Logo for light mode
@@ -125,6 +128,10 @@ FASTA submission form with:
 - Sticky header for scrolling
 - Row hover highlighting
 
+**Analyse Unmatched:**
+- Options to further analyse unmatched sequences via Psos or Bakta
+- Bakta results can be ingested into AI-DB annotations database
+
 #### Functional Analysis Tab
 
 **Annotation Rate:**
@@ -204,6 +211,7 @@ downloadJobResults(jobId, format): Promise<void>
 | `/submit`  | SubmitJobView | Job submission                     |
 | `/job/:id` | JobDetailView | Job results (tabs, search, charts) |
 | `/jobs`    | JobListView   | Job history                        |
+| `/contact` | ContactView   | Contact Page                       |
 | `/docs`    | -             | Redirect to Swagger UI             |
 
 ## Styling
