@@ -34,8 +34,8 @@ import { RouterLink } from 'vue-router'
           <p>Access functional classifications, database cross-references, and metadata from extensively characterized UniRef protein sequences.</p>
         </div>
         <div class="feature">
-          <h4>Fallback Alignment</h4>
-          <p>Seamlessly transitions to Diamond alignment for novel sequences without hash matches, ensuring comprehensive annotation coverage.</p>
+          <h4>Advanced Analysis</h4>
+          <p>Unmatched sequences can be seamlessly analyzed further using integrated Psos and Bakta tools directly from the web interface.</p>
         </div>
         <div class="feature">
           <h4>Continuously Expanding</h4>
@@ -53,7 +53,7 @@ import { RouterLink } from 'vue-router'
       <h3 class="section-title">How It Works</h3>
       <p class="section-intro">
         AI-DB implements a multi-tiered annotation strategy that combines instant hash-based
-        retrieval with classical alignment methods.
+        retrieval with powerful fallback analysis tools.
       </p>
       <div class="workflow">
         <div class="workflow-step">
@@ -80,8 +80,8 @@ import { RouterLink } from 'vue-router'
         <div class="workflow-step">
           <div class="step-number">4</div>
           <div class="step-content">
-            <h4>Get Results</h4>
-            <p>Receive instant annotations for hash matches, with alignment fallback for novel sequences.</p>
+            <h4>Get Results & Analyse</h4>
+            <p>Receive instant annotations for hash matches. Further analyze unmatched sequences using Psos or Bakta and ingest the results.</p>
           </div>
         </div>
       </div>
@@ -113,6 +113,11 @@ import { RouterLink } from 'vue-router'
           <span class="method get">GET</span>
           <code>/api/job/{id}/download/{format}</code>
           <span class="endpoint-desc">Download results in different file formats</span>
+        </div>
+        <div class="endpoint">
+          <span class="method post">POST</span>
+          <code>/api/job/{id}/bakta/ingest</code>
+          <span class="endpoint-desc">Ingest Bakta results into AI-DB Annotations DB</span>
         </div>
         <div class="endpoint">
           <span class="method delete">DELETE</span>
