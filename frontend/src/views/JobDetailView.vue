@@ -99,9 +99,17 @@ const filteredSequences = computed(() => {
   if (!allSequences.value.length) return []
 
   return allSequences.value.filter(seq => {
-    // Basic filter (match status)
-    if (currentFilter.value === 'hash_match' && seq.annotation_source !== 'hash_match') return false
-    if (currentFilter.value === 'none' && seq.annotation_source) return false
+    // Match status filter
+    if (currentFilter.value === 'hash_match') {
+      // "Any match" = any annotation source (bakta_db, aidb_db, or legacy hash_match)
+      if (!seq.annotation_source) return false
+    } else if (currentFilter.value === 'bakta_db') {
+      if (seq.annotation_source !== 'bakta_db') return false
+    } else if (currentFilter.value === 'aidb_db') {
+      if (seq.annotation_source !== 'aidb_db') return false
+    } else if (currentFilter.value === 'none') {
+      if (seq.annotation_source) return false
+    }
 
     // Text search (use debounced value)
     if (debouncedSearch.value) {
@@ -447,9 +455,11 @@ const statusLabels: Record<JobStatus, string> = {
 }
 
 const filterOptions: { value: SequenceFilter; label: string }[] = [
-  { value: 'all', label: 'All' },
-  { value: 'hash_match', label: 'Matches' },
-  { value: 'none', label: 'No Match' },
+  { value: 'all',       label: 'All' },
+  { value: 'hash_match', label: 'Matched' },
+  { value: 'bakta_db',  label: 'Match (Bakta)' },
+  { value: 'aidb_db',   label: 'Match (AI-DB)' },
+  { value: 'none',      label: 'No Match' },
 ]
 
 const cogCategories = [
@@ -1362,9 +1372,10 @@ onUnmounted(() => {
                   <div class="bakta-ingest">
                     <h4 class="bakta-section-title">Add to AI-DB annotations DB</h4>
                     <p class="bakta-description" style="margin: 0 0 0.6rem;">
-                      Write Bakta annotations back into the AI-DB annotations DB so future jobs
+                      Write Bakta annotations back into the local AI-DB annotations DB so future jobs
                       recognize these sequences via hash lookup — without re-running Bakta.
-                      Even hypothetical proteins are stored in AI-DB so they are not re-submitted.
+                      Annotated proteins populate <code>ups</code>, <code>ips</code> and <code>psc</code>;
+                      hypothetical proteins are stored in <code>ups</code> only so they are not re-submitted.
                     </p>
 
                     <!-- Success -->
@@ -1411,7 +1422,7 @@ onUnmounted(() => {
                   <!-- Re-run -->
                   <button class="btn btn-secondary-psos" style="margin-top: 0.5rem; align-self: flex-start"
                           @click="deleteBaktaState(jobId); baktaResult = null; baktaError = ''; baktaIngestResult = null">
-                    Re-run job
+                    Re-run with different settings
                   </button>
                 </div>
               </div>

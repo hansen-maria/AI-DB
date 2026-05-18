@@ -458,21 +458,21 @@ pub async fn delete_job(
 ) -> impl IntoResponse {
     let owner_id = jar.get(OWNER_COOKIE_NAME).map(|c| c.value().to_string());
 
-    let jobs = state.jobs_mut();
-
-    // First check if job exists and belongs to owner
-    if let Some(job) = jobs.get(&job_id) {
-        let is_owner = match (&job.owner_id, &owner_id) {
-            (Some(job_owner), Some(cookie_owner)) => job_owner == cookie_owner,
-            _ => false,
-        };
-
-        if !is_owner {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(ErrorResponse::new("Not authorized to delete this job")),
-            )
-                .into_response();
+    // Check existence first (read lock)
+    {
+        let jobs = state.jobs();
+        if let Some(job) = jobs.get(&job_id) {
+            // Only block if BOTH sides have an owner_id AND they differ.
+            // If the cookie is missing (None), allow deletion – same policy as get_job.
+            if let (Some(job_owner), Some(cookie_owner)) = (&job.owner_id, &owner_id) {
+                if job_owner != cookie_owner {
+                    return (
+                        StatusCode::FORBIDDEN,
+                        Json(ErrorResponse::new("Not authorized to delete this job")),
+                    )
+                        .into_response();
+                }
+            }
         } else {
             return (
                 StatusCode::NOT_FOUND,

@@ -10,8 +10,7 @@ const API_BASE = '/api';
 // ============================================================================
 
 export type JobStatus = 'pending' | 'processing' | 'completed' | 'failed';
-
-export type SequenceFilter = 'all' | 'hash_match' | 'alignment' | 'none';
+export type SequenceFilter = 'all' | 'hash_match' | 'bakta_db' | 'aidb_db' | 'alignment' | 'none';
 
 /** Advanced filter options for sequence search */
 export interface AdvancedFilterOptions {
@@ -365,11 +364,22 @@ export async function deleteJob(jobId: string): Promise<void> {
     });
 
     if (!response.ok) {
-        if (response.status === 404) {
-            throw new Error(`Job with ID '${jobId}' not found`);
+        // Try to read a structured error body; fall back to status text
+        let detail = '';
+        try {
+            const body = await response.json();
+            detail = body.detail || body.message || body.error || '';
+        } catch {
+            try { detail = await response.text(); } catch { /* ignore */ }
         }
-        const error: ApiError = await response.json();
-        throw new Error(error.detail || 'Failed to delete job');
+
+        if (response.status === 403) {
+            throw new Error(detail || 'Not authorized to delete this job');
+        }
+        if (response.status === 404) {
+            throw new Error(detail || `Job with ID '${jobId}' not found`);
+        }
+        throw new Error(detail || `Failed to delete job (${response.status})`);
     }
 }
 
