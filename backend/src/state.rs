@@ -201,10 +201,8 @@ impl AppState {
             }
         };
 
-        for job_result in job_iter {
-            if let Ok(job) = job_result {
-                jobs_map.insert(job.job_id.clone(), job);
-            }
+        for job in job_iter.flatten() {
+            jobs_map.insert(job.job_id.clone(), job);
         }
 
         jobs_map
@@ -322,8 +320,13 @@ impl AppState {
     // ========================================================================
 
     /// Save Psos results to database
-    pub fn save_psos_results(&self, job_id: &str, results: &[crate::models::PsosResult]) -> Result<usize, String> {
-        let conn = self.open_jobs_db()
+    pub fn save_psos_results(
+        &self,
+        job_id: &str,
+        results: &[crate::models::PsosResult],
+    ) -> Result<usize, String> {
+        let conn = self
+            .open_jobs_db()
             .ok_or_else(|| "Failed to open database".to_string())?;
 
         storage::save_psos_results(&conn, job_id, results)
@@ -336,8 +339,12 @@ impl AppState {
     }
 
     /// Load Psos results from database
-    pub fn load_psos_results(&self, job_id: &str) -> Result<Vec<crate::models::PsosResult>, String> {
-        let conn = self.open_jobs_db()
+    pub fn load_psos_results(
+        &self,
+        job_id: &str,
+    ) -> Result<Vec<crate::models::PsosResult>, String> {
+        let conn = self
+            .open_jobs_db()
             .ok_or_else(|| "Failed to open database".to_string())?;
 
         storage::load_psos_results(&conn, job_id)

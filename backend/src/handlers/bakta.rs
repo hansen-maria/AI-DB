@@ -14,8 +14,8 @@ use axum::{
 };
 
 use crate::models::{
-    BaktaJobStateResponse, ErrorResponse, SaveBaktaJobRequest, SaveBaktaJobResponse,
-    IngestCustomAnnotationsRequest, IngestCustomAnnotationsResponse,
+    BaktaJobStateResponse, ErrorResponse, IngestCustomAnnotationsRequest,
+    IngestCustomAnnotationsResponse, SaveBaktaJobRequest, SaveBaktaJobResponse,
 };
 use crate::state::AppState;
 

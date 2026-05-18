@@ -90,8 +90,9 @@ impl Default for HashLookupResult {
 }
 
 /// Filter type for sequences
-#[derive(Debug, Clone, PartialEq, ToSchema)]
+#[derive(Default, Debug, Clone, PartialEq, ToSchema)]
 pub enum SequenceFilter {
+    #[default]
     All,
     HashMatch,
     Alignment,
@@ -160,10 +161,14 @@ impl AdvancedSequenceFilter {
         if let Some(ref search) = self.search {
             let search_lower = search.to_lowercase();
             let id_match = seq.id.to_lowercase().contains(&search_lower);
-            let gene_match = seq.gene.as_ref()
+            let gene_match = seq
+                .gene
+                .as_ref()
                 .map(|g| g.to_lowercase().contains(&search_lower))
                 .unwrap_or(false);
-            let product_match = seq.product.as_ref()
+            let product_match = seq
+                .product
+                .as_ref()
                 .map(|p| p.to_lowercase().contains(&search_lower))
                 .unwrap_or(false);
 
@@ -200,8 +205,7 @@ impl AdvancedSequenceFilter {
         if let Some(ref ec) = self.ec_class {
             match &seq.ec_ids {
                 Some(seq_ec) => {
-                    let has_ec_class = seq_ec.split(',')
-                        .any(|e| e.trim().starts_with(ec));
+                    let has_ec_class = seq_ec.split(',').any(|e| e.trim().starts_with(ec));
                     if !has_ec_class {
                         return false;
                     }
@@ -229,18 +233,12 @@ impl AdvancedSequenceFilter {
 
     /// Check if any advanced filters are active
     pub fn has_advanced_filters(&self) -> bool {
-        self.search.is_some() ||
-            self.min_length.is_some() ||
-            self.max_length.is_some() ||
-            self.cog_category.is_some() ||
-            self.ec_class.is_some() ||
-            self.has_gene == Some(true) ||
-            self.has_product == Some(true)
-    }
-}
-
-impl Default for SequenceFilter {
-    fn default() -> Self {
-        SequenceFilter::All
+        self.search.is_some()
+            || self.min_length.is_some()
+            || self.max_length.is_some()
+            || self.cog_category.is_some()
+            || self.ec_class.is_some()
+            || self.has_gene == Some(true)
+            || self.has_product == Some(true)
     }
 }

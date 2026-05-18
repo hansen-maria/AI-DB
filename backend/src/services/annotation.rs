@@ -14,11 +14,7 @@ use crate::services::fasta::{compute_md5, FastaIterator, BATCH_SIZE, MAX_RESULTS
 use crate::state::AppState;
 
 /// Performs hash lookup in a single database connection (Bakta or AI-DB annotations DB).
-fn lookup_in_db(
-    conn: &Connection,
-    hash_bytes: &[u8],
-    seq_length: usize,
-) -> HashLookupResult {
+fn lookup_in_db(conn: &Connection, hash_bytes: &[u8], seq_length: usize) -> HashLookupResult {
     // Query the ups table - hash is stored as BLOB
     let query = "SELECT length, uniparc_id, ncbi_nrp_id, uniref100_id FROM ups WHERE hash = ?";
 
@@ -126,15 +122,16 @@ struct FullAnnotation {
 /// Strategy: Query IPS for direct data and uniref90_id mapping, then enrich from PSC
 fn lookup_full_annotation(conn: &Connection, uniref100_id: &str) -> Option<FullAnnotation> {
     // Step 1: Query IPS table for direct data and uniref90_id mapping
-    let ips_query = "SELECT uniref90_id, gene, product, ec_ids, go_ids FROM ips WHERE uniref100_id = ? LIMIT 1";
+    let ips_query =
+        "SELECT uniref90_id, gene, product, ec_ids, go_ids FROM ips WHERE uniref100_id = ? LIMIT 1";
 
     match conn.query_row(ips_query, [uniref100_id], |row| {
         Ok((
-            row.get::<_, Option<String>>(0).ok().flatten(),  // uniref90_id
-            row.get::<_, Option<String>>(1).ok().flatten(),  // gene
-            row.get::<_, Option<String>>(2).ok().flatten(),  // product
-            row.get::<_, Option<String>>(3).ok().flatten(),  // ec_ids
-            row.get::<_, Option<String>>(4).ok().flatten(),  // go_ids
+            row.get::<_, Option<String>>(0).ok().flatten(), // uniref90_id
+            row.get::<_, Option<String>>(1).ok().flatten(), // gene
+            row.get::<_, Option<String>>(2).ok().flatten(), // product
+            row.get::<_, Option<String>>(3).ok().flatten(), // ec_ids
+            row.get::<_, Option<String>>(4).ok().flatten(), // go_ids
         ))
     }) {
         Ok((uniref90_id, ips_gene, ips_product, ips_ec_ids, ips_go_ids)) => {
@@ -181,9 +178,12 @@ fn lookup_full_annotation(conn: &Connection, uniref100_id: &str) -> Option<FullA
             }
 
             // Only return if we found any annotation data
-            if annotation.gene.is_some() || annotation.product.is_some() ||
-                annotation.cog_category.is_some() || annotation.ec_ids.is_some() ||
-                annotation.go_ids.is_some() {
+            if annotation.gene.is_some()
+                || annotation.product.is_some()
+                || annotation.cog_category.is_some()
+                || annotation.ec_ids.is_some()
+                || annotation.go_ids.is_some()
+            {
                 Some(annotation)
             } else {
                 None
@@ -237,11 +237,9 @@ fn count_sequences(file_path: &Path, is_gzip: bool) -> usize {
     };
 
     let mut count = 0;
-    for line in reader.lines() {
-        if let Ok(line) = line {
-            if line.starts_with('>') {
-                count += 1;
-            }
+    for line in reader.lines().flatten() {
+        if line.starts_with('>') {
+            count += 1;
         }
     }
     count
@@ -251,7 +249,11 @@ fn count_sequences(file_path: &Path, is_gzip: bool) -> usize {
 pub fn process_job_from_file(state: &AppState, job_id: &str, file_path: &Path, is_gzip: bool) {
     // First, quickly count total sequences for progress tracking
     let total_sequences = count_sequences(file_path, is_gzip);
-    tracing::info!("Job {} has {} sequences to process", job_id, total_sequences);
+    tracing::info!(
+        "Job {} has {} sequences to process",
+        job_id,
+        total_sequences
+    );
 
     // Set status to processing with total count
     {
@@ -276,7 +278,7 @@ pub fn process_job_from_file(state: &AppState, job_id: &str, file_path: &Path, i
     // Try to open database connections
     let db_conn = state.open_db_connection();
     let aidb_conn = state.open_custom_annotations_db();
-    let db_available = db_conn.is_some() || aidb_conn.is_some();
+    let _db_available = db_conn.is_some() || aidb_conn.is_some();
 
     match (db_conn.is_some(), aidb_conn.is_some()) {
         (true,  true)  => tracing::info!(
@@ -342,11 +344,17 @@ pub fn process_job_from_file(state: &AppState, job_id: &str, file_path: &Path, i
         let (annotation, annotation_source) = match lookup_source {
             "bakta_db" => {
                 bakta_db_matches += 1;
-                (format_annotation(&lookup_result), Some("bakta_db".to_string()))
+                (
+                    format_annotation(&lookup_result),
+                    Some("bakta_db".to_string()),
+                )
             }
             "aidb_db" => {
                 aidb_db_matches += 1;
-                (format_annotation(&lookup_result), Some("aidb_db".to_string()))
+                (
+                    format_annotation(&lookup_result),
+                    Some("aidb_db".to_string()),
+                )
             }
             _ => (None, None),
         };

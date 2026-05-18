@@ -33,7 +33,7 @@ pub struct PaginationInfo {
 
 impl PaginationInfo {
     pub fn new(page: usize, per_page: usize, total_items: usize) -> Self {
-        let total_pages = (total_items + per_page - 1) / per_page; // Ceiling division
+        let total_pages = total_items.div_ceil(per_page);
         Self {
             page,
             per_page,

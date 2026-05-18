@@ -13,7 +13,7 @@ pub const MAX_SEQUENCE_LENGTH: usize = 5_000_000; // 5 MB
 /// Maximum results to store (prevent OOM)
 pub const MAX_RESULTS: usize = 1_000_000;
 
-//// Streaming FASTA parser that yields sequences one at a time
+/// Streaming FASTA parser that yields sequences one at a time
 pub struct FastaIterator<R: BufRead> {
     reader: R,
     current_header: Option<String>,

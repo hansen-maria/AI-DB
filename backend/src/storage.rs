@@ -134,7 +134,7 @@ pub fn load_job(conn: &Connection, job_id: &str) -> Result<Option<JobResponse>, 
             })
         },
     )
-        .optional()
+    .optional()
 }
 
 /// Load all jobs for a specific owner
@@ -260,7 +260,11 @@ pub fn init_psos_table(conn: &Connection) -> Result<(), rusqlite::Error> {
 }
 
 /// Save a single Psos result
-pub fn save_psos_result(conn: &Connection, job_id: &str, result: &PsosResult) -> Result<(), rusqlite::Error> {
+pub fn save_psos_result(
+    conn: &Connection,
+    job_id: &str,
+    result: &PsosResult,
+) -> Result<(), rusqlite::Error> {
     conn.execute(
         "INSERT OR REPLACE INTO psos_results
          (job_id, sequence_id, psos_job_id, protein_name, best_hit_dbxref,
@@ -283,7 +287,11 @@ pub fn save_psos_result(conn: &Connection, job_id: &str, result: &PsosResult) ->
 }
 
 /// Save multiple Psos results at once
-pub fn save_psos_results(conn: &Connection, job_id: &str, results: &[PsosResult]) -> Result<(), rusqlite::Error> {
+pub fn save_psos_results(
+    conn: &Connection,
+    job_id: &str,
+    results: &[PsosResult],
+) -> Result<(), rusqlite::Error> {
     for result in results {
         save_psos_result(conn, job_id, result)?;
     }
@@ -291,7 +299,10 @@ pub fn save_psos_results(conn: &Connection, job_id: &str, results: &[PsosResult]
 }
 
 /// Load all Psos results for a job
-pub fn load_psos_results(conn: &Connection, job_id: &str) -> Result<Vec<PsosResult>, rusqlite::Error> {
+pub fn load_psos_results(
+    conn: &Connection,
+    job_id: &str,
+) -> Result<Vec<PsosResult>, rusqlite::Error> {
     let mut stmt = conn.prepare(
         "SELECT sequence_id, psos_job_id, protein_name, best_hit_dbxref,
                 best_hit_evalue, best_hit_identity, has_signal_peptide, transmembrane_count
@@ -350,7 +361,7 @@ pub fn count_psos_results(conn: &Connection, job_id: &str) -> Result<usize, rusq
 // Bakta Job State Storage
 // ============================================================================
 
-use crate::models::{StoredBaktaJob, SaveBaktaJobRequest};
+use crate::models::{SaveBaktaJobRequest, StoredBaktaJob};
 
 /// Initialize the bakta_jobs table.
 /// One row per AI-DB job (UNIQUE on job_id) – upserted on every progress step.
@@ -453,21 +464,21 @@ pub fn load_bakta_job(
         [job_id],
         |row| {
             Ok(StoredBaktaJob {
-                job_id:            row.get(0)?,
-                bakta_job_id:      row.get(1)?,
-                bakta_secret:      row.get(2)?,
-                sequence_type:     row.get(3)?,
-                status:            row.get(4)?,
-                progress_label:    row.get(5)?,
-                progress_percent:  row.get(6)?,
+                job_id: row.get(0)?,
+                bakta_job_id: row.get(1)?,
+                bakta_secret: row.get(2)?,
+                sequence_type: row.get(3)?,
+                status: row.get(4)?,
+                progress_label: row.get(5)?,
+                progress_percent: row.get(6)?,
                 result_files_json: row.get(7)?,
-                result_json:       row.get(8)?,
-                created_at:        row.get(9)?,
-                updated_at:        row.get(10)?,
+                result_json: row.get(8)?,
+                created_at: row.get(9)?,
+                updated_at: row.get(10)?,
             })
         },
     )
-        .optional()
+    .optional()
 }
 
 /// Delete Bakta state for an AI-DB job. Idempotent.
@@ -524,7 +535,10 @@ pub fn ingest_custom_annotation(
     let hash_bytes = match hex_to_bytes(&entry.md5_hash) {
         Some(b) => b,
         None => {
-            tracing::warn!("AI-DB annotations DB: invalid MD5 hex '{}' – skipping", entry.md5_hash);
+            tracing::warn!(
+                "AI-DB annotations DB: invalid MD5 hex '{}' – skipping",
+                entry.md5_hash
+            );
             return Ok(false);
         }
     };
@@ -599,7 +613,8 @@ pub fn ingest_custom_annotations(
     if ingested > 0 {
         tracing::info!(
             "AI-DB annotations DB: {} new entries ingested, {} skipped (already known)",
-            ingested, skipped
+            ingested,
+            skipped
         );
     }
     Ok((ingested, skipped))

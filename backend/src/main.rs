@@ -20,28 +20,28 @@ pub mod services;
 pub mod state;
 pub mod storage;
 
+use axum::extract::DefaultBodyLimit;
 use axum::{
     routing::{get, post},
     Router,
 };
 use std::net::SocketAddr;
-use axum::extract::DefaultBodyLimit;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
 use crate::handlers::{
-    create_job, db_info, delete_job, delete_psos_results, download_job, get_job, get_job_stats,
-    get_psos_results, health_check, list_jobs, save_psos_results,
-    save_bakta_job, get_bakta_job, delete_bakta_job, ingest_bakta_results,
+    create_job, db_info, delete_bakta_job, delete_job, delete_psos_results, download_job,
+    get_bakta_job, get_job, get_job_stats, get_psos_results, health_check, ingest_bakta_results,
+    list_jobs, save_bakta_job, save_psos_results,
 };
 use crate::models::{
-    ErrorResponse, FunctionalStats, JobCreateResponse, JobResponse, JobStatus, JobSummary,
-    PaginatedJobResponse, PaginatedJobsResponse, PaginationInfo, PsosResult, PsosResultsResponse,
-    SavePsosResultsRequest, SavePsosResultsResponse, SequenceInfo,
-    StoredBaktaJob, SaveBaktaJobRequest, SaveBaktaJobResponse, BaktaJobStateResponse,
-    CustomAnnotationEntry, IngestCustomAnnotationsRequest, IngestCustomAnnotationsResponse,
+    BaktaJobStateResponse, CustomAnnotationEntry, ErrorResponse, FunctionalStats,
+    IngestCustomAnnotationsRequest, IngestCustomAnnotationsResponse, JobCreateResponse,
+    JobResponse, JobStatus, JobSummary, PaginatedJobResponse, PaginatedJobsResponse,
+    PaginationInfo, PsosResult, PsosResultsResponse, SaveBaktaJobRequest, SaveBaktaJobResponse,
+    SavePsosResultsRequest, SavePsosResultsResponse, SequenceInfo, StoredBaktaJob,
 };
 use crate::state::AppState;
 
@@ -116,8 +116,7 @@ async fn main() {
     // Initialize tracing
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 

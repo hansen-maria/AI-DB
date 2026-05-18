@@ -65,8 +65,7 @@ pub async fn get_job(
     let per_page = query
         .per_page
         .unwrap_or(DEFAULT_PER_PAGE)
-        .min(MAX_PER_PAGE)
-        .max(1);
+        .clamp(1, MAX_PER_PAGE);
 
     // Build advanced filter from query parameters
     let advanced_filter = AdvancedSequenceFilter {
@@ -351,7 +350,7 @@ pub async fn create_job(
                 is_gzip_data,
             );
         })
-            .await;
+        .await;
 
         // Clean up temp file
         if let Err(e) = temp_path.close() {
@@ -399,8 +398,7 @@ pub async fn list_jobs(
     let per_page = query
         .per_page
         .unwrap_or(DEFAULT_PER_PAGE)
-        .min(MAX_PER_PAGE)
-        .max(1);
+        .clamp(1, MAX_PER_PAGE);
 
     // Get owner ID from cookie
     let owner_id = jar.get(OWNER_COOKIE_NAME).map(|c| c.value().to_string());
