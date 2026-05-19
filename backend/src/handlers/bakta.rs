@@ -163,7 +163,7 @@ pub async fn ingest_bakta_results(
         total
     );
 
-    let (ingested, skipped) = state
+    let (ingested, updated) = state
         .ingest_custom_annotations(&request.entries)
         .map_err(|e| {
             tracing::error!("Ingest failed for job {job_id}: {e}");
@@ -175,7 +175,7 @@ pub async fn ingest_bakta_results(
 
     Ok(Json(IngestCustomAnnotationsResponse {
         ingested,
-        skipped,
+        updated,
         total,
     }))
 }

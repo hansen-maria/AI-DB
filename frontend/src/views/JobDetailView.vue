@@ -137,8 +137,8 @@ const filteredSequences = computed(() => {
     // Has gene filter
     if (hasGeneOnly.value && (!seq.gene || seq.gene === '')) return false
 
-    // Has product filter
-    return !(hasProductOnly.value && (!seq.product || seq.product === ''));
+    // Has product filter (hypothetical protein counts as no functional product)
+    return !(hasProductOnly.value && (!seq.product || seq.product === '' || seq.product === 'hypothetical protein'));
 
 
   })
@@ -1013,15 +1013,21 @@ onUnmounted(() => {
                       <span v-else class="no-data">-</span>
                     </td>
                     <td class="seq-product">
-                      <span v-if="seq.product" class="product-desc">{{ seq.product }}</span>
+                      <span v-if="seq.product === 'hypothetical protein'" class="hypothetical-badge">
+                        hypothetical
+                      </span>
+                      <span v-else-if="seq.product" class="product-desc">{{ seq.product }}</span>
                       <span v-else class="no-data">-</span>
                     </td>
                     <td class="annotation-cell">
                       <template v-if="hasAnnotationLinks(seq)">
                         <div class="annotation-links">
-                          <a v-if="seq.uniref100_id" :href="getUniRef100Url(seq.uniref100_id)" target="_blank" class="db-link uniref">UniRef</a>
+                          <a v-if="seq.uniref100_id"
+                             :href="getUniRef100Url(seq.uniref100_id)" target="_blank" class="db-link uniref">UniRef</a>
                           <a v-if="seq.uniparc_id" :href="getUniParcUrl(seq.uniparc_id)" target="_blank" class="db-link uniparc">UniParc</a>
                           <a v-if="seq.ncbi_nrp_id" :href="getNcbiUrl(seq.ncbi_nrp_id)" target="_blank" class="db-link ncbi">NCBI</a>
+                          <span v-if="seq.annotation_source === 'aidb_db' && seq.product === 'hypothetical protein'"
+                                class="db-link aidb-source" title="Identified via AI-DB annotations DB">AI-DB</span>
                         </div>
                       </template>
                       <span v-else class="no-data">-</span>
@@ -1386,7 +1392,7 @@ onUnmounted(() => {
                       </svg>
                       <span>
                         <strong>{{ baktaIngestResult.ingested }}</strong> new sequences added to AI-DB annotations DB,
-                        <strong>{{ baktaIngestResult.skipped }}</strong> already known
+                        <strong>{{ baktaIngestResult.updated }}</strong> existing entries updated
                         ({{ baktaIngestResult.total }} total)
                       </span>
                     </div>
@@ -1898,6 +1904,27 @@ tbody tr:hover { background: var(--color-background-soft); }
 .gene-name { font-family: monospace; font-weight: 600; color: #ff9800; background: rgba(255, 152, 0, 0.1); padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.85rem; }
 .seq-product { max-width: 300px; }
 .product-desc { font-size: 0.9rem; }
+
+.hypothetical-badge {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-style: italic;
+  color: var(--color-text);
+  opacity: 0.55;
+  padding: 0.1rem 0.35rem;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-background-soft);
+}
+
+.db-link.aidb-source {
+  background: rgba(56, 161, 105, 0.12);
+  color: #38a169;
+  border-color: rgba(56, 161, 105, 0.35);
+  font-style: italic;
+  cursor: default;
+  pointer-events: none;
+}
 .no-data { color: var(--color-text); opacity: 0.4; }
 .annotation-links { display: flex; gap: 0.3rem; flex-wrap: wrap; }
 .db-link { padding: 0.2rem 0.4rem; border-radius: 4px; text-decoration: none; font-size: 0.7rem; font-weight: 600; transition: transform 0.1s ease; }

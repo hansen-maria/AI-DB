@@ -14,6 +14,7 @@ use crate::services::fasta::{compute_md5, FastaIterator, BATCH_SIZE, MAX_RESULTS
 use crate::state::AppState;
 
 /// Performs hash lookup in a single database connection (Bakta or AI-DB annotations DB).
+/// Reads the standard ups schema (no product column).
 fn lookup_in_db(conn: &Connection, hash_bytes: &[u8], seq_length: usize) -> HashLookupResult {
     // Query the ups table - hash is stored as BLOB
     let query = "SELECT length, uniparc_id, ncbi_nrp_id, uniref100_id FROM ups WHERE hash = ?";
@@ -63,6 +64,57 @@ fn lookup_in_db(conn: &Connection, hash_bytes: &[u8], seq_length: usize) -> Hash
     }
 }
 
+/// Performs hash lookup in the AI-DB annotations DB.
+/// Reads the extended ups schema which includes a direct `product` column.
+/// When uniref100_id is set the ips/psc chain is followed as usual.
+/// When uniref100_id is null the product column is used directly (hypothetical proteins).
+fn lookup_in_aidb(conn: &Connection, hash_bytes: &[u8], seq_length: usize) -> HashLookupResult {
+    let query =
+        "SELECT length, uniparc_id, ncbi_nrp_id, uniref100_id, product FROM ups WHERE hash = ?";
+
+    match conn.query_row(query, [hash_bytes], |row| {
+        Ok(HashLookupResult {
+            found: true,
+            db_length: row.get(0).ok(),
+            uniparc_id: row.get(1).ok(),
+            ncbi_nrp_id: row.get(2).ok(),
+            uniref100_id: row.get(3).ok(),
+            product: row.get(4).ok(),
+            gene: None,
+            cog_category: None,
+            ec_ids: None,
+            go_ids: None,
+        })
+    }) {
+        Ok(mut result) => {
+            if let Some(db_len) = result.db_length {
+                if db_len as usize != seq_length {
+                    tracing::debug!(
+                        "Hash found but length mismatch: DB={}, Query={}",
+                        db_len,
+                        seq_length
+                    );
+                }
+            }
+            if let Some(ref uniref_id) = result.uniref100_id {
+                if let Some(annotation) = lookup_full_annotation(conn, uniref_id) {
+                    result.product = annotation.product.or(result.product);
+                    result.gene = annotation.gene;
+                    result.cog_category = annotation.cog_category;
+                    result.ec_ids = annotation.ec_ids;
+                    result.go_ids = annotation.go_ids;
+                }
+            }
+            result
+        }
+        Err(rusqlite::Error::QueryReturnedNoRows) => HashLookupResult::default(),
+        Err(e) => {
+            tracing::error!("AI-DB annotations DB query error: {}", e);
+            HashLookupResult::default()
+        }
+    }
+}
+
 /// Performs hash lookup in the Bakta database (kept for backward compat).
 pub fn lookup_hash_in_bakta(
     conn: &Connection,
@@ -73,7 +125,6 @@ pub fn lookup_hash_in_bakta(
 }
 
 /// Performs hash lookup: checks Bakta DB first, then falls back to AI-DB annotations DB.
-/// Call this in process_job_from_file instead of lookup_hash_in_bakta directly.
 ///
 /// Returns `(result, source)` where `source` is:
 ///   - `"bakta_db"`  – found in the official Bakta database
@@ -85,16 +136,16 @@ pub fn lookup_hash(
     hash_bytes: &[u8],
     seq_length: usize,
 ) -> (HashLookupResult, &'static str) {
-    // 1. Try official Bakta DB first
+    // 1. Try official Bakta DB first (standard schema)
     if let Some(conn) = bakta_conn {
         let result = lookup_in_db(conn, hash_bytes, seq_length);
         if result.found {
             return (result, "bakta_db");
         }
     }
-    // 2. Fall back to AI-DB annotations DB
+    // 2. Fall back to AI-DB annotations DB (extended schema with ups.product)
     if let Some(conn) = aidb_conn {
-        let result = lookup_in_db(conn, hash_bytes, seq_length);
+        let result = lookup_in_aidb(conn, hash_bytes, seq_length);
         if result.found {
             return (result, "aidb_db");
         }
@@ -203,7 +254,20 @@ pub fn format_annotation(result: &HashLookupResult) -> Option<String> {
         return None;
     }
 
-    // Build annotation from available IDs
+    // When only a direct product is set (e.g. hypothetical protein from AI-DB annotations DB)
+    // and no cross-reference IDs are present, return the product directly.
+    let has_ids = result.uniref100_id.is_some()
+        || result.uniparc_id.is_some()
+        || result.ncbi_nrp_id.is_some();
+
+    if !has_ids {
+        return result
+            .product
+            .clone()
+            .or_else(|| Some("Known protein (hash match)".to_string()));
+    }
+
+    // Build annotation from cross-reference IDs
     let mut parts = Vec::new();
 
     if let Some(ref id) = result.uniref100_id {
@@ -216,11 +280,7 @@ pub fn format_annotation(result: &HashLookupResult) -> Option<String> {
         parts.push(format!("NCBI:{}", id));
     }
 
-    if parts.is_empty() {
-        Some("Known protein (hash match)".to_string())
-    } else {
-        Some(parts.join(" | "))
-    }
+    Some(parts.join(" | "))
 }
 
 /// Quickly count sequences in a FASTA file (counts '>' at start of lines)

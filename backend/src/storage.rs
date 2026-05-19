@@ -519,15 +519,15 @@ fn hex_to_bytes(hex: &str) -> Option<Vec<u8>> {
         .collect()
 }
 
-/// Insert one entry into the AI-DB annotations DB.
+/// Upsert one entry into the AI-DB annotations DB.
 ///
 /// Populates all three tables of the Bakta DB schema:
-///   ups  – hash → IDs                           (always)
-///   ips  – UniRef90 ID → gene / product / EC / GO  (when uniref100_id is present)
-///   psc  – UniRef90 ID → COG category           (when uniref90_id is present)
+///   ups  – hash → IDs                                (always; updates annotation IDs)
+///   ips  – UniRef100 ID → gene / product / EC / GO   (when uniref100_id is present)
+///   psc  – UniRef90 ID → COG category                (when uniref90_id is present)
 ///
-/// Returns `true` when the hash was new (inserted), `false` when already known (skipped).
-/// Uses INSERT OR IGNORE so duplicate hashes are silently dropped.
+/// Returns `true` when the hash was new (inserted), `false` when it already existed (updated).
+/// All three tables use upsert so repeated Bakta jobs always store the latest annotation.
 pub fn ingest_custom_annotation(
     conn: &Connection,
     entry: &CustomAnnotationEntry,
@@ -543,27 +543,45 @@ pub fn ingest_custom_annotation(
         }
     };
 
-    // ups – one row per unique protein hash.
-    // uniref100_id stores the UniRef90 ID as the lookup-chain key.
-    let inserted = conn.execute(
-        "INSERT OR IGNORE INTO ups (hash, length, uniparc_id, ncbi_nrp_id, uniref100_id)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
+    // ups – upsert with product column (extended AI-DB annotations DB schema).
+    // product is stored directly here for entries without a UniRef ID (hypotheticals).
+    // INSERT OR REPLACE deletes+inserts, so we check existence beforehand.
+    let existing: Option<i64> = conn
+        .query_row(
+            "SELECT rowid FROM ups WHERE hash = ?1",
+            params![hash_bytes],
+            |row| row.get(0),
+        )
+        .optional()?;
+
+    conn.execute(
+        "INSERT OR REPLACE INTO ups (hash, length, uniparc_id, ncbi_nrp_id, uniref100_id, product)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         params![
             hash_bytes,
             entry.length as i64,
             entry.uniparc_id,
             entry.ncbi_nrp_id,
             entry.uniref100_id,
+            entry.product,
         ],
-    )? > 0;
+    )?;
 
-    // ips – keyed by uniref100_id (= UniRef90 ID for Bakta protein workflow results).
-    // The uniref90_id column enables the ips→psc lookup chain.
+    let is_new = existing.is_none();
+
+    // ips – upsert: overwrite annotation fields with latest values.
+    // NULL values in the new entry do NOT overwrite existing data (COALESCE guard)
+    // so a re-ingest with less data never degrades an existing annotation.
     if let Some(ref uniref100) = entry.uniref100_id {
         conn.execute(
-            "INSERT OR IGNORE INTO ips
-                 (uniref100_id, uniref90_id, gene, product, ec_ids, go_ids)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO ips (uniref100_id, uniref90_id, gene, product, ec_ids, go_ids)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(uniref100_id) DO UPDATE SET
+                 uniref90_id = COALESCE(?2, excluded.uniref90_id),
+                 gene        = COALESCE(?3, excluded.gene),
+                 product     = COALESCE(?4, excluded.product),
+                 ec_ids      = COALESCE(?5, excluded.ec_ids),
+                 go_ids      = COALESCE(?6, excluded.go_ids)",
             params![
                 uniref100,
                 entry.uniref90_id,
@@ -575,12 +593,17 @@ pub fn ingest_custom_annotation(
         )?;
     }
 
-    // psc – provides COG category; keyed by uniref90_id.
+    // psc – upsert: overwrite with latest values, same COALESCE guard.
     if let Some(ref uniref90) = entry.uniref90_id {
         conn.execute(
-            "INSERT OR IGNORE INTO psc
-                 (uniref90_id, gene, product, cog_category, ec_ids, go_ids)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO psc (uniref90_id, gene, product, cog_category, ec_ids, go_ids)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(uniref90_id) DO UPDATE SET
+                 gene         = COALESCE(?2, excluded.gene),
+                 product      = COALESCE(?3, excluded.product),
+                 cog_category = COALESCE(?4, excluded.cog_category),
+                 ec_ids       = COALESCE(?5, excluded.ec_ids),
+                 go_ids       = COALESCE(?6, excluded.go_ids)",
             params![
                 uniref90,
                 entry.gene,
@@ -592,30 +615,28 @@ pub fn ingest_custom_annotation(
         )?;
     }
 
-    Ok(inserted)
+    Ok(is_new)
 }
 
-/// Bulk-ingest a slice of entries into the AI-DB annotations DB.
-/// Returns (ingested, skipped).
+/// Bulk-upsert a slice of entries into the AI-DB annotations DB.
+/// Returns (inserted, updated).
 pub fn ingest_custom_annotations(
     conn: &Connection,
     entries: &[CustomAnnotationEntry],
 ) -> Result<(usize, usize), rusqlite::Error> {
-    let mut ingested = 0usize;
-    let mut skipped = 0usize;
+    let mut inserted = 0usize;
+    let mut updated = 0usize;
     for entry in entries {
         if ingest_custom_annotation(conn, entry)? {
-            ingested += 1;
+            inserted += 1;
         } else {
-            skipped += 1;
+            updated += 1;
         }
     }
-    if ingested > 0 {
-        tracing::info!(
-            "AI-DB annotations DB: {} new entries ingested, {} skipped (already known)",
-            ingested,
-            skipped
-        );
-    }
-    Ok((ingested, skipped))
+    tracing::info!(
+        "AI-DB annotations DB: {} new entries inserted, {} existing entries updated",
+        inserted,
+        updated
+    );
+    Ok((inserted, updated))
 }

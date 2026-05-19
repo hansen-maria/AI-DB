@@ -1252,7 +1252,7 @@ export interface CustomAnnotationEntry {
 
 export interface IngestResponse {
   ingested: number
-  skipped: number
+  updated: number
   total: number
 }
 
@@ -1347,13 +1347,13 @@ export function buildIngestEntries(
     entries.push({
       md5_hash:     feature.aa_hexdigest,
       length:       feature.length,
-      // Store UniRef90 ID as uniref100_id for the ups→ips lookup chain
-      uniref100_id: uniref90_id,
+      uniref100_id: uniref90_id,   // null for hypotheticals – no fake IDs
       uniref90_id,
-      // Use top-level gene/product (Bakta already resolves the best name)
-      // Hypotheticals have product = "hypothetical protein" → store as null
       gene:         feature.hypothetical ? null : (feature.gene ?? null),
-      product:      feature.hypothetical ? null : (feature.product ?? null),
+      // "hypothetical protein" is stored in ups.product (not ips) for hypotheticals
+      product:      feature.hypothetical
+        ? 'hypothetical protein'
+        : (feature.product ?? null),
       ec_ids,
       go_ids,
       cog_category,

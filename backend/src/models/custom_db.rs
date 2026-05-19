@@ -52,8 +52,8 @@ pub struct IngestCustomAnnotationsRequest {
 pub struct IngestCustomAnnotationsResponse {
     /// Number of new sequences inserted into the AI-DB annotations DB
     pub ingested: usize,
-    /// Number of sequences skipped (hash already known in AI-DB annotations DB)
-    pub skipped: usize,
+    /// Number of sequences that already existed and were updated with new annotation data
+    pub updated: usize,
     /// Total entries received
     pub total: usize,
 }
