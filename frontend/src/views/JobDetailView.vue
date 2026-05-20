@@ -438,20 +438,16 @@ const hasActiveFilters = computed(() => {
 // Human-readable summary of all active filters (used by the download bar)
 const activeFilterBadges = computed(() => {
   const badges: { label: string; type: string }[] = []
-
   if (currentFilter.value !== 'all') {
     const found = filterOptions.find(o => o.value === currentFilter.value)
     badges.push({ label: found?.label ?? currentFilter.value, type: 'status' })
   }
-  if (debouncedSearch.value) {
+  if (debouncedSearch.value)
     badges.push({ label: `"${debouncedSearch.value}"`, type: 'search' })
-  }
-  if (minLength.value !== undefined) {
+  if (minLength.value !== undefined)
     badges.push({ label: `≥ ${minLength.value} aa`, type: 'length' })
-  }
-  if (maxLength.value !== undefined) {
+  if (maxLength.value !== undefined)
     badges.push({ label: `≤ ${maxLength.value} aa`, type: 'length' })
-  }
   if (selectedCog.value) {
     const found = cogCategories.find(c => c.value === selectedCog.value)
     badges.push({ label: `COG ${found?.value ?? selectedCog.value}`, type: 'cog' })
@@ -482,23 +478,22 @@ function downloadFilteredSequences(format: FilteredDownloadFormat) {
     const esc = (v: unknown) => {
       if (v == null) return ''
       const s = String(v)
-      if (format === 'csv' && (s.includes(',') || s.includes('"') || s.includes('\n'))) {
+      if (format === 'csv' && (s.includes(',') || s.includes('"') || s.includes('\n')))
         return '"' + s.replace(/"/g, '""') + '"'
-      }
       return s
     }
     const cols: [string, (s: typeof seqs[0]) => unknown][] = [
-      ['ID',               s => s.id],
-      ['Length',           s => s.length],
-      ['Gene',             s => s.gene ?? ''],
-      ['Product',          s => s.product ?? ''],
-      ['COG Category',     s => s.cog_category ?? ''],
-      ['EC Numbers',       s => s.ec_ids ?? ''],
-      ['GO Terms',         s => s.go_ids ?? ''],
-      ['Annotation Source',s => s.annotation_source ?? ''],
-      ['UniRef100 ID',     s => s.uniref100_id ?? ''],
-      ['UniParc ID',       s => s.uniparc_id ?? ''],
-      ['NCBI NRP ID',      s => s.ncbi_nrp_id ?? ''],
+      ['ID',                s => s.id],
+      ['Length',            s => s.length],
+      ['Gene',              s => s.gene ?? ''],
+      ['Product',           s => s.product ?? ''],
+      ['COG Category',      s => s.cog_category ?? ''],
+      ['EC Numbers',        s => s.ec_ids ?? ''],
+      ['GO Terms',          s => s.go_ids ?? ''],
+      ['Annotation Source', s => s.annotation_source ?? ''],
+      ['UniRef100 ID',      s => s.uniref100_id ?? ''],
+      ['UniParc ID',        s => s.uniparc_id ?? ''],
+      ['NCBI NRP ID',       s => s.ncbi_nrp_id ?? ''],
     ]
     content  = cols.map(([h]) => esc(h)).join(sep) + '\n'
     content += seqs.map(s => cols.map(([, fn]) => esc(fn(s))).join(sep)).join('\n')
@@ -507,10 +502,10 @@ function downloadFilteredSequences(format: FilteredDownloadFormat) {
   } else if (format === 'fasta') {
     content = seqs.map(s => {
       const parts = [`>${s.id}`]
-      if (s.gene)             parts.push(`gene=${s.gene}`)
-      if (s.product)          parts.push(`product=${s.product}`)
-      if (s.cog_category)     parts.push(`COG=${s.cog_category}`)
-      if (s.ec_ids)           parts.push(`EC=${s.ec_ids}`)
+      if (s.gene)              parts.push(`gene=${s.gene}`)
+      if (s.product)           parts.push(`product=${s.product}`)
+      if (s.cog_category)      parts.push(`COG=${s.cog_category}`)
+      if (s.ec_ids)            parts.push(`EC=${s.ec_ids}`)
       if (s.annotation_source) parts.push(`source=${s.annotation_source}`)
       parts.push(`length=${s.length}`)
       const header = parts.join(' ')
@@ -799,16 +794,27 @@ async function handleDelete() {
   }
 }
 
-async function handleDownload(format: DownloadFormat) {
+function handleDownload(format: DownloadFormat) {
   downloading.value = true
   downloadError.value = ''
-  try {
-    await downloadJobResults(jobId.value, format)
-  } catch (e) {
-    downloadError.value = e instanceof Error ? e.message : 'Download failed'
-  } finally {
-    downloading.value = false
-  }
+  downloadJobResults(jobId.value, format)
+      .catch(e => { downloadError.value = e instanceof Error ? e.message : 'Download failed' })
+      .finally(() => { downloading.value = false })
+}
+
+/** Start Bakta annotation directly from the Overview card (uses current config defaults) */
+function startAnnotateFromOverview() {
+  showBaktaPanel.value = true   // keep panel in sync for when user navigates to Sequences
+  analyzeWithBakta()
+}
+
+/** Open the Bakta config panel in the Sequences tab (for advanced users) */
+function openBaktaConfig() {
+  activeTab.value = 'sequences'
+  showBaktaPanel.value = true
+  setTimeout(() => {
+    document.querySelector('.tab-content')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, 50)
 }
 
 function formatDate(dateStr: string) {
@@ -970,6 +976,135 @@ onUnmounted(() => {
               </div>
             </div>
 
+            <!-- ── Next-Step Action Cards ─────────────────────────────── -->
+            <div class="action-cards">
+
+              <!-- Sequences -->
+              <button class="action-card action-card--sequences" @click="activeTab = 'sequences'">
+                <div class="action-card__icon">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                    <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18"/>
+                  </svg>
+                </div>
+                <div class="action-card__body">
+                  <span class="action-card__title">Sequences</span>
+                  <span class="action-card__desc">Browse, search and filter all sequences. Download filtered subsets as TSV, FASTA or JSON.</span>
+                </div>
+                <div class="action-card__meta">
+                  <span class="action-card__badge action-card__badge--green">{{ job.sequence_count.toLocaleString() }} seqs</span>
+                  <svg class="action-card__arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M5 12h14M12 5l7 7-7 7"/>
+                  </svg>
+                </div>
+              </button>
+
+              <!-- Functional Analysis -->
+              <button class="action-card action-card--analysis" @click="activeTab = 'analysis'">
+                <div class="action-card__icon">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                    <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/>
+                    <line x1="6" y1="20" x2="6" y2="14"/>
+                    <path d="M2 20h20"/>
+                  </svg>
+                </div>
+                <div class="action-card__body">
+                  <span class="action-card__title">Functional Analysis</span>
+                  <span class="action-card__desc">Explore COG categories, enzyme classes, top genes and products across annotated sequences.</span>
+                </div>
+                <div class="action-card__meta">
+                  <span class="action-card__badge action-card__badge--teal">
+                    {{ Math.round((job.hash_matches / job.sequence_count) * 100) }}% annotated
+                  </span>
+                  <svg class="action-card__arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M5 12h14M12 5l7 7-7 7"/>
+                  </svg>
+                </div>
+              </button>
+
+              <!-- Annotate Unmatched -->
+              <div
+                  class="action-card action-card--annotate"
+                  :class="{
+                    'action-card--disabled': unmatchedSequences.length === 0,
+                    'action-card--analyzing': baktaAnalyzing,
+                    'action-card--done': !!baktaResult && !baktaAnalyzing,
+                  }"
+              >
+                <!-- Icon -->
+                <div class="action-card__icon">
+                  <svg v-if="!baktaAnalyzing && !baktaResult" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                    <path d="M3 3c9 0 9 18 18 18"/><path d="M21 3C12 3 12 21 3 21"/>
+                    <path d="M7 8h4"/><path d="M13 16h4"/>
+                    <path d="M7.5 12H10"/><path d="M14 12h2.5"/>
+                  </svg>
+                  <svg v-else-if="baktaAnalyzing" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="spin-icon">
+                    <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+                  </svg>
+                  <svg v-else width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>
+                  </svg>
+                </div>
+
+                <!-- Body -->
+                <div class="action-card__body">
+
+                  <!-- Idle -->
+                  <template v-if="!baktaAnalyzing && !baktaResult">
+                    <span class="action-card__title">Annotate Unmatched</span>
+                    <span class="action-card__desc" v-if="unmatchedSequences.length > 0">
+                      Run Bakta on {{ unmatchedSequences.length.toLocaleString() }} sequences with no database match.
+                    </span>
+                    <span class="action-card__desc" v-else>All sequences are annotated — nothing left to process.</span>
+                    <div v-if="baktaError" class="annotate-card-error">{{ baktaError }}</div>
+                    <div v-if="unmatchedSequences.length > 0" class="annotate-card-actions">
+                      <button class="annotate-card-btn" :disabled="baktaAnalyzing" @click.stop="startAnnotateFromOverview">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                        Start with defaults
+                      </button>
+                      <button v-if="detectedSequenceType === 'nucleotide'" class="annotate-card-configure" @click.stop="openBaktaConfig">Configure →</button>
+                    </div>
+                  </template>
+
+                  <!-- Analyzing -->
+                  <template v-else-if="baktaAnalyzing">
+                    <span class="action-card__title">Annotating…</span>
+                    <span class="action-card__desc annotate-stage">{{ baktaProgressLabel }}</span>
+                    <div class="annotate-progress-bar">
+                      <div class="annotate-progress-fill" :style="{ width: `${baktaProgressPercent}%` }"></div>
+                    </div>
+                    <div class="annotate-card-actions">
+                      <button class="annotate-card-configure" @click.stop="baktaAbortController?.abort()">Cancel</button>
+                      <button v-if="detectedSequenceType === 'nucleotide'" class="annotate-card-configure" @click.stop="openBaktaConfig">View details →</button>
+                    </div>
+                  </template>
+
+                  <!-- Done -->
+                  <template v-else-if="baktaResult">
+                    <span class="action-card__title">Annotation complete</span>
+                    <span class="action-card__desc">
+                      {{ baktaResult.featureCount ?? '?' }} features found.<span v-if="baktaIngestResult"> {{ baktaIngestResult.updated }} sequences updated.</span>
+                    </span>
+                    <div class="annotate-card-actions">
+                      <button v-if="detectedSequenceType === 'nucleotide'" class="annotate-card-configure" @click.stop="openBaktaConfig">View results →</button>
+                    </div>
+                  </template>
+
+                </div>
+
+                <!-- Meta badge -->
+                <div v-if="!baktaAnalyzing && !baktaResult" class="action-card__meta">
+                  <span class="action-card__badge" :class="unmatchedSequences.length > 0 ? 'action-card__badge--amber' : 'action-card__badge--muted'">
+                    {{ unmatchedSequences.length.toLocaleString() }} unmatched
+                  </span>
+                </div>
+                <div v-else-if="baktaAnalyzing" class="action-card__meta">
+                  <span class="action-card__badge action-card__badge--amber">{{ Math.round(baktaProgressPercent) }}%</span>
+                </div>
+              </div>
+
+            </div>
+            <!-- ── End Action Cards ────────────────────────────────────── -->
+
             <div class="download-section">
               <h4>Download Results</h4>
               <div v-if="downloadError" class="download-error">{{ downloadError }}</div>
@@ -1096,12 +1231,8 @@ onUnmounted(() => {
                   sequences
                   <span v-if="searchText && searchText !== debouncedSearch" class="typing-indicator">...</span>
                 </span>
-
                 <span class="seq-dl-divider">·</span>
-
-                <span v-if="activeFilterBadges.length === 0" class="seq-filter-badge seq-filter-badge--none">
-                  No filters active
-                </span>
+                <span v-if="activeFilterBadges.length === 0" class="seq-filter-badge seq-filter-badge--none">No filters active</span>
                 <template v-else>
                   <span
                       v-for="badge in activeFilterBadges"
@@ -1121,7 +1252,7 @@ onUnmounted(() => {
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                   <span class="seq-dl-btn__ext">CSV</span>
                 </button>
-                <button class="seq-dl-btn" title="FASTA format with annotation header" @click="downloadFilteredSequences('fasta')">
+                <button class="seq-dl-btn" title="FASTA with annotation header" @click="downloadFilteredSequences('fasta')">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                   <span class="seq-dl-btn__ext">FASTA</span>
                 </button>
@@ -2014,6 +2145,92 @@ onUnmounted(() => {
 
 .clear-filters-btn:hover { background: rgba(244, 67, 54, 0.1); }
 
+/* ── Sequence Download Bar ─────────────────────────────────────────────────── */
+.seq-download-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  padding: 0.55rem 0.85rem;
+  margin-bottom: 0.6rem;
+  background: var(--color-background-soft);
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  font-size: 0.8rem;
+}
+.seq-download-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  min-width: 0;
+}
+.seq-download-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-weight: 500;
+  color: var(--color-heading);
+  white-space: nowrap;
+}
+.seq-dl-divider {
+  color: var(--color-border);
+  font-size: 1rem;
+  line-height: 1;
+  margin: 0 0.1rem;
+}
+.seq-filter-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.1rem 0.5rem;
+  border-radius: 99px;
+  font-size: 0.73rem;
+  font-weight: 500;
+  line-height: 1.7;
+  white-space: nowrap;
+}
+.seq-filter-badge--none   { color: var(--color-text); opacity: 0.45; font-style: italic; padding: 0; }
+.seq-filter-badge--status { background: rgba(59, 130, 246, 0.12); color: #2563eb; }
+.seq-filter-badge--search { background: rgba(234, 179, 8, 0.15);  color: #92400e; }
+.seq-filter-badge--length { background: rgba(0, 189, 126, 0.13);  color: #065f46; }
+.seq-filter-badge--cog    { background: rgba(139, 92, 246, 0.13); color: #5b21b6; }
+.seq-filter-badge--ec     { background: rgba(236, 72, 153, 0.12); color: #9d174d; }
+.seq-filter-badge--flag   { background: rgba(107, 114, 128, 0.12); color: var(--color-heading); }
+.seq-download-actions {
+  display: flex;
+  gap: 0.3rem;
+  flex-shrink: 0;
+}
+.seq-dl-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.28rem 0.6rem;
+  background: var(--color-background);
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 0.73rem;
+  font-weight: 600;
+  color: var(--color-text);
+  letter-spacing: 0.03em;
+  transition: background 0.13s, border-color 0.13s, color 0.13s, transform 0.1s;
+  white-space: nowrap;
+}
+.seq-dl-btn:hover {
+  background: hsla(160, 100%, 37%, 1);
+  border-color: hsla(160, 100%, 37%, 1);
+  color: #fff;
+  transform: translateY(-1px);
+}
+.seq-dl-btn:active { transform: translateY(0); }
+.seq-dl-btn svg { flex-shrink: 0; }
+@media (max-width: 600px) {
+  .seq-download-bar { flex-direction: column; align-items: flex-start; }
+  .seq-download-actions { width: 100%; justify-content: flex-end; }
+}
+/* ── End Sequence Download Bar ─────────────────────────────────────────────── */
 
 /* Table */
 .sequences-table {
@@ -2681,106 +2898,216 @@ tbody tr:hover { background: var(--color-background-soft); }
   line-height: 1.5;
 }
 
-/* ── Sequence Download Bar ─────────────────────────────────────────────────── */
-.seq-download-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 0.6rem;
-  padding: 0.55rem 0.85rem;
-  margin-bottom: 0.6rem;
-  background: var(--color-background-soft);
-  border: 1px solid var(--color-border);
-  border-radius: 7px;
-  font-size: 0.8rem;
+/* ── Next-Step Action Cards ─────────────────────────────────────────────────── */
+.action-cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.85rem;
+  margin-bottom: 2rem;
 }
 
-.seq-download-summary {
+.action-card {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 0.35rem;
+  gap: 0.9rem;
+  padding: 1rem 1.1rem;
+  background: var(--color-background);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  cursor: pointer;
+  text-align: left;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+}
+
+/* Colored left accent stripe */
+.action-card::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  border-radius: 10px 0 0 10px;
+  transition: width 0.15s ease;
+}
+.action-card--sequences::before  { background: hsla(160, 100%, 37%, 1); }
+.action-card--analysis::before   { background: #028090; }
+.action-card--annotate::before   { background: #e08000; }
+
+.action-card:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.09);
+}
+.action-card--sequences:hover:not(:disabled) { border-color: hsla(160, 100%, 37%, 0.4); }
+.action-card--analysis:hover:not(:disabled)  { border-color: rgba(2, 128, 144, 0.4); }
+.action-card--annotate:hover:not(:disabled)  { border-color: rgba(224, 128, 0, 0.4); }
+
+.action-card--disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.action-card--disabled::before { background: var(--color-border); }
+
+/* Icon */
+.action-card__icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px; height: 38px;
+  border-radius: 8px;
+  background: var(--color-background-soft);
+}
+.action-card--sequences .action-card__icon  { color: hsla(160, 100%, 37%, 1); }
+.action-card--analysis .action-card__icon   { color: #028090; }
+.action-card--annotate .action-card__icon   { color: #e08000; }
+.action-card--disabled .action-card__icon   { color: var(--color-text); opacity: 0.4; }
+
+/* Body text */
+.action-card__body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
   min-width: 0;
 }
-
-.seq-download-count {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-  font-weight: 500;
+.action-card__title {
+  font-size: 0.875rem;
+  font-weight: 650;
   color: var(--color-heading);
   white-space: nowrap;
 }
-
-.seq-dl-divider {
-  color: var(--color-border);
-  font-size: 1rem;
-  line-height: 1;
-  margin: 0 0.1rem;
+.action-card__desc {
+  font-size: 0.73rem;
+  color: var(--color-text);
+  opacity: 0.7;
+  line-height: 1.4;
 }
 
-/* Filter badges */
-.seq-filter-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 0.1rem 0.5rem;
+/* Right-side meta */
+.action-card__meta {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.4rem;
+}
+.action-card__badge {
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 0.15rem 0.5rem;
   border-radius: 99px;
-  font-size: 0.73rem;
-  font-weight: 500;
-  line-height: 1.7;
   white-space: nowrap;
 }
-.seq-filter-badge--none {
+.action-card__badge--green  { background: hsla(160, 100%, 37%, 0.12); color: hsla(160, 100%, 30%, 1); }
+.action-card__badge--teal   { background: rgba(2, 128, 144, 0.12);    color: #016070; }
+.action-card__badge--amber  { background: rgba(224, 128, 0, 0.13);    color: #a05a00; }
+.action-card__badge--muted  { background: var(--color-background-soft); color: var(--color-text); opacity: 0.55; }
+
+.action-card__arrow {
   color: var(--color-text);
-  opacity: 0.45;
-  font-style: italic;
-  padding: 0;
+  opacity: 0.3;
+  transition: opacity 0.15s, transform 0.15s;
 }
-.seq-filter-badge--status { background: rgba(59, 130, 246, 0.12); color: #2563eb; }
-.seq-filter-badge--search { background: rgba(234, 179, 8, 0.15);  color: #92400e; }
-.seq-filter-badge--length { background: rgba(0, 189, 126, 0.13);  color: #065f46; }
-.seq-filter-badge--cog    { background: rgba(139, 92, 246, 0.13); color: #5b21b6; }
-.seq-filter-badge--ec     { background: rgba(236, 72, 153, 0.12); color: #9d174d; }
-.seq-filter-badge--flag   { background: rgba(107, 114, 128, 0.12); color: var(--color-heading); }
+.action-card:hover:not(:disabled) .action-card__arrow {
+  opacity: 0.7;
+  transform: translateX(2px);
+}
 
-/* Download buttons */
-.seq-download-actions {
+@media (max-width: 860px) {
+  .action-cards { grid-template-columns: 1fr; }
+  .action-card__desc { display: none; } /* keep it tight on narrow screens */
+}
+@media (max-width: 1100px) and (min-width: 861px) {
+  .action-cards { grid-template-columns: 1fr 1fr; }
+}
+/* Annotate card: analyzing / done state overrides */
+.action-card--analyzing {
+  border-color: rgba(224, 128, 0, 0.35);
+  background: rgba(224, 128, 0, 0.03);
+}
+.action-card--done {
+  border-color: rgba(0, 189, 126, 0.35);
+  background: rgba(0, 189, 126, 0.03);
+}
+.action-card--done .action-card__icon { color: hsla(160, 100%, 37%, 1); }
+.action-card--done::before { background: hsla(160, 100%, 37%, 1); }
+
+/* Spinning icon for "analyzing" state */
+.spin-icon { animation: spin 1s linear infinite; }
+
+/* Inline action row inside the annotate card body */
+.annotate-card-actions {
   display: flex;
-  gap: 0.3rem;
-  flex-shrink: 0;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.45rem;
+  flex-wrap: wrap;
 }
 
-.seq-dl-btn {
+/* Primary "Start" button */
+.annotate-card-btn {
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
-  padding: 0.28rem 0.6rem;
-  background: var(--color-background);
-  border: 1px solid var(--color-border);
+  padding: 0.28rem 0.7rem;
+  background: #e08000;
+  color: #fff;
+  border: none;
   border-radius: 5px;
-  cursor: pointer;
   font-size: 0.73rem;
   font-weight: 600;
+  cursor: pointer;
+  transition: background 0.13s, transform 0.1s;
+}
+.annotate-card-btn:hover:not(:disabled) { background: #c07000; transform: translateY(-1px); }
+.annotate-card-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Secondary "Configure →" / "Cancel" link-button */
+.annotate-card-configure {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.72rem;
   color: var(--color-text);
-  letter-spacing: 0.03em;
-  transition: background 0.13s, border-color 0.13s, color 0.13s, transform 0.1s;
+  opacity: 0.55;
+  cursor: pointer;
+  transition: opacity 0.13s;
   white-space: nowrap;
 }
-.seq-dl-btn:hover {
-  background: hsla(160, 100%, 37%, 1);
-  border-color: hsla(160, 100%, 37%, 1);
-  color: #fff;
-  transform: translateY(-1px);
-}
-.seq-dl-btn:active { transform: translateY(0); }
-.seq-dl-btn svg { flex-shrink: 0; }
+.annotate-card-configure:hover { opacity: 1; }
 
-@media (max-width: 600px) {
-  .seq-download-bar { flex-direction: column; align-items: flex-start; }
-  .seq-download-actions { width: 100%; justify-content: flex-end; }
+/* Inline progress bar inside the card */
+.annotate-progress-bar {
+  height: 4px;
+  background: var(--color-background-mute);
+  border-radius: 99px;
+  overflow: hidden;
+  margin-top: 0.35rem;
+  width: 100%;
 }
-/* ── End Sequence Download Bar ─────────────────────────────────────────────── */
+.annotate-progress-fill {
+  height: 100%;
+  background: #e08000;
+  border-radius: 99px;
+  transition: width 0.4s ease;
+}
+
+/* Stage label during analysis */
+.annotate-stage {
+  font-style: italic;
+}
+
+/* Error message inside the card */
+.annotate-card-error {
+  margin-top: 0.3rem;
+  font-size: 0.7rem;
+  color: #f44336;
+  line-height: 1.3;
+}
+
+/* ── End Action Cards ──────────────────────────────────────────────────────── */
 
 @media (max-width: 900px) { .charts-grid { grid-template-columns: 1fr; } }
 @media (max-width: 600px) {
