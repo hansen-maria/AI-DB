@@ -4,7 +4,7 @@ import { useRoute, useRouter, RouterLink } from 'vue-router'
 import {
   getJob, deleteJob, downloadJobResults, downloadOptions, getJobStats,
   type PaginatedJobResponse, type JobStatus,
-  type SequenceFilter, type DownloadFormat, type FunctionalStats
+  type SequenceFilter, type DownloadFormat, type FilteredDownloadFormat, type FunctionalStats
 } from '../api/jobs.ts'
 import {
   submitToPsos, pollPsosJob, getPsosJobUrl, getPsosFile, parsePsosResult,
@@ -434,6 +434,108 @@ const hasActiveFilters = computed(() => {
       hasProductOnly.value ||
       currentFilter.value !== 'all'
 })
+
+// Human-readable summary of all active filters (used by the download bar)
+const activeFilterBadges = computed(() => {
+  const badges: { label: string; type: string }[] = []
+
+  if (currentFilter.value !== 'all') {
+    const found = filterOptions.find(o => o.value === currentFilter.value)
+    badges.push({ label: found?.label ?? currentFilter.value, type: 'status' })
+  }
+  if (debouncedSearch.value) {
+    badges.push({ label: `"${debouncedSearch.value}"`, type: 'search' })
+  }
+  if (minLength.value !== undefined) {
+    badges.push({ label: `≥ ${minLength.value} aa`, type: 'length' })
+  }
+  if (maxLength.value !== undefined) {
+    badges.push({ label: `≤ ${maxLength.value} aa`, type: 'length' })
+  }
+  if (selectedCog.value) {
+    const found = cogCategories.find(c => c.value === selectedCog.value)
+    badges.push({ label: `COG ${found?.value ?? selectedCog.value}`, type: 'cog' })
+  }
+  if (selectedEcClass.value) {
+    const found = ecClasses.find(e => e.value === selectedEcClass.value)
+    badges.push({ label: found ? `EC ${found.value}` : `EC ${selectedEcClass.value}`, type: 'ec' })
+  }
+  if (hasGeneOnly.value)    badges.push({ label: 'Has Gene', type: 'flag' })
+  if (hasProductOnly.value) badges.push({ label: 'Has Function', type: 'flag' })
+  return badges
+})
+
+// Download the currently filtered sequences client-side (no backend call needed)
+function downloadFilteredSequences(format: FilteredDownloadFormat) {
+  const seqs = filteredSequences.value
+  if (!seqs.length) return
+
+  const baseName = job.value?.filename
+      ? job.value.filename.replace(/\.[^.]+$/, '')
+      : job.value?.job_id ?? 'sequences'
+
+  let content = ''
+  let mimeType = 'text/plain'
+
+  if (format === 'tsv' || format === 'csv') {
+    const sep = format === 'tsv' ? '\t' : ','
+    const esc = (v: unknown) => {
+      if (v == null) return ''
+      const s = String(v)
+      if (format === 'csv' && (s.includes(',') || s.includes('"') || s.includes('\n'))) {
+        return '"' + s.replace(/"/g, '""') + '"'
+      }
+      return s
+    }
+    const cols: [string, (s: typeof seqs[0]) => unknown][] = [
+      ['ID',               s => s.id],
+      ['Length',           s => s.length],
+      ['Gene',             s => s.gene ?? ''],
+      ['Product',          s => s.product ?? ''],
+      ['COG Category',     s => s.cog_category ?? ''],
+      ['EC Numbers',       s => s.ec_ids ?? ''],
+      ['GO Terms',         s => s.go_ids ?? ''],
+      ['Annotation Source',s => s.annotation_source ?? ''],
+      ['UniRef100 ID',     s => s.uniref100_id ?? ''],
+      ['UniParc ID',       s => s.uniparc_id ?? ''],
+      ['NCBI NRP ID',      s => s.ncbi_nrp_id ?? ''],
+    ]
+    content  = cols.map(([h]) => esc(h)).join(sep) + '\n'
+    content += seqs.map(s => cols.map(([, fn]) => esc(fn(s))).join(sep)).join('\n')
+    mimeType = format === 'tsv' ? 'text/tab-separated-values' : 'text/csv'
+
+  } else if (format === 'fasta') {
+    content = seqs.map(s => {
+      const parts = [`>${s.id}`]
+      if (s.gene)             parts.push(`gene=${s.gene}`)
+      if (s.product)          parts.push(`product=${s.product}`)
+      if (s.cog_category)     parts.push(`COG=${s.cog_category}`)
+      if (s.ec_ids)           parts.push(`EC=${s.ec_ids}`)
+      if (s.annotation_source) parts.push(`source=${s.annotation_source}`)
+      parts.push(`length=${s.length}`)
+      const header = parts.join(' ')
+      const body   = s.sequence
+          ? (s.sequence.match(/.{1,60}/g) ?? [s.sequence]).join('\n')
+          : '; sequence not available'
+      return `${header}\n${body}`
+    }).join('\n')
+    mimeType = 'text/plain'
+
+  } else {
+    content  = JSON.stringify(seqs, null, 2)
+    mimeType = 'application/json'
+  }
+
+  const blob = new Blob([content], { type: `${mimeType};charset=utf-8;` })
+  const url  = URL.createObjectURL(blob)
+  const a    = document.createElement('a')
+  a.href     = url
+  a.download = `${baseName}_filtered.${format}`
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
 
 // Reset to page 1 when filters change
 watch([debouncedSearch, currentFilter, minLength, maxLength, selectedCog, selectedEcClass, hasGeneOnly, hasProductOnly], () => {
@@ -980,15 +1082,54 @@ onUnmounted(() => {
               </div>
             </div>
 
-            <!-- Filter Results Info -->
-            <div class="filtered-info">
-              <span v-if="hasActiveFilters">
-                <strong>{{ filteredSequences.length.toLocaleString() }}</strong> of {{ allSequences.length.toLocaleString() }} sequences
-                <span v-if="searchText && searchText !== debouncedSearch" class="typing-indicator">...</span>
-              </span>
-              <span v-else>
-                {{ allSequences.length.toLocaleString() }} sequences
-              </span>
+            <!-- Filter Results Info + Download Bar -->
+            <div class="seq-download-bar">
+              <div class="seq-download-summary">
+                <span class="seq-download-count">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="opacity:0.55">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                    <polyline points="7 10 12 15 17 10"/>
+                    <line x1="12" y1="15" x2="12" y2="3"/>
+                  </svg>
+                  <strong>{{ filteredSequences.length.toLocaleString() }}</strong>
+                  <span v-if="hasActiveFilters"> of {{ allSequences.length.toLocaleString() }}</span>
+                  sequences
+                  <span v-if="searchText && searchText !== debouncedSearch" class="typing-indicator">...</span>
+                </span>
+
+                <span class="seq-dl-divider">·</span>
+
+                <span v-if="activeFilterBadges.length === 0" class="seq-filter-badge seq-filter-badge--none">
+                  No filters active
+                </span>
+                <template v-else>
+                  <span
+                      v-for="badge in activeFilterBadges"
+                      :key="badge.label"
+                      class="seq-filter-badge"
+                      :class="`seq-filter-badge--${badge.type}`"
+                  >{{ badge.label }}</span>
+                </template>
+              </div>
+
+              <div class="seq-download-actions">
+                <button class="seq-dl-btn" title="Tab-separated values – ideal for Excel, R, Python" @click="downloadFilteredSequences('tsv')">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                  <span class="seq-dl-btn__ext">TSV</span>
+                </button>
+                <button class="seq-dl-btn" title="Comma-separated values – for spreadsheets" @click="downloadFilteredSequences('csv')">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                  <span class="seq-dl-btn__ext">CSV</span>
+                </button>
+                <button class="seq-dl-btn" title="FASTA format with annotation header" @click="downloadFilteredSequences('fasta')">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                  <span class="seq-dl-btn__ext">FASTA</span>
+                </button>
+                <button class="seq-dl-btn" title="Full data as JSON array" @click="downloadFilteredSequences('json')">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                  <span class="seq-dl-btn__ext">JSON</span>
+                </button>
+              </div>
             </div>
 
             <!-- Table -->
@@ -1873,18 +2014,6 @@ onUnmounted(() => {
 
 .clear-filters-btn:hover { background: rgba(244, 67, 54, 0.1); }
 
-.filtered-info {
-  font-size: 0.9rem;
-  color: var(--color-text);
-  padding: 0.75rem 0;
-  border-bottom: 1px solid var(--color-border);
-  margin-bottom: 1rem;
-}
-
-.filtered-info strong {
-  color: hsla(160, 100%, 37%, 1);
-  font-size: 1rem;
-}
 
 /* Table */
 .sequences-table {
@@ -2551,6 +2680,107 @@ tbody tr:hover { background: var(--color-background-soft); }
   font-size: 0.8rem;
   line-height: 1.5;
 }
+
+/* ── Sequence Download Bar ─────────────────────────────────────────────────── */
+.seq-download-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  padding: 0.55rem 0.85rem;
+  margin-bottom: 0.6rem;
+  background: var(--color-background-soft);
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  font-size: 0.8rem;
+}
+
+.seq-download-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.seq-download-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-weight: 500;
+  color: var(--color-heading);
+  white-space: nowrap;
+}
+
+.seq-dl-divider {
+  color: var(--color-border);
+  font-size: 1rem;
+  line-height: 1;
+  margin: 0 0.1rem;
+}
+
+/* Filter badges */
+.seq-filter-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.1rem 0.5rem;
+  border-radius: 99px;
+  font-size: 0.73rem;
+  font-weight: 500;
+  line-height: 1.7;
+  white-space: nowrap;
+}
+.seq-filter-badge--none {
+  color: var(--color-text);
+  opacity: 0.45;
+  font-style: italic;
+  padding: 0;
+}
+.seq-filter-badge--status { background: rgba(59, 130, 246, 0.12); color: #2563eb; }
+.seq-filter-badge--search { background: rgba(234, 179, 8, 0.15);  color: #92400e; }
+.seq-filter-badge--length { background: rgba(0, 189, 126, 0.13);  color: #065f46; }
+.seq-filter-badge--cog    { background: rgba(139, 92, 246, 0.13); color: #5b21b6; }
+.seq-filter-badge--ec     { background: rgba(236, 72, 153, 0.12); color: #9d174d; }
+.seq-filter-badge--flag   { background: rgba(107, 114, 128, 0.12); color: var(--color-heading); }
+
+/* Download buttons */
+.seq-download-actions {
+  display: flex;
+  gap: 0.3rem;
+  flex-shrink: 0;
+}
+
+.seq-dl-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.28rem 0.6rem;
+  background: var(--color-background);
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 0.73rem;
+  font-weight: 600;
+  color: var(--color-text);
+  letter-spacing: 0.03em;
+  transition: background 0.13s, border-color 0.13s, color 0.13s, transform 0.1s;
+  white-space: nowrap;
+}
+.seq-dl-btn:hover {
+  background: hsla(160, 100%, 37%, 1);
+  border-color: hsla(160, 100%, 37%, 1);
+  color: #fff;
+  transform: translateY(-1px);
+}
+.seq-dl-btn:active { transform: translateY(0); }
+.seq-dl-btn svg { flex-shrink: 0; }
+
+@media (max-width: 600px) {
+  .seq-download-bar { flex-direction: column; align-items: flex-start; }
+  .seq-download-actions { width: 100%; justify-content: flex-end; }
+}
+/* ── End Sequence Download Bar ─────────────────────────────────────────────── */
 
 @media (max-width: 900px) { .charts-grid { grid-template-columns: 1fr; } }
 @media (max-width: 600px) {

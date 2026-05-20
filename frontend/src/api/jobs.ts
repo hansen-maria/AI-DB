@@ -417,6 +417,7 @@ export async function pollJobUntilComplete(
 // ============================================================================
 
 export type DownloadFormat = 'tsv' | 'json' | 'fasta' | 'gff3';
+export type FilteredDownloadFormat = 'tsv' | 'csv' | 'fasta' | 'json'
 
 export interface DownloadOption {
     format: DownloadFormat;
