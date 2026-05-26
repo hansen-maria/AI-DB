@@ -87,130 +87,77 @@ ai-db/
             └── gff3.rs
 ```
 
+## Components
+
+### Backend (`backend/`)
+
+| Technology        | Role                               |
+|-------------------|------------------------------------|
+| Rust + Axum       | HTTP API server                    |
+| SQLite + rusqlite | Job persistence (30-day retention) |
+| MD5 hashing       | Sequence identity lookup           |
+| Bakta DB          | Annotation data source             |
+
+See [`backend/README.md`](backend/README.md) for build instructions, API
+reference, and Docker configuration.
+
+### Frontend (`frontend/`)
+
+| Technology         | Role                              |
+|--------------------|-----------------------------------|
+| Vue 3 + TypeScript | Single-page application           |
+| Vue Router 4       | Client-side routing               |
+| Vite               | Build tool and dev server         |
+| Nginx              | Production web server + API proxy |
+
+See [`frontend/README.md`](frontend/README.md) for setup instructions,
+directory structure, and component documentation.
+
 ## Quick Start
 
-### Prerequisites
-
-- Docker & Docker Compose
-- Bakta database (Full or Light, but Full recommended) on a separate volume
-
-### Setting up the Bakta Database
+### With Docker Compose
 
 ```bash
-# Create and mount volume
-sudo mkfs.ext4 /dev/sdb
-sudo mkdir -p /mnt/bakta-db
-sudo mount /dev/sdb /mnt/bakta-db
-
-# Download database (~40GB for Full DB)
-cd /mnt/bakta-db
-sudo curl -L -o db.tar.xz https://zenodo.org/record/14916843/files/db.tar.xz
-sudo tar -xJf db.tar.xz
-sudo rm db.tar.xz
-
-# Initialize AMRFinderPlus
-docker run --rm -v /mnt/bakta-db:/db --entrypoint /bin/bash oschwengers/bakta:latest \
-    -c "amrfinder_update --force_update --database /db/db/amrfinderplus-db/"
+docker compose up --build
 ```
 
-### Production with Docker
+The application will be available at `http://localhost:8080`.
+
+### Manual Setup
 
 ```bash
-docker-compose up -d --build
-```
-
-### Development
-
-**Start backend (Rust):**
-```bash
+# Backend
 cd backend
-BAKTA_DB=/mnt/bakta-db/db AI_DB_CUSTOM_ANNOTATIONS_PATH=/path/to/custom_annotations.db cargo run
-# Server runs on http://localhost:8000
-# Swagger UI: http://localhost:8000/api/docs/
-```
+cargo build --release
+./target/release/ai-db
 
-**Start frontend (Vue.js):**
-```bash
+# Frontend (separate terminal)
 cd frontend
 npm install
 npm run dev
 ```
 
-## REST API Endpoints
+## Workflow
 
-| Method   | Endpoint                          | Description                           | Authentication  |
-|----------|-----------------------------------|---------------------------------------|-----------------|
-| `JOBS`   |                                   |                                       |                 |
-| `POST`   | `/api/job/`                       | Create new job                        | Sets cookie     |
-| `GET`    | `/api/job/{id}`                   | Get job status (paginated)            | Public          |
-| `GET`    | `/api/job/{id}/stats`             | Get functional analysis               | Public          |
-| `GET`    | `/api/job/{id}/download/{format}` | Download results                      | Owner only      |
-| `GET`    | `/api/jobs/`                      | List own jobs (paginated)             | Cookie required |
-| `DELETE` | `/api/job/{id}`                   | Delete job                            | Owner only      |
-| `PSOS`   |                                   |                                       |                 |
-| `GET`    | `/api/job/{id}/psos`              | Get Psos analysis results             | Public          |
-| `POST`   | `/api/job/{id}/psos`              | Run Psos analysis for unmatched seqs  | Owner only      |
-| `DELETE` | `/api/job/{id}/psos`              | Delete Psos analysis results          | Owner only      |
-| `BAKTA`  |                                   |                                       |                 |
-| `GET`    | `/api/job/{id}/bakta`             | Get Bakta analysis results            | Public          |
-| `POST`   | `/api/job/{id}/bakta`             | Run Bakta analysis for unmatched seqs | Owner only      |
-| `DELETE` | `/api/job/{id}/bakta`             | Delete Bakta analysis results         | Owner only      |
-| `POST`   | `/api/job/{id}/bakta/ingest`      | Ingest Bakta results into Custom DB   | Owner only      |
-| `INFO`   |                                   |                                       |                 |
-| `GET`    | `/api/health`                     | Health check with DB status           | Public          |
-| `GET`    | `/api/db/info`                    | Database information                  | Public          |
-
-### Database Lookup Chain
-
-Sequences are processed rapidly using their MD5 hashes:
-
-1. MD5(seq) → Search in Bakta DB? (If yes, annotate).
-2. MD5(seq) → Search in custom AI-DB (If yes, annotate).
-3. No match. (These can then be analyzed via Psos/Bakta).
-
-### Pagination Parameters
-
-Both `/api/job/{id}` and `/api/jobs/` support pagination:
-
-| Parameter   | Description             | Default  | Max   |
-|-------------|-------------------------|----------|-------|
-| `page`      | Page number (1-indexed) | 1        | -     |
-| `per_page`  | Items per page          | 20       | 10000 |
-
-### Filtering (Job Details)
-
-The `/api/job/{id}` endpoint supports sequence filtering:
-
-| Parameter     | Values                       | Description                   |
-|---------------|------------------------------|-------------------------------|
-| `filter`      | `all`, `hash_match`, `none`  | Filter by annotation source   |
-| `search`      | text                         | Search in ID, gene, product   |
-| `min_length`  | number                       | Minimum sequence length       |
-| `max_length`  | number                       | Maximum sequence length       |
-| `cog`         | A-Z                          | COG functional category       |
-| `ec_class`    | 1-7                          | Enzyme class                  |
-| `has_gene`    | true/false                   | Only sequences with gene name |
-| `has_product` | true/false                   | Only sequences with product   |
-
-### Functional Analysis
-
-The `/api/job/{id}/stats` endpoint returns:
-
-```json
-{
-  "total_sequences": 4155,
-  "annotated_sequences": 4111,
-  "top_genes": [{"name": "rpsA", "count": 42}, ...],
-  "top_products": [{"name": "hypothetical protein", "count": 156}, ...],
-  "cog_categories": [{"code": "J", "name": "Translation", "count": 89}, ...],
-  "ec_classes": [{"name": "2 - Transferases", "count": 234}, ...],
-  "go_terms": {
-    "molecular_function": [{"name": "GO:0003735", "count": 45}, ...]
-  }
-}
+```
+User uploads FASTA
+       │
+       ▼
+Backend hashes each sequence (MD5)
+       │
+       ├─── Hash found ──► Return annotation from AI-DB
+       │
+       └─── No match   ──► Mark as unmatched
+                               │
+                               ├─ Psos API  (signal peptide, TM domains)
+                               └─ Bakta API (full genome / protein annotation)
+                                       │
+                                       ▼
+                               Ingest results into local AI-DB annotations DB
+                               (future jobs recognize these sequences via hash)
 ```
 
-### Download Formats
+### Result Download Formats
 
 | Format   | Endpoint                       | Content-Type                | Use Case                       |
 |----------|--------------------------------|-----------------------------|--------------------------------|
@@ -234,114 +181,20 @@ Full OpenAPI/Swagger documentation is available at:
 - **Swagger UI**: `https://ai-db.computational.bio/api/docs/`
 - **OpenAPI JSON**: `https://ai-db.computational.bio/api/openapi.json`
 
-### Example: Create Job
-
-```bash
-curl -X POST "https://ai-db.computational.bio/api/job/" \
-  -F "file=@sequences.fasta" \
-  -F "job_name=MyJob" \
-  -c cookies.txt
-```
-
-### Example: Get Functional Statistics
-
-```bash
-curl "https://ai-db.computational.bio/api/job/{id}/stats"
-```
-
-## Frontend Features
-
-### Job Detail View
-
-The job detail page features three tabs:
-
-#### Overview Tab
-- Job metadata (ID, filename, timestamps)
-- Processing statistics
-- Download options (TSV, JSON, FASTA, GFF3)
-
-#### Sequences Tab
-- **Real-time search**: Filter by sequence ID, gene name, or product description
-- **Advanced filters**: Length range, COG category, EC class, annotation status
-- **Client-side filtering**: Instant results without server requests
-- **Pagination**: Navigate through large result sets
-- Clickable database links (UniParc, UniRef100, NCBI)
-- **Analyse Unmatched**: Options to further evaluate unannotated sequences via Psos or Bakta. 
-  Successful Bakta analyses can be ingested directly into the custom AI-DB annotations 
-  database to grow the knowledge base.
-
-#### Functional Analysis Tab
-- **Annotation Rate**: Visual progress indicator
-- **Top Genes**: Horizontal bar chart with sequential color palette
-- **Top Products**: Most common functional descriptions
-- **COG Categories**: Distribution across 23 functional categories
-- **EC Classes**: Enzyme classification distribution
-- **GO Terms**: Gene Ontology molecular functions
-
-## Job Persistence
+### Job Persistence
 
 Jobs are stored in a SQLite database and **persist for 30 days**. 
 The database survives container restarts and redeployments.
 
-### Volume Configuration
+## Deployment
 
-```yaml
-services:
-  api:
-    volumes:
-      - jobs-data:/data  # Named volume for persistence
+The application is designed for deployment on OpenStack or any container
+platform. Both services publish Docker images via multi-stage builds.
 
-volumes:
-  jobs-data:  # Docker-managed volume
-```
+### Nginx Proxy
 
-### Environment Variables
-
-| Variable                        | Description                                 | Default                            |
-|---------------------------------|---------------------------------------------|------------------------------------|
-| `RUST_LOG`                      | Log level (trace, debug, info, warn, error) | `info`                             |
-| `BAKTA_DB`                      | Path to Bakta database                      | `/bakta-db`                        |
-| `AI_DB_TEMP_DIR`                | Directory for temporary upload files        | `/tmp`                             |
-| `AI_DB_JOBS_PATH`               | Path to SQLite jobs database                | `/data/jobs.db`                    |
-| `AI_DB_CUSTOM_ANNOTATIONS_PATH` | Path to AI-DB annotations database          | `/custom-db/custom_annotations.db` |
-
-### Verifying Persistence
-
-After deployment, check the logs:
-```bash
-docker logs ai-db-api | grep "Loaded.*jobs from database"
-# Should show: "Loaded X existing jobs from database"
-```
-
-## FASTA Format
-
-Expected input format (protein sequences):
-```
->sequence_id_1 optional description
-MKFLILLFNILCLFPVLAADNHGVGPQGASGVDPITFDINSNQTGV
-ASLLNFLGGTTVGSLQGKPLGQLACNPNQVKRKGDHIIYPGQQYTP
->sequence_id_2
-MRYILAAVLLPMFAQSYKVDQTGSGPKNTFFINSNQTGVPEQYGDL
-```
-
-### Supported File Formats
-
-| Extension                       | Description           |
-|---------------------------------|-----------------------|
-| `.fasta`, `.fa`, `.fna`, `.faa` | Standard FASTA files  |
-| `.txt`                          | Plain text FASTA      |
-| `.gz`                           | Gzip compressed FASTA |
-
-## Performance & Memory Management
-
-- **Streaming Upload**: Files streamed to temp storage
-- **Iterator-based Parsing**: One sequence at a time
-- **Client-side Filtering**: Instant search without server requests
-- **Batch Progress**: Updates every 1,000 sequences
-- **Memory Limits**:
-  - 100 MB maximum upload size
-  - 1M results max per job
-  - 5 MB max per sequence
+The frontend Nginx configuration proxies `/api/` to the backend service.
+Update `nginx.conf` to set your domain and backend address before deploying.
 
 ## Security
 

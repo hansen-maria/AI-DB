@@ -33,10 +33,24 @@ frontend/
     │   ├── bakta.ts           # API client for bakta jobs
     │   ├── jobs.ts            # API client with TypeScript types
     │   └── psos.ts            # API client for psos jobs
+    ├── constants/
+    │   └── sequences.ts       # Shared filter options, COG/EC vocabularies,
+    │                          # color palettes, and DB link helpers
+    ├── composables/
+    │   ├── useJobPolling.ts       # Job fetching, background polling, stats
+    │   ├── useSequenceFilters.ts  # Client-side filtering, pagination, download
+    │   ├── usePsosAnalysis.ts     # Psos state, API calls, result persistence
+    │   └── useBaktaAnalysis.ts    # Bakta state, API calls, annotation ingest
+    ├── components/
+    │   └── job/
+    │       ├── AnalysisTab.vue    # Annotation rate ring + functional charts
+    │       ├── SequencesTab.vue   # Search bar, filter panel, sequence table
+    │       ├── PsosPanel.vue      # Collapsible Psos analysis section
+    │       └── BaktaPanel.vue     # Collapsible Bakta annotation section
     ├── views/
-    │   ├── ContactView.vue    # Contact Page
+    │   ├── ContactView.vue    # Contact page
     │   ├── HomeView.vue       # Landing page
-    │   ├── JobDetailView.vue  # Job results with tabs, search & analysis
+    │   ├── JobDetailView.vue  # Job results orchestrator (tabs + composables)
     │   ├── JobListView.vue    # Paginated job list
     │   └── SubmitJobView.vue  # FASTA upload form
     └── assets/
@@ -95,42 +109,42 @@ FASTA submission form with:
 
 ### JobDetailView (`/job/:id`)
 
-**Three-tab interface:**
+Orchestrates four composables and renders three tabs:
 
 #### Overview Tab
 - Job metadata (ID, filename, timestamps)
-- Processing statistics (total, hash matches, alignment matches)
-- Download section with 4 export formats
+- Processing statistics (total sequences, hash matches)
+- Action cards — navigate to Sequences, Functional Analysis, or start Bakta annotation
+- Download section with multiple export formats
 
 #### Sequences Tab
 
 **Search & Filter Bar:**
-- Real-time text search (ID, gene, product)
-- Basic filters: All / Matches / No Match
+- Real-time text search across ID, gene, and product fields
+- Quick filters: All / Matched / Match (Bakta) / Match (AI-DB) / No Match
 - Advanced filter panel (collapsible)
 
 **Advanced Filters:**
-- Sequence length range (min/max)
+- Sequence length range (min/max in aa)
 - COG functional category dropdown (23 categories)
 - EC enzyme class dropdown (7 classes)
 - Checkboxes: "Has gene name", "Has function description"
-- Clear all filters button
+- Active filter badges with one-click clear
 
 **Client-Side Filtering:**
 - All sequences loaded once (up to 10,000)
 - Instant filtering without server requests
-- 80ms debounce prevents UI flickering
-- Smooth transitions and hover effects
+- 80 ms debounce prevents UI flickering
+- Filtered subsets downloadable as TSV, CSV, FASTA, or JSON
 
 **Sequence Table:**
 - Paginated results (20 per page)
-- Clickable database links (UniParc, UniRef100, NCBI)
+- Clickable database links (UniRef100, UniParc, NCBI)
 - Sticky header for scrolling
-- Row hover highlighting
 
-**Analyse Unmatched:**
-- Options to further analyse unmatched sequences via Psos or Bakta
-- Bakta results can be ingested into AI-DB annotations database
+**Analyse Unmatched Sequences:**
+- **Psos panel** — submits unmatched sequences to the Psos API one by one, polls for completion, and displays a results table with signal peptide, TM domain, and best-hit data. Results are persisted to the backend and restored on page reload.
+- **Bakta panel** — runs Bakta genome or protein annotation on unmatched sequences, shows live progress, and lets users ingest the resulting annotations into the local AI-DB annotations database for future hash lookups.
 
 #### Functional Analysis Tab
 
@@ -138,19 +152,15 @@ FASTA submission form with:
 - Visual progress ring showing percentage annotated
 
 **Charts (Horizontal Bar Charts):**
-- **Top Genes**: Sequential green color palette (darker = lower rank)
-- **Top Products**: Sequential green color palette
-- **COG Categories**: Categorical color palette (distinct colors)
-- **EC Classes**: Categorical color palette
-- **GO Terms**: Molecular function terms
-
+- **Top Genes** — sequential green palette (darker = lower rank)
+- **Top Products** — sequential green palette
+- **COG Categories** — categorical color palette
+- **EC Classes** — categorical color palette
+- **GO Terms** — molecular function term list
 
 ### JobListView (`/jobs`)
 
-Job history page with:
-- Paginated job list
-- Status indicators
-- Quick actions (view, delete)
+Job history with paginated list, status indicators, and quick delete.
 
 ## API Client
 
@@ -160,19 +170,9 @@ The API client (`src/api/jobs.ts`) provides:
 
 ```typescript
 type JobStatus = 'pending' | 'processing' | 'completed' | 'failed';
-type SequenceFilter = 'all' | 'hash_match' | 'alignment' | 'none';
+type SequenceFilter = 'all' | 'hash_match' | 'bakta_db' | 'aidb_db' | 'none';
 type DownloadFormat = 'tsv' | 'json' | 'fasta' | 'gff3';
-
-interface AdvancedFilterOptions {
-  filter?: SequenceFilter;
-  search?: string;
-  minLength?: number;
-  maxLength?: number;
-  cog?: string;
-  ecClass?: string;
-  hasGene?: boolean;
-  hasProduct?: boolean;
-}
+type FilteredDownloadFormat = 'tsv' | 'csv' | 'fasta' | 'json';
 
 interface FunctionalStats {
   total_sequences: number;
@@ -189,7 +189,7 @@ interface FunctionalStats {
 
 ```typescript
 // Get job with pagination and filtering
-getJob(jobId, page?, perPage?, filter?, advancedFilters?): Promise<PaginatedJobResponse>
+getJob(jobId, page?, perPage?, filter?): Promise<PaginatedJobResponse>
 
 // Get functional statistics
 getJobStats(jobId): Promise<FunctionalStats>
@@ -199,7 +199,7 @@ createJobWithFile(file, jobName?): Promise<JobCreateResponse>
 listJobs(page?, perPage?): Promise<PaginatedJobsResponse>
 deleteJob(jobId): Promise<void>
 
-// Download results
+// Download full results
 downloadJobResults(jobId, format): Promise<void>
 ```
 
@@ -237,25 +237,25 @@ downloadJobResults(jobId, format): Promise<void>
 
 ```typescript
 const statusColors = {
-  pending: '#ff9800',    // Orange
-  processing: '#2196f3', // Blue
-  completed: '#4caf50',  // Green
-  failed: '#f44336'      // Red
+  pending:    '#ff9800',  // Orange
+  processing: '#2196f3',  // Blue
+  completed:  '#4caf50',  // Green
+  failed:     '#f44336',  // Red
 }
 ```
 
-## Performance Features
+## Performance
 
-- **Client-side filtering**: No server requests during search/filter
-- **Debounced search**: 80ms delay prevents excessive re-renders
-- **Computed pagination**: Instant page navigation
-- **Lazy loading**: Non-critical views loaded on demand
+- **Client-side filtering** — no server requests during search or filter changes
+- **Debounced search** — 80 ms delay prevents excessive re-renders
+- **Computed pagination** — instant page navigation from an in-memory slice
+- **Lazy loading** — non-critical views loaded on demand
 
 ## Customization
 
 ### Logo
 
-Replace these files:
+Replace:
 - `src/assets/logo-light.png`
 - `src/assets/logo-dark.png`
 - `public/favicon.png`
@@ -266,7 +266,7 @@ Update `nginx.conf` to replace `ai-db.computational.bio` with your domain.
 
 ### Colors
 
-Edit CSS variables in `src/assets/main.css`.
+Edit CSS variables in `src/assets/main.css` and the palette arrays in `src/constants/sequences.ts`.
 
 ## Scripts
 
