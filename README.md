@@ -28,59 +28,73 @@ user-expandable AI-DB Annotations Database.
 ```
 ai-db/
 ├── docker-compose.yml
-├── frontend/                       # Vue.js Frontend
+├── frontend/                           # Vue.js Frontend
 │   ├── Dockerfile
 │   ├── nginx.conf
 │   ├── package.json
 │   ├── vite.config.ts
 │   ├── src/
-│   │   ├── App.vue                 # Main app with navigation
-│   │   ├── main.ts                 # Entry point
+│   │   ├── App.vue                     # Main app with navigation
+│   │   ├── main.ts                     # Entry point
 │   │   ├── router/
 │   │   │   └── index.ts
 │   │   ├── api/
-│   │   │   ├── bakta.ts            # API client for Bakta analysis
-│   │   │   ├── jobs.ts             # API client with types
-│   │   │   └── psos.ts             # API client for Psos analysis
+│   │   │   ├── bakta.ts                # API client for Bakta analysis
+│   │   │   ├── jobs.ts                 # API client with types
+│   │   │   └── psos.ts                 # API client for Psos analysis
+│   │   ├── constants/
+│   │   │   └── sequences.ts            # Shared filter options, COG/EC vocabularies,
+│   │   │                               # color palettes, and DB link helpers
+│   │   ├── composables/
+│   │   │   ├── useJobPolling.ts        # Job fetching, background polling, stats
+│   │   │   ├── useSequenceFilters.ts   # Client-side filtering, pagination, download
+│   │   │   ├── usePsosAnalysis.ts      # Psos state, API calls, result persistence
+│   │   │   └── useBaktaAnalysis.ts     # Bakta state, API calls, annotation ingest
+│   │   ├── components/
+│   │   │   └── job/
+│   │   │       ├── AnalysisTab.vue     # Annotation rate ring + functional charts
+│   │   │       ├── SequencesTab.vue    # Search bar, filter panel, sequence table
+│   │   │       ├── PsosPanel.vue       # Collapsible Psos analysis section
+│   │   │       └── BaktaPanel.vue      # Collapsible Bakta annotation section
 │   │   ├── views/
-│   │   │   ├── HomeView.vue        # Landing page
-│   │   │   ├── ContactView.vue     # Contact page
-│   │   │   ├── SubmitJobView.vue   # FASTA upload
-│   │   │   ├── JobDetailView.vue   # Job details with tabs, search, analysis & ingestion
-│   │   │   └── JobListView.vue     # Jobs list (own jobs)
+│   │   │   ├── HomeView.vue            # Landing page
+│   │   │   ├── ContactView.vue         # Contact page
+│   │   │   ├── SubmitJobView.vue       # FASTA upload
+│   │   │   ├── JobDetailView.vue       # Job details with tabs, search, analysis & ingestion
+│   │   │   └── JobListView.vue         # Jobs list (own jobs)
 │   │   └── assets/
 │   │       ├── main.css
 │   │       └── logo-*.png
 │   └── public/
-└── backend/                        # Rust/Axum Backend
+└── backend/                            # Rust/Axum Backend
     ├── Dockerfile
     ├── Cargo.toml
     └── src/
-        ├── main.rs                 # Entry point, router, OpenAPI
-        ├── auth.rs                 # Cookie-based authentication
-        ├── state.rs                # AppState, DB connection, job management
-        ├── storage.rs              # SQLite job persistence (30 days)
-        ├── models/                 # Data structures
-        │   ├── bakta.rs            # Models for Bakta analysis
-        │   ├── custom_db.rs        # Models for custom AI-DB annotations
-        │   ├── job.rs              # JobResponse, JobStatus
-        │   ├── psos.rs             # Models for Psos analysis
-        │   ├── sequence.rs         # SequenceInfo, SequenceFilter
-        │   ├── pagination.rs       # PaginationInfo, query types
-        │   ├── stats.rs            # FunctionalStats for analysis
-        │   ├── health.rs           # Health check types
-        │   └── error.rs            # ErrorResponse
-        ├── handlers/               # API endpoints
-        │   ├── jobs.rs             # CRUD operations for jobs
-        │   ├── bakta.rs            # Bakta analysis & data ingestion endpoints
-        │   ├── psos.rs             # Psos analysis endpoints
-        │   ├── stats.rs            # Functional analysis endpoint
-        │   ├── download.rs         # Export handler
-        │   └── health.rs           # Health check & DB info
-        ├── services/               # Business Logic
-        │   ├── fasta.rs            # FASTA parsing & MD5 computation
-        │   └── annotation.rs       # DB lookup (Bakta -> Custom DB), job processing
-        └── export/                 # Download Formats
+        ├── main.rs                     # Entry point, router, OpenAPI
+        ├── auth.rs                     # Cookie-based authentication
+        ├── state.rs                    # AppState, DB connection, job management
+        ├── storage.rs                  # SQLite job persistence (30 days)
+        ├── models/                     # Data structures
+        │   ├── bakta.rs                # Models for Bakta analysis
+        │   ├── custom_db.rs            # Models for custom AI-DB annotations
+        │   ├── job.rs                  # JobResponse, JobStatus
+        │   ├── psos.rs                 # Models for Psos analysis
+        │   ├── sequence.rs             # SequenceInfo, SequenceFilter
+        │   ├── pagination.rs           # PaginationInfo, query types
+        │   ├── stats.rs                # FunctionalStats for analysis
+        │   ├── health.rs               # Health check types
+        │   └── error.rs                # ErrorResponse
+        ├── handlers/                   # API endpoints
+        │   ├── jobs.rs                 # CRUD operations for jobs
+        │   ├── bakta.rs                # Bakta analysis & data ingestion endpoints
+        │   ├── psos.rs                 # Psos analysis endpoints
+        │   ├── stats.rs                # Functional analysis endpoint
+        │   ├── download.rs             # Export handler
+        │   └── health.rs               # Health check & DB info
+        ├── services/                   # Business Logic
+        │   ├── fasta.rs                # FASTA parsing & MD5 computation
+        │   └── annotation.rs           # DB lookup (Bakta -> Custom DB), job processing
+        └── export/                     # Download Formats
             ├── tsv.rs
             ├── json.rs
             ├── fasta.rs
