@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter, RouterLink } from 'vue-router'
 import { detectSequenceType } from '../api/bakta.ts'
-import { downloadOptions, deleteJob, type DownloadFormat } from '../api/jobs.ts'
+import { downloadOptions, deleteJob, renameJob, retryJob, type DownloadFormat } from '../api/jobs.ts'
 import { downloadJobResults } from '../api/jobs.ts'
 import { psosProfiles } from '../api/psos.ts'
 
@@ -62,9 +62,64 @@ function setTab(tab: Tab, replace = false) {
   const nav = replace ? router.replace : router.push
   nav({ hash: `#${tab}` })
 }
-const deleting   = ref(false)
+const deleting    = ref(false)
 const downloading = ref(false)
 const downloadError = ref('')
+
+// ── Rename ────────────────────────────────────────────────────────────────────
+const isRenaming  = ref(false)
+const renameInput = ref('')
+const renaming    = ref(false)
+const renameError = ref('')
+
+function startRename() {
+  renameInput.value = job.value?.filename || ''
+  renameError.value = ''
+  isRenaming.value  = true
+  // focus the input on next tick
+  setTimeout(() => (document.getElementById('rename-input') as HTMLInputElement)?.select(), 50)
+}
+
+function cancelRename() {
+  isRenaming.value = false
+  renameError.value = ''
+}
+
+async function submitRename() {
+  const name = renameInput.value.trim()
+  if (!name || !job.value) return
+  renaming.value    = true
+  renameError.value = ''
+  try {
+    const updated = await renameJob(jobId.value, name)
+    job.value.filename = updated.filename
+    isRenaming.value   = false
+  } catch (e) {
+    renameError.value = e instanceof Error ? e.message : 'Failed to rename job'
+  } finally {
+    renaming.value = false
+  }
+}
+
+// ── Retry ─────────────────────────────────────────────────────────────────────
+const retrying   = ref(false)
+const retryError = ref('')
+
+async function handleRetry() {
+  retrying.value   = true
+  retryError.value = ''
+  try {
+    await retryJob(jobId.value)
+    await loadJob(async () => {
+      await psos.loadExistingResults()
+      await bakta.loadExistingState()
+    })
+  } catch (e) {
+    retryError.value = e instanceof Error ? e.message : 'Failed to retry job'
+  } finally {
+    retrying.value = false
+  }
+}
 
 const progressPercent = computed(() => {
   if (!job.value || job.value.sequence_count === 0) return 0
@@ -134,7 +189,32 @@ function openBaktaConfig() {
       <div class="job-header">
         <div class="header-left">
           <RouterLink to="/jobs" class="back-link">← Back to Jobs</RouterLink>
-          <h2>{{ job.filename || 'Direct Input' }}</h2>
+
+          <!-- Inline rename -->
+          <div v-if="isRenaming" class="rename-form">
+            <input
+                id="rename-input"
+                v-model="renameInput"
+                class="rename-input"
+                maxlength="200"
+                @keyup.enter="submitRename"
+                @keyup.escape="cancelRename"
+            />
+            <button class="rename-btn rename-btn--save" :disabled="renaming" @click="submitRename">
+              {{ renaming ? '…' : 'Save' }}
+            </button>
+            <button class="rename-btn rename-btn--cancel" @click="cancelRename">Cancel</button>
+            <span v-if="renameError" class="rename-error">{{ renameError }}</span>
+          </div>
+          <div v-else class="title-row">
+            <h2>{{ job.filename || 'Direct Input' }}</h2>
+            <button class="rename-icon-btn" title="Rename job" @click="startRename">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+              </svg>
+            </button>
+          </div>
         </div>
         <button class="delete-btn" :disabled="deleting" @click="handleDelete">
           {{ deleting ? 'Deleting…' : 'Delete' }}
@@ -204,7 +284,7 @@ function openBaktaConfig() {
 
             <!-- Action cards -->
             <div class="action-cards">
-              <button class="action-card action-card--sequences" @click="activeTab = 'sequences'">
+              <button class="action-card action-card--sequences" @click="setTab('sequences')">
                 <div class="action-card__icon">
                   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18"/></svg>
                 </div>
@@ -218,7 +298,7 @@ function openBaktaConfig() {
                 </div>
               </button>
 
-              <button class="action-card action-card--analysis" @click="activeTab = 'analysis'">
+              <button class="action-card action-card--analysis" @click="setTab('analysis')">
                 <div class="action-card__icon">
                   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/><path d="M2 20h20"/></svg>
                 </div>
@@ -373,6 +453,7 @@ function openBaktaConfig() {
         <!-- ── Analysis Tab ─────────────────────────────────────────────── -->
         <AnalysisTab
             v-if="activeTab === 'analysis' && job.status === 'completed'"
+            :jobId="jobId"
             :loading="false"
             :stats="stats"
         />
@@ -380,8 +461,18 @@ function openBaktaConfig() {
 
       <!-- Failed state -->
       <div v-if="job.status === 'failed'" class="error-section">
-        <h3>Error</h3>
+        <h3>Job Failed</h3>
         <p>{{ job.error_message || 'An unknown error occurred.' }}</p>
+        <div class="retry-row">
+          <button class="btn btn-primary" :disabled="retrying" @click="handleRetry">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+            </svg>
+            {{ retrying ? 'Retrying…' : 'Retry Annotation' }}
+          </button>
+          <span v-if="retryError" class="retry-error">{{ retryError }}</span>
+          <span v-if="retrying" class="retry-hint">Re-running hash lookups on stored sequences…</span>
+        </div>
       </div>
 
       <div class="actions">
@@ -402,7 +493,29 @@ function openBaktaConfig() {
 .header-left { display: flex; flex-direction: column; gap: 0.5rem; }
 .back-link { color: var(--color-text); text-decoration: none; font-size: 0.9rem; opacity: 0.8; }
 .back-link:hover { opacity: 1; }
-.job-header h2 { margin: 0; font-size: 1.5rem; color: var(--color-heading); }
+
+/* Title row with rename icon */
+.title-row { display: flex; align-items: center; gap: 0.5rem; }
+.job-header h2, .title-row h2 { margin: 0; font-size: 1.5rem; color: var(--color-heading); }
+.rename-icon-btn { display: flex; align-items: center; padding: 0.25rem; background: none; border: none; color: var(--color-text); opacity: 0.4; cursor: pointer; border-radius: 4px; transition: opacity 0.15s; }
+.rename-icon-btn:hover { opacity: 1; }
+
+/* Inline rename form */
+.rename-form { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.rename-input { font-size: 1.2rem; font-weight: 600; padding: 0.3rem 0.6rem; border: 1.5px solid hsla(160,100%,37%,0.6); border-radius: 6px; background: var(--color-background); color: var(--color-heading); min-width: 260px; }
+.rename-input:focus { outline: none; border-color: hsla(160,100%,37%,1); }
+.rename-btn { padding: 0.3rem 0.75rem; border-radius: 6px; font-size: 0.85rem; cursor: pointer; border: none; transition: background 0.15s; }
+.rename-btn--save { background: hsla(160,100%,37%,1); color: #fff; }
+.rename-btn--save:hover:not(:disabled) { background: hsla(160,100%,30%,1); }
+.rename-btn--save:disabled { opacity: 0.6; cursor: not-allowed; }
+.rename-btn--cancel { background: var(--color-background-soft); color: var(--color-text); border: 1px solid var(--color-border); }
+.rename-btn--cancel:hover { border-color: var(--color-text); }
+.rename-error { font-size: 0.8rem; color: #f44336; }
+
+/* Retry */
+.retry-row { display: flex; align-items: center; gap: 1rem; margin-top: 1rem; flex-wrap: wrap; }
+.retry-error { font-size: 0.85rem; color: #f44336; }
+.retry-hint { font-size: 0.82rem; color: var(--color-text); opacity: 0.6; font-style: italic; }
 .delete-btn { padding: 0.5rem 1rem; border: 1px solid #f44336; border-radius: 6px; background: transparent; color: #f44336; cursor: pointer; transition: all 0.2s; }
 .delete-btn:hover:not(:disabled) { background: #f44336; color: white; }
 .delete-btn:disabled { opacity: 0.5; cursor: not-allowed; }

@@ -85,11 +85,39 @@ pub fn generate_gff3(job: &JobResponse) -> String {
             if let Some(ref ncbi) = seq.ncbi_nrp_id {
                 dbxrefs.push(format!("NCBI_NRP:{}", ncbi));
             }
+            // EC numbers are represented as Dbxref entries (EC:x.x.x.x)
+            if let Some(ref ec_ids) = seq.ec_ids {
+                for ec in ec_ids.split(',') {
+                    let ec = ec.trim();
+                    if !ec.is_empty() {
+                        dbxrefs.push(format!("EC:{}", ec));
+                    }
+                }
+            }
             if !dbxrefs.is_empty() {
                 attributes.push(format!("Dbxref={}", dbxrefs.join(",")));
             }
 
-            // Add ontology term for annotation source
+            // GO terms are represented as Ontology_term attributes (GFF3 spec §4)
+            if let Some(ref go_ids) = seq.go_ids {
+                let terms: Vec<String> = go_ids
+                    .split(',')
+                    .map(|t| t.trim().to_string())
+                    .filter(|t| t.starts_with("GO:"))
+                    .collect();
+                if !terms.is_empty() {
+                    attributes.push(format!("Ontology_term={}", terms.join(",")));
+                }
+            }
+
+            // COG category as a custom attribute
+            if let Some(ref cog) = seq.cog_category {
+                if !cog.is_empty() {
+                    attributes.push(format!("cog_category={}", sanitize_gff3_attribute(cog)));
+                }
+            }
+
+            // annotation_source as a custom attribute for traceability
             if let Some(ref source) = seq.annotation_source {
                 attributes.push(format!("source_type={}", source));
             }

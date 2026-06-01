@@ -99,3 +99,30 @@ impl From<&JobResponse> for JobSummary {
         }
     }
 }
+
+// ── New request / response types ─────────────────────────────────────────────
+
+/// Request body for renaming a job
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct RenameJobRequest {
+    /// New display name for the job
+    pub filename: String,
+}
+
+/// Request body for bulk-deleting multiple jobs
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct BulkDeleteRequest {
+    /// IDs of jobs to delete
+    pub job_ids: Vec<String>,
+}
+
+/// Result of a bulk-delete operation
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct BulkDeleteResponse {
+    /// IDs that were successfully deleted
+    pub deleted: Vec<String>,
+    /// IDs that were not found
+    pub not_found: Vec<String>,
+    /// IDs that belonged to a different owner
+    pub forbidden: Vec<String>,
+}

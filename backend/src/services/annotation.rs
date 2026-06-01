@@ -536,3 +536,144 @@ pub fn process_job_from_file(state: &AppState, job_id: &str, file_path: &Path, i
         );
     }
 }
+
+// ── Retry / Re-annotation ─────────────────────────────────────────────────────
+
+/// Re-runs hash lookups for sequences already stored in a failed job.
+///
+/// Called by `POST /api/job/{id}/retry`. Because the original temp file has
+/// already been deleted, this function works entirely from the in-memory
+/// sequence data (stored sequence string or MD5 hex hash).
+pub fn reannotate_sequences(state: &AppState, job_id: &str, sequences: Vec<SequenceInfo>) {
+    tracing::info!(
+        "Job {}: retrying annotation for {} stored sequences",
+        job_id,
+        sequences.len()
+    );
+
+    let db_conn = state.open_db_connection();
+    let aidb_conn = state.open_custom_annotations_db();
+
+    let total = sequences.len();
+    let mut updated = Vec::with_capacity(total);
+    let mut bakta_matches = 0usize;
+    let mut aidb_matches = 0usize;
+    let mut batch_count = 0usize;
+
+    for (i, seq) in sequences.into_iter().enumerate() {
+        // Prefer re-hashing the stored sequence; fall back to decoding stored MD5 hex
+        let hash_bytes: Option<Vec<u8>> = seq
+            .sequence
+            .as_deref()
+            .map(|s| {
+                let (_, b) = compute_md5(s);
+                b
+            })
+            .or_else(|| {
+                seq.md5_hash.as_deref().and_then(|hex| {
+                    if hex.len() == 32 {
+                        (0..32)
+                            .step_by(2)
+                            .map(|j| u8::from_str_radix(&hex[j..j + 2], 16).ok())
+                            .collect()
+                    } else {
+                        None
+                    }
+                })
+            });
+
+        let updated_seq = if let Some(ref hb) = hash_bytes {
+            let (result, source) =
+                lookup_hash(db_conn.as_ref(), aidb_conn.as_ref(), hb, seq.length);
+            match source {
+                "bakta_db" => bakta_matches += 1,
+                "aidb_db" => aidb_matches += 1,
+                _ => {}
+            }
+            if result.found {
+                SequenceInfo {
+                    annotation: format_annotation(&result),
+                    annotation_source: if source.is_empty() {
+                        None
+                    } else {
+                        Some(source.to_string())
+                    },
+                    uniparc_id: result.uniparc_id,
+                    ncbi_nrp_id: result.ncbi_nrp_id,
+                    uniref100_id: result.uniref100_id,
+                    product: result.product,
+                    gene: result.gene,
+                    cog_category: result.cog_category,
+                    ec_ids: result.ec_ids,
+                    go_ids: result.go_ids,
+                    ..seq
+                }
+            } else {
+                SequenceInfo {
+                    annotation: None,
+                    annotation_source: None,
+                    uniparc_id: None,
+                    ncbi_nrp_id: None,
+                    uniref100_id: None,
+                    product: None,
+                    gene: None,
+                    cog_category: None,
+                    ec_ids: None,
+                    go_ids: None,
+                    ..seq
+                }
+            }
+        } else {
+            seq // no hash available – keep as-is
+        };
+
+        updated.push(updated_seq);
+        batch_count += 1;
+
+        if batch_count >= BATCH_SIZE {
+            batch_count = 0;
+            let matches = bakta_matches + aidb_matches;
+            let mut jobs = state.jobs_mut();
+            if let Some(job) = jobs.get_mut(job_id) {
+                job.processed_count = i + 1;
+                job.hash_matches = matches;
+                job.updated_at = Utc::now();
+            }
+        }
+    }
+
+    let total_matches = bakta_matches + aidb_matches;
+
+    let final_job = {
+        let mut jobs = state.jobs_mut();
+        if let Some(job) = jobs.get_mut(job_id) {
+            job.status = JobStatus::Completed;
+            job.processed_count = total;
+            job.sequence_count = total;
+            job.hash_matches = total_matches;
+            job.alignment_matches = 0;
+            job.updated_at = Utc::now();
+            job.error_message = None;
+            job.sequences = Some(updated);
+            Some(job.clone())
+        } else {
+            None
+        }
+    };
+
+    if let Some(job) = final_job {
+        state.save_job(&job);
+    }
+
+    tracing::info!(
+        "Job {}: retry complete – {} Bakta DB, {} AI-DB annotations DB ({:.1}% matched)",
+        job_id,
+        bakta_matches,
+        aidb_matches,
+        if total > 0 {
+            total_matches as f64 / total as f64 * 100.0
+        } else {
+            0.0
+        },
+    );
+}

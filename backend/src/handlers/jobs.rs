@@ -16,11 +16,13 @@ use uuid::Uuid;
 
 use crate::auth::{get_or_create_owner, OWNER_COOKIE_NAME};
 use crate::models::{
-    AdvancedSequenceFilter, ErrorResponse, GetJobQuery, JobCreateResponse, JobResponse, JobStatus,
-    JobSummary, ListJobsQuery, PaginatedJobResponse, PaginatedJobsResponse, PaginationInfo,
-    SequenceFilter, DEFAULT_PER_PAGE, MAX_PER_PAGE,
+    AdvancedSequenceFilter, BulkDeleteRequest, BulkDeleteResponse, ErrorResponse, GetJobQuery,
+    JobCreateResponse, JobResponse, JobStatus, JobSummary, PaginatedJobResponse,
+    PaginatedJobsResponse, PaginationInfo, RenameJobRequest, SequenceFilter, SequenceInfo,
+    DEFAULT_PER_PAGE, MAX_PER_PAGE,
 };
 use crate::services::process_job_from_file;
+use crate::services::reannotate_sequences;
 use crate::state::AppState;
 
 /// Maximum upload size (100 MB)
@@ -376,14 +378,27 @@ pub async fn create_job(
         .into_response()
 }
 
+/// Query parameters for listing jobs – defined locally so no change to models is required.
+#[derive(Debug, serde::Deserialize)]
+pub struct ListJobsParams {
+    pub page: Option<usize>,
+    pub per_page: Option<usize>,
+    /// Optional status filter: pending | processing | completed | failed
+    pub status: Option<String>,
+    /// Optional case-insensitive substring search on filename
+    pub search: Option<String>,
+}
+
 /// List all jobs (only own jobs based on cookie, paginated)
 #[utoipa::path(
     get,
     path = "/api/jobs/",
     tag = "Jobs",
     params(
-        ("page" = Option<usize>, Query, description = "Page (1-indexed, default: 1)"),
-        ("per_page" = Option<usize>, Query, description = "Jobs per page (default: 20, max: 100)")
+        ("page"     = Option<usize>,  Query, description = "Page (1-indexed, default: 1)"),
+        ("per_page" = Option<usize>,  Query, description = "Jobs per page (default: 20, max: 100)"),
+        ("status"   = Option<String>, Query, description = "Filter by status: pending, processing, completed, failed"),
+        ("search"   = Option<String>, Query, description = "Search in filename (case-insensitive)")
     ),
     responses(
         (status = 200, description = "Paginated job list", body = PaginatedJobsResponse)
@@ -392,7 +407,7 @@ pub async fn create_job(
 pub async fn list_jobs(
     State(state): State<AppState>,
     jar: CookieJar,
-    Query(query): Query<ListJobsQuery>,
+    Query(query): Query<ListJobsParams>,
 ) -> impl IntoResponse {
     let page = query.page.unwrap_or(1).max(1);
     let per_page = query
@@ -403,14 +418,43 @@ pub async fn list_jobs(
     // Get owner ID from cookie
     let owner_id = jar.get(OWNER_COOKIE_NAME).map(|c| c.value().to_string());
 
+    let status_filter = query.status.as_deref().map(|s| s.to_lowercase());
+    let search_filter = query.search.as_deref().map(|s| s.to_lowercase());
+
     let jobs = state.jobs();
 
     // Filter jobs by owner_id and collect as summaries
     let mut job_list: Vec<JobSummary> = jobs
         .values()
+        // Ownership check
         .filter(|job| match (&job.owner_id, &owner_id) {
             (Some(job_owner), Some(cookie_owner)) => job_owner == cookie_owner,
             _ => false,
+        })
+        // Status filter
+        .filter(|job| {
+            if let Some(ref status) = status_filter {
+                let job_status = match job.status {
+                    JobStatus::Pending => "pending",
+                    JobStatus::Processing => "processing",
+                    JobStatus::Completed => "completed",
+                    JobStatus::Failed => "failed",
+                };
+                job_status == status.as_str()
+            } else {
+                true
+            }
+        })
+        // Filename search
+        .filter(|job| {
+            if let Some(ref search) = search_filter {
+                job.filename
+                    .as_ref()
+                    .map(|f| f.to_lowercase().contains(search.as_str()))
+                    .unwrap_or(false)
+            } else {
+                true
+            }
         })
         .map(JobSummary::from)
         .collect();
@@ -498,4 +542,322 @@ pub async fn delete_job(
         )
             .into_response()
     }
+}
+
+// ── Rename job ────────────────────────────────────────────────────────────────
+
+/// Rename a job (change its display filename)
+#[utoipa::path(
+    patch,
+    path = "/api/job/{job_id}",
+    tag = "Jobs",
+    params(
+        ("job_id" = String, Path, description = "Unique job ID (UUID)")
+    ),
+    request_body = RenameJobRequest,
+    responses(
+        (status = 200,  description = "Job renamed",      body = JobSummary),
+        (status = 400,  description = "Empty filename",   body = ErrorResponse),
+        (status = 403,  description = "Not authorized",   body = ErrorResponse),
+        (status = 404,  description = "Job not found",    body = ErrorResponse)
+    )
+)]
+pub async fn rename_job(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Path(job_id): Path<String>,
+    Json(body): Json<RenameJobRequest>,
+) -> impl IntoResponse {
+    let owner_id = jar.get(OWNER_COOKIE_NAME).map(|c| c.value().to_string());
+
+    let new_filename = body.filename.trim().to_string();
+    if new_filename.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse::new("Filename must not be empty")),
+        )
+            .into_response();
+    }
+
+    // Clone job under read lock (avoids holding lock across await / DB call)
+    let updated_job = {
+        let jobs = state.jobs();
+        match jobs.get(&job_id) {
+            Some(job) => {
+                if let (Some(job_owner), Some(cookie_owner)) = (&job.owner_id, &owner_id) {
+                    if job_owner != cookie_owner {
+                        return (
+                            StatusCode::FORBIDDEN,
+                            Json(ErrorResponse::new("Not authorized to rename this job")),
+                        )
+                            .into_response();
+                    }
+                }
+                let mut updated = job.clone();
+                updated.filename = Some(new_filename);
+                updated.updated_at = Utc::now();
+                updated
+            }
+            None => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(ErrorResponse::new(format!(
+                        "Job with ID '{}' not found",
+                        job_id
+                    ))),
+                )
+                    .into_response()
+            }
+        }
+        // read lock released here
+    };
+
+    // Persist to DB + update in-memory cache
+    state.save_job(&updated_job);
+
+    (StatusCode::OK, Json(JobSummary::from(&updated_job))).into_response()
+}
+
+// ── Bulk delete ───────────────────────────────────────────────────────────────
+
+/// Delete multiple jobs in one request
+#[utoipa::path(
+    delete,
+    path = "/api/jobs/",
+    tag = "Jobs",
+    request_body = BulkDeleteRequest,
+    responses(
+        (status = 200, description = "Bulk delete result", body = BulkDeleteResponse)
+    )
+)]
+pub async fn bulk_delete_jobs(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Json(body): Json<BulkDeleteRequest>,
+) -> impl IntoResponse {
+    let owner_id = jar.get(OWNER_COOKIE_NAME).map(|c| c.value().to_string());
+
+    let mut deleted = Vec::new();
+    let mut not_found = Vec::new();
+    let mut forbidden = Vec::new();
+
+    for job_id in &body.job_ids {
+        // Ownership check under read lock
+        let auth_result = {
+            let jobs = state.jobs();
+            match jobs.get(job_id.as_str()) {
+                Some(job) => match (&job.owner_id, &owner_id) {
+                    (Some(job_owner), Some(cookie_owner)) if job_owner != cookie_owner => {
+                        Err("forbidden")
+                    }
+                    _ => Ok(()),
+                },
+                None => Err("not_found"),
+            }
+        };
+
+        match auth_result {
+            Ok(()) => {
+                state.delete_job(job_id);
+                deleted.push(job_id.clone());
+            }
+            Err("not_found") => not_found.push(job_id.clone()),
+            _ => forbidden.push(job_id.clone()),
+        }
+    }
+
+    // 207 Multi-Status when some IDs failed; 200 when everything succeeded
+    let status = if not_found.is_empty() && forbidden.is_empty() {
+        StatusCode::OK
+    } else {
+        StatusCode::MULTI_STATUS
+    };
+
+    (
+        status,
+        Json(BulkDeleteResponse {
+            deleted,
+            not_found,
+            forbidden,
+        }),
+    )
+        .into_response()
+}
+
+// ── Single sequence detail ────────────────────────────────────────────────────
+
+/// Get full details of a single sequence within a job
+#[utoipa::path(
+    get,
+    path = "/api/job/{job_id}/sequence/{seq_id}",
+    tag = "Jobs",
+    params(
+        ("job_id" = String, Path, description = "Unique job ID (UUID)"),
+        ("seq_id" = String, Path, description = "Sequence identifier (FASTA header ID)")
+    ),
+    responses(
+        (status = 200, description = "Sequence found",    body = SequenceInfo),
+        (status = 404, description = "Not found",         body = ErrorResponse)
+    )
+)]
+pub async fn get_sequence(
+    State(state): State<AppState>,
+    Path((job_id, seq_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let jobs = state.jobs();
+
+    match jobs.get(&job_id) {
+        Some(job) => {
+            match job
+                .sequences
+                .as_ref()
+                .and_then(|seqs| seqs.iter().find(|s| s.id == seq_id))
+            {
+                Some(seq) => (StatusCode::OK, Json(seq.clone())).into_response(),
+                None => (
+                    StatusCode::NOT_FOUND,
+                    Json(ErrorResponse::new(format!(
+                        "Sequence '{}' not found in job '{}'",
+                        seq_id, job_id
+                    ))),
+                )
+                    .into_response(),
+            }
+        }
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse::new(format!(
+                "Job with ID '{}' not found",
+                job_id
+            ))),
+        )
+            .into_response(),
+    }
+}
+
+// ── Retry failed job ──────────────────────────────────────────────────────────
+
+/// Retry a failed job using the sequences already stored in the database.
+///
+/// The original FASTA file is no longer available after processing, so this
+/// re-runs the hash lookups against the current state of the Bakta / AI-DB
+/// databases.  Returns 422 if no sequences are stored (e.g. the job failed
+/// before parsing completed – in that case the file must be re-uploaded).
+#[utoipa::path(
+    post,
+    path = "/api/job/{job_id}/retry",
+    tag = "Jobs",
+    params(
+        ("job_id" = String, Path, description = "Unique job ID (UUID)")
+    ),
+    responses(
+        (status = 202, description = "Retry started",               body = JobSummary),
+        (status = 400, description = "Job is not in failed state",  body = ErrorResponse),
+        (status = 403, description = "Not authorized",              body = ErrorResponse),
+        (status = 404, description = "Job not found",               body = ErrorResponse),
+        (status = 422, description = "No sequences to retry",       body = ErrorResponse)
+    )
+)]
+pub async fn retry_job(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Path(job_id): Path<String>,
+) -> impl IntoResponse {
+    let owner_id = jar.get(OWNER_COOKIE_NAME).map(|c| c.value().to_string());
+
+    // ── Validate ──────────────────────────────────────────────────────────────
+    let sequences = {
+        let jobs = state.jobs();
+        match jobs.get(&job_id) {
+            Some(job) => {
+                // Ownership
+                if let (Some(job_owner), Some(cookie_owner)) = (&job.owner_id, &owner_id) {
+                    if job_owner != cookie_owner {
+                        return (
+                            StatusCode::FORBIDDEN,
+                            Json(ErrorResponse::new("Not authorized to retry this job")),
+                        )
+                            .into_response();
+                    }
+                }
+                // Must be failed
+                if job.status != JobStatus::Failed {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(ErrorResponse::new(
+                            "Only jobs with status 'failed' can be retried",
+                        )),
+                    )
+                        .into_response();
+                }
+                // Must have stored sequences
+                match &job.sequences {
+                    Some(seqs) if !seqs.is_empty() => seqs.clone(),
+                    _ => {
+                        return (
+                            StatusCode::UNPROCESSABLE_ENTITY,
+                            Json(ErrorResponse::new(
+                                "Cannot retry: no sequences are stored for this job. \
+                                 Please re-upload the FASTA file.",
+                            )),
+                        )
+                            .into_response()
+                    }
+                }
+            }
+            None => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(ErrorResponse::new(format!(
+                        "Job with ID '{}' not found",
+                        job_id
+                    ))),
+                )
+                    .into_response()
+            }
+        }
+        // read lock released here
+    };
+
+    // ── Reset status to Processing ────────────────────────────────────────────
+    let (reset_summary, job_to_save) = {
+        let mut jobs = state.jobs_mut();
+        match jobs.get_mut(&job_id) {
+            Some(job) => {
+                job.status = JobStatus::Processing;
+                job.error_message = None;
+                job.processed_count = 0;
+                job.hash_matches = 0;
+                job.updated_at = Utc::now();
+                (JobSummary::from(&*job), job.clone())
+            }
+            None => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(ErrorResponse::new("Job disappeared during retry setup")),
+                )
+                    .into_response()
+            }
+        }
+        // write lock released here
+    };
+
+    state.save_job(&job_to_save);
+
+    // ── Spawn background re-annotation ────────────────────────────────────────
+    let state_clone = state.clone();
+    let job_id_clone = job_id.clone();
+
+    tokio::spawn(async move {
+        let result = tokio::task::spawn_blocking(move || {
+            reannotate_sequences(&state_clone, &job_id_clone, sequences);
+        })
+        .await;
+
+        if let Err(e) = result {
+            tracing::error!("Retry task panicked for job {}: {}", job_id, e);
+        }
+    });
+
+    (StatusCode::ACCEPTED, Json(reset_summary)).into_response()
 }

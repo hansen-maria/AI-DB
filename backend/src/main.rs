@@ -32,16 +32,18 @@ use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
 use crate::handlers::{
-    create_job, db_info, delete_bakta_job, delete_job, delete_psos_results, download_job,
-    get_bakta_job, get_job, get_job_stats, get_psos_results, health_check, ingest_bakta_results,
-    list_jobs, save_bakta_job, save_psos_results,
+    bulk_delete_jobs, create_job, db_info, delete_bakta_job, delete_job, delete_psos_results,
+    download_job, export_job_stats, get_bakta_job, get_job, get_job_stats, get_psos_results,
+    get_sequence, health_check, ingest_bakta_results, list_jobs, rename_job, retry_job,
+    save_bakta_job, save_psos_results,
 };
 use crate::models::{
-    BaktaJobStateResponse, CustomAnnotationEntry, ErrorResponse, FunctionalStats,
-    IngestCustomAnnotationsRequest, IngestCustomAnnotationsResponse, JobCreateResponse,
-    JobResponse, JobStatus, JobSummary, PaginatedJobResponse, PaginatedJobsResponse,
-    PaginationInfo, PsosResult, PsosResultsResponse, SaveBaktaJobRequest, SaveBaktaJobResponse,
-    SavePsosResultsRequest, SavePsosResultsResponse, SequenceInfo, StoredBaktaJob,
+    BaktaJobStateResponse, BulkDeleteRequest, BulkDeleteResponse, CustomAnnotationEntry,
+    ErrorResponse, FunctionalStats, IngestCustomAnnotationsRequest,
+    IngestCustomAnnotationsResponse, JobCreateResponse, JobResponse, JobStatus, JobSummary,
+    PaginatedJobResponse, PaginatedJobsResponse, PaginationInfo, PsosResult, PsosResultsResponse,
+    RenameJobRequest, SaveBaktaJobRequest, SaveBaktaJobResponse, SavePsosResultsRequest,
+    SavePsosResultsResponse, SequenceInfo, StoredBaktaJob,
 };
 use crate::state::AppState;
 
@@ -73,8 +75,13 @@ use crate::state::AppState;
         handlers::jobs::create_job,
         handlers::jobs::list_jobs,
         handlers::jobs::delete_job,
+        handlers::jobs::rename_job,
+        handlers::jobs::bulk_delete_jobs,
+        handlers::jobs::get_sequence,
+        handlers::jobs::retry_job,
         handlers::download::download_job,
         handlers::stats::get_job_stats,
+        handlers::stats::export_job_stats,
         handlers::psos::save_psos_results,
         handlers::psos::get_psos_results,
         handlers::psos::delete_psos_results,
@@ -90,6 +97,9 @@ use crate::state::AppState;
         SequenceInfo,
         JobResponse,
         JobCreateResponse,
+        RenameJobRequest,
+        BulkDeleteRequest,
+        BulkDeleteResponse,
         ErrorResponse,
         PaginationInfo,
         PaginatedJobsResponse,
@@ -128,6 +138,7 @@ async fn main() {
         .allow_methods([
             axum::http::Method::GET,
             axum::http::Method::POST,
+            axum::http::Method::PATCH,
             axum::http::Method::DELETE,
             axum::http::Method::OPTIONS,
         ])
@@ -145,9 +156,15 @@ async fn main() {
         .route("/api/db/info", get(db_info))
         // Job management routes
         .route("/api/job/", post(create_job))
-        .route("/api/job/{job_id}", get(get_job).delete(delete_job))
+        .route(
+            "/api/job/{job_id}",
+            get(get_job).delete(delete_job).patch(rename_job),
+        )
         .route("/api/job/{job_id}/download/{format}", get(download_job))
         .route("/api/job/{job_id}/stats", get(get_job_stats))
+        .route("/api/job/{job_id}/stats/export", get(export_job_stats))
+        .route("/api/job/{job_id}/retry", post(retry_job))
+        .route("/api/job/{job_id}/sequence/{seq_id}", get(get_sequence))
         // Psos results routes
         .route(
             "/api/job/{job_id}/psos",
@@ -164,7 +181,7 @@ async fn main() {
         )
         // Bakta → custom annotations ingest
         .route("/api/job/{job_id}/bakta/ingest", post(ingest_bakta_results))
-        .route("/api/jobs/", get(list_jobs))
+        .route("/api/jobs/", get(list_jobs).delete(bulk_delete_jobs))
         // Swagger UI
         .merge(SwaggerUi::new("/api/docs/").url("/api/openapi.json", ApiDoc::openapi()))
         // Middleware

@@ -1,12 +1,31 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import type { FunctionalStats } from '../../api/jobs.ts'
+import { exportJobStats } from '../../api/jobs.ts'
 import { getSequentialColor, getCategoricalColor } from '../../constants/sequences.ts'
 
 const props = defineProps<{
+  jobId:   string
   loading: boolean
   stats:   FunctionalStats | null
 }>()
+
+// ── Stats export ─────────────────────────────────────────────────────────────
+
+const exporting     = ref(false)
+const exportError   = ref('')
+
+async function handleExport() {
+  exporting.value   = true
+  exportError.value = ''
+  try {
+    await exportJobStats(props.jobId)
+  } catch (e) {
+    exportError.value = e instanceof Error ? e.message : 'Export failed'
+  } finally {
+    exporting.value = false
+  }
+}
 
 const annotationRate = computed(() => {
   if (!props.stats || props.stats.total_sequences === 0) return 0
@@ -86,6 +105,24 @@ const hasGoTerms = computed(() => goSections.value.length > 0)
     </div>
 
     <div v-else-if="stats" class="analysis-section">
+      <!-- Toolbar -->
+      <div class="analysis-toolbar">
+        <div class="analysis-toolbar__info">
+          <span class="analysis-toolbar__count">{{ stats.total_sequences.toLocaleString() }} sequences</span>
+        </div>
+        <div class="analysis-toolbar__actions">
+          <span v-if="exportError" class="export-error">{{ exportError }}</span>
+          <button class="export-btn" :disabled="exporting" @click="handleExport" title="Download statistics as CSV">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="7 10 12 15 17 10"/>
+              <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            {{ exporting ? 'Exporting…' : 'Export CSV' }}
+          </button>
+        </div>
+      </div>
+
       <!-- Annotation Rate circle -->
       <div class="annotation-overview">
         <div class="annotation-rate">
@@ -224,6 +261,23 @@ const hasGoTerms = computed(() => goSections.value.length > 0)
 .loading-stats { display: flex; align-items: center; gap: 0.75rem; padding: 2rem; color: var(--color-text); }
 .spinner { width: 24px; height: 24px; border: 2px solid var(--color-border); border-top-color: hsla(160,100%,37%,1); border-radius: 50%; animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* Toolbar */
+.analysis-toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
+.analysis-toolbar__info { font-size: 0.85rem; color: var(--color-text); opacity: 0.6; }
+.analysis-toolbar__actions { display: flex; align-items: center; gap: 0.75rem; }
+.export-btn {
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  padding: 0.4rem 0.9rem;
+  font-size: 0.82rem; font-weight: 500;
+  background: var(--color-background-soft);
+  border: 1px solid var(--color-border);
+  border-radius: 6px; color: var(--color-text);
+  cursor: pointer; transition: border-color 0.15s, color 0.15s;
+}
+.export-btn:hover:not(:disabled) { border-color: hsla(160,100%,37%,0.6); color: hsla(160,100%,37%,1); }
+.export-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.export-error { font-size: 0.78rem; color: #f44336; }
 
 .analysis-section { display: flex; flex-direction: column; gap: 2rem; }
 .annotation-overview { background: var(--color-background-soft); border: 1px solid var(--color-border); border-radius: 12px; padding: 1.5rem; }

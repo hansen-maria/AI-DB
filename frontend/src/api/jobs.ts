@@ -104,6 +104,23 @@ export interface PaginatedJobsResponse {
     pagination: PaginationInfo;
 }
 
+/** Parameters for listing / filtering the job overview */
+export interface ListJobsOptions {
+    page?:     number;
+    perPage?:  number;
+    /** Filter by job status */
+    status?:   JobStatus;
+    /** Case-insensitive substring match on filename */
+    search?:   string;
+}
+
+/** Bulk-delete result */
+export interface BulkDeleteResponse {
+    deleted:   string[];
+    not_found: string[];
+    forbidden: string[];
+}
+
 export interface PaginatedJobResponse {
     job_id: string;
     status: JobStatus;
@@ -309,16 +326,18 @@ export async function getJob(
 }
 
 /**
- * List all jobs with pagination
+ * List all jobs with pagination and optional filtering
  */
 export async function listJobs(
-    page = 1,
-    perPage = 20
+    options: ListJobsOptions = {}
 ): Promise<PaginatedJobsResponse> {
+    const { page = 1, perPage = 20, status, search } = options;
     const params = new URLSearchParams({
-        page: page.toString(),
+        page:     page.toString(),
         per_page: perPage.toString(),
     });
+    if (status) params.set('status', status);
+    if (search)  params.set('search', search);
 
     const response = await fetch(`${API_BASE}/jobs/?${params}`, {
         credentials: 'include', // Include cookies
@@ -381,6 +400,161 @@ export async function deleteJob(jobId: string): Promise<void> {
         }
         throw new Error(detail || `Failed to delete job (${response.status})`);
     }
+}
+
+/**
+ * Rename a job (change display filename)
+ */
+export async function renameJob(jobId: string, filename: string): Promise<JobSummary> {
+    const response = await fetch(`${API_BASE}/job/${jobId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ filename }),
+    });
+
+    if (!response.ok) {
+        const error: ApiError = await response.json().catch(() => ({ detail: 'Failed to rename job' }));
+        throw new Error(error.detail || 'Failed to rename job');
+    }
+
+    return response.json();
+}
+
+/**
+ * Delete multiple jobs at once.
+ * Returns a breakdown of which IDs were deleted, not found, or forbidden.
+ */
+export async function bulkDeleteJobs(jobIds: string[]): Promise<BulkDeleteResponse> {
+    const response = await fetch(`${API_BASE}/jobs/`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ job_ids: jobIds }),
+    });
+
+    if (!response.ok) {
+        const error: ApiError = await response.json().catch(() => ({ detail: 'Failed to delete jobs' }));
+        throw new Error(error.detail || 'Failed to delete jobs');
+    }
+
+    return response.json();
+}
+
+/**
+ * Fetch full details of a single sequence within a completed job
+ */
+export async function getSequence(jobId: string, seqId: string): Promise<SequenceInfo> {
+    const response = await fetch(`${API_BASE}/job/${jobId}/sequence/${encodeURIComponent(seqId)}`, {
+        credentials: 'include',
+    });
+
+    if (!response.ok) {
+        if (response.status === 404) throw new Error(`Sequence '${seqId}' not found`);
+        throw new Error('Failed to fetch sequence');
+    }
+
+    return response.json();
+}
+
+/**
+ * Download job results with optional sequence filtering applied server-side.
+ * Passes the same filter params used by `getJob` so the exported file matches
+ * exactly what the user sees in the Sequences tab.
+ */
+export async function downloadFilteredJobResults(
+    jobId: string,
+    format: DownloadFormat,
+    filters: AdvancedFilterOptions = {}
+): Promise<void> {
+    const params = new URLSearchParams();
+    if (filters.filter)                            params.set('filter',      filters.filter);
+    if (filters.search)                            params.set('search',      filters.search);
+    if (filters.minLength !== undefined)           params.set('min_length',  filters.minLength.toString());
+    if (filters.maxLength !== undefined)           params.set('max_length',  filters.maxLength.toString());
+    if (filters.cog)                               params.set('cog',         filters.cog);
+    if (filters.ecClass)                           params.set('ec_class',    filters.ecClass);
+    if (filters.hasGene !== undefined)             params.set('has_gene',    filters.hasGene.toString());
+    if (filters.hasProduct !== undefined)          params.set('has_product', filters.hasProduct.toString());
+
+    const qs = params.toString();
+    const url = `${API_BASE}/job/${jobId}/download/${format}${qs ? `?${qs}` : ''}`;
+
+    const response = await fetch(url, { credentials: 'include' });
+
+    if (!response.ok) {
+        if (response.status === 404) throw new Error(`Job '${jobId}' not found`);
+        if (response.status === 403) throw new Error('Not authorized to download this job');
+        const error: ApiError = await response.json().catch(() => ({ detail: 'Download failed' }));
+        throw new Error(error.detail || 'Download failed');
+    }
+
+    const contentDisposition = response.headers.get('Content-Disposition');
+    let filename = `results_filtered.${format}`;
+    if (contentDisposition) {
+        const match = contentDisposition.match(/filename="(.+)"/);
+        if (match) filename = match[1];
+    }
+
+    const blob = await response.blob();
+    const downloadUrl = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href     = downloadUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(downloadUrl);
+}
+
+/**
+ * Retry a failed job by re-running hash lookups on its stored sequences.
+ * Returns 422 if no sequences are stored (file must be re-uploaded).
+ */
+export async function retryJob(jobId: string): Promise<JobSummary> {
+    const response = await fetch(`${API_BASE}/job/${jobId}/retry`, {
+        method: 'POST',
+        credentials: 'include',
+    });
+
+    if (!response.ok) {
+        const error: ApiError = await response.json().catch(() => ({ detail: 'Failed to retry job' }));
+        throw new Error(error.detail || 'Failed to retry job');
+    }
+
+    return response.json();
+}
+
+/**
+ * Download functional statistics for a completed job as a CSV file.
+ */
+export async function exportJobStats(jobId: string): Promise<void> {
+    const url = `${API_BASE}/job/${jobId}/stats/export`;
+
+    const response = await fetch(url, { credentials: 'include' });
+
+    if (!response.ok) {
+        if (response.status === 404) throw new Error(`Job '${jobId}' not found`);
+        if (response.status === 400) throw new Error('Job is not yet completed');
+        throw new Error('Failed to export stats');
+    }
+
+    const contentDisposition = response.headers.get('Content-Disposition');
+    let filename = `${jobId}_stats.csv`;
+    if (contentDisposition) {
+        const match = contentDisposition.match(/filename="(.+)"/);
+        if (match) filename = match[1];
+    }
+
+    const blob = await response.blob();
+    const downloadUrl = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href     = downloadUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(downloadUrl);
 }
 
 /**

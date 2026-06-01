@@ -21,23 +21,37 @@ pub fn generate_tsv(job: &JobResponse) -> String {
     output.push_str(&format!("# Alignment Matches: {}\n", job.alignment_matches));
     output.push_str(&format!(
         "# No Matches: {}\n",
-        job.sequence_count - job.hash_matches - job.alignment_matches
+        job.sequence_count
+            .saturating_sub(job.hash_matches + job.alignment_matches)
     ));
     output.push_str("#\n");
 
-    // Column headers - product and gene are now primary, technical IDs at the end
-    output.push_str("sequence_id\tlength\tgene\tproduct\tuniref100_id\tuniparc_id\tncbi_nrp_id\tuniref100_url\tuniparc_url\tncbi_url\n");
+    // Column headers
+    output.push_str(
+        "sequence_id\tlength\tannotation_source\tgene\tproduct\t\
+         cog_category\tec_ids\tgo_ids\t\
+         uniref100_id\tuniparc_id\tncbi_nrp_id\t\
+         uniref100_url\tuniparc_url\tncbi_url\n",
+    );
 
     // Data rows
     if let Some(ref sequences) = job.sequences {
         for seq in sequences {
+            let source = seq.annotation_source.as_deref().unwrap_or("");
             let gene = seq.gene.as_deref().unwrap_or("");
             let product = seq.product.as_deref().unwrap_or("");
+            let cog = seq.cog_category.as_deref().unwrap_or("");
+            let ec = seq.ec_ids.as_deref().unwrap_or("");
+            let go = seq.go_ids.as_deref().unwrap_or("");
+            let uniref = seq.uniref100_id.as_deref().unwrap_or("");
             let uniparc = seq.uniparc_id.as_deref().unwrap_or("");
             let ncbi = seq.ncbi_nrp_id.as_deref().unwrap_or("");
-            let uniref = seq.uniref100_id.as_deref().unwrap_or("");
 
-            // Generate URLs
+            let uniref_url = seq
+                .uniref100_id
+                .as_ref()
+                .map(|id| format!("https://www.uniprot.org/uniref/{}", id))
+                .unwrap_or_default();
             let uniparc_url = seq
                 .uniparc_id
                 .as_ref()
@@ -48,24 +62,23 @@ pub fn generate_tsv(job: &JobResponse) -> String {
                 .as_ref()
                 .map(|id| format!("https://www.ncbi.nlm.nih.gov/protein/{}", id))
                 .unwrap_or_default();
-            let uniref_url = seq
-                .uniref100_id
-                .as_ref()
-                .map(|id| format!("https://www.uniprot.org/uniref/{}", id))
-                .unwrap_or_default();
 
             output.push_str(&format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                 seq.id,
                 seq.length,
+                source,
                 gene,
                 product,
+                cog,
+                ec,
+                go,
                 uniref,
                 uniparc,
                 ncbi,
                 uniref_url,
                 uniparc_url,
-                ncbi_url
+                ncbi_url,
             ));
         }
     }
