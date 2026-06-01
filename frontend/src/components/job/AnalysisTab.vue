@@ -85,6 +85,16 @@ watch(
 
 // ── GO section helpers ───────────────────────────────────────────────────────
 
+/** How many GO rows to show before the "Show all" toggle appears */
+const GO_PREVIEW = 10
+
+/** Tracks which GO sections are expanded (keyed by section.key) */
+const goExpanded = ref<Record<string, boolean>>({})
+
+function toggleGoSection(key: string) {
+  goExpanded.value = { ...goExpanded.value, [key]: !goExpanded.value[key] }
+}
+
 const goSections = computed(() => {
   if (!props.stats) return []
   const { molecular_function, biological_process, cellular_component } = props.stats.go_terms
@@ -227,7 +237,13 @@ const hasGoTerms = computed(() => goSections.value.length > 0)
               </div>
 
               <div class="horizontal-bars">
-                <div v-for="item in section.items.slice(0, 10)" :key="item.name" class="bar-item go-bar-item">
+                <div
+                    v-for="item in goExpanded[section.key]
+                    ? section.items
+                    : section.items.slice(0, GO_PREVIEW)"
+                    :key="item.name"
+                    class="bar-item go-bar-item"
+                >
                   <div class="go-label-block">
                     <a
                         :href="`https://www.ebi.ac.uk/QuickGO/term/${item.name}`"
@@ -246,6 +262,23 @@ const hasGoTerms = computed(() => goSections.value.length > 0)
                   <span class="bar-value">{{ item.count }}</span>
                 </div>
               </div>
+
+              <!-- Show more / less toggle -->
+              <button
+                  v-if="section.items.length > GO_PREVIEW"
+                  class="go-toggle-btn"
+                  :style="{ color: section.color }"
+                  @click="toggleGoSection(section.key)"
+              >
+                <template v-if="goExpanded[section.key]">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="18 15 12 9 6 15"/></svg>
+                  Show less
+                </template>
+                <template v-else>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+                  Show all {{ section.items.length }} terms
+                </template>
+              </button>
 
             </div>
           </div>
@@ -352,6 +385,15 @@ const hasGoTerms = computed(() => goSections.value.length > 0)
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.3;
 }
 .go-name-loading { opacity: 0.35; font-style: italic; }
+
+.go-toggle-btn {
+  display: inline-flex; align-items: center; gap: 0.3rem;
+  margin-top: 0.5rem;
+  background: none; border: none; padding: 0;
+  font-size: 0.78rem; font-weight: 500;
+  cursor: pointer; opacity: 0.8; transition: opacity 0.15s;
+}
+.go-toggle-btn:hover { opacity: 1; }
 
 @media (max-width: 900px) {
   .charts-grid { grid-template-columns: 1fr; }

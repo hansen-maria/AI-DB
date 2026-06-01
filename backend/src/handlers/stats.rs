@@ -17,8 +17,12 @@ use crate::models::{
 };
 use crate::state::AppState;
 
-/// Maximum number of items to return in each category
+/// Maximum number of items to return per category (genes, products, COG, EC)
 const MAX_ITEMS: usize = 20;
+
+/// GO terms have much higher cardinality – return more so the frontend
+/// can show a meaningful "Show all" without a second API call.
+const MAX_GO_ITEMS: usize = 50;
 
 // ── Shared computation ────────────────────────────────────────────────────────
 
@@ -139,7 +143,7 @@ pub fn compute_stats(job_id: &str, sequences: &[SequenceInfo]) -> FunctionalStat
     // available at annotation time. The frontend resolves labels via QuickGO.
     let go_terms = GoTermStats {
         biological_process: Vec::new(),
-        molecular_function: sorted_count_items(go_mf_counts, MAX_ITEMS),
+        molecular_function: sorted_count_items(go_mf_counts, MAX_GO_ITEMS),
         cellular_component: Vec::new(),
     };
 
