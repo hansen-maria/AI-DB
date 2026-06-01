@@ -86,11 +86,20 @@ pub fn compute_stats(job_id: &str, sequences: &[SequenceInfo]) -> FunctionalStat
 
         // Count GO terms by ontology
         if let Some(ref go_ids) = seq.go_ids {
-            for go_term in go_ids.split(',') {
-                let go_term = go_term.trim();
-                if go_term.starts_with("GO:") {
-                    *go_mf_counts.entry(go_term.to_string()).or_insert(0) += 1;
+            for raw in go_ids.split(',') {
+                let raw = raw.trim();
+                if raw.is_empty() {
+                    continue;
                 }
+                // Bakta stores GO terms as bare 7-digit numbers (e.g. "0004022").
+                // Some sources include the "GO:" prefix already.
+                // Normalize everything to "GO:XXXXXXX" so counts and frontend lookups are consistent.
+                let normalized = if raw.starts_with("GO:") {
+                    raw.to_string()
+                } else {
+                    format!("GO:{}", raw)
+                };
+                *go_mf_counts.entry(normalized).or_insert(0) += 1;
             }
         }
     }
