@@ -13,8 +13,9 @@ import { usePsosAnalysis }    from '../composables/usePsosAnalysis.ts'
 import { useBaktaAnalysis }   from '../composables/useBaktaAnalysis.ts'
 
 // ── Child components ──────────────────────────────────────────────────────────
-import SequencesTab from '../components/job/SequencesTab.vue'
-import AnalysisTab  from '../components/job/AnalysisTab.vue'
+import SequencesTab      from '../components/job/SequencesTab.vue'
+import AnalysisTab       from '../components/job/AnalysisTab.vue'
+import VisualizationTab  from '../components/job/VisualizationTab.vue'
 
 import { statusColors, statusLabels, formatDate } from '../constants/sequences.ts'
 
@@ -43,7 +44,7 @@ const psos = usePsosAnalysis(jobId, unmatchedSequences, computed(() => job.value
 const bakta = useBaktaAnalysis(jobId, unmatchedSequences)
 
 // ── UI state ──────────────────────────────────────────────────────────────────
-const TABS = ['overview', 'sequences', 'analysis'] as const
+const TABS = ['overview', 'sequences', 'analysis', 'visualization'] as const
 type Tab = typeof TABS[number]
 
 /** Active tab is driven by the URL hash so browser Back/Forward works. */
@@ -250,9 +251,10 @@ function openBaktaConfig() {
 
       <!-- Tabs -->
       <div v-if="job.status === 'completed'" class="tab-navigation">
-        <button class="tab-btn" :class="{ active: activeTab === 'overview'  }" @click="setTab('overview')">Overview</button>
-        <button class="tab-btn" :class="{ active: activeTab === 'sequences' }" @click="setTab('sequences')">Sequences</button>
-        <button class="tab-btn" :class="{ active: activeTab === 'analysis'  }" @click="setTab('analysis')">Functional Analysis</button>
+        <button class="tab-btn" :class="{ active: activeTab === 'overview'      }" @click="setTab('overview')">Overview</button>
+        <button class="tab-btn" :class="{ active: activeTab === 'sequences'     }" @click="setTab('sequences')">Sequences</button>
+        <button class="tab-btn" :class="{ active: activeTab === 'analysis'      }" @click="setTab('analysis')">Functional Analysis</button>
+        <button class="tab-btn" :class="{ active: activeTab === 'visualization' }" @click="setTab('visualization')">Visualization</button>
       </div>
 
       <!-- Tab content -->
@@ -456,6 +458,13 @@ function openBaktaConfig() {
             :jobId="jobId"
             :loading="false"
             :stats="stats"
+        />
+
+        <!-- ── Visualization Tab ────────────────────────────────────────── -->
+        <VisualizationTab
+            v-if="activeTab === 'visualization'"
+            :jobId="jobId"
+            :jobStatus="job.status"
         />
       </div>
 
