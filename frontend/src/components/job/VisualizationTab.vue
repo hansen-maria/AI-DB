@@ -169,21 +169,40 @@ async function renderCog() {
       },
     },
     series: [{
-      type:           'sunburst',
+      type:     'sunburst',
       data,
-      radius:         ['15%', '85%'],
-      sort:           undefined,
-      emphasis:       { focus: 'ancestor' },
-      label: {
-        show:      true,
-        rotate:    'tangential',
-        fontSize:  11,
-        formatter: (p: any) => p.treeDepth === 0 ? '' : p.name.split(' – ')[0],
-      },
+      radius:   ['15%', '85%'],
+      sort:     undefined,
+      minAngle: 3,
+      emphasis: { focus: 'ancestor' },
+      // Global label default – overridden per level below
+      label: { show: false },
       levels: [
         {},
-        { r0: '15%', r: '45%', label: { rotate: 'tangential', fontSize: 12 } },
-        { r0: '46%', r: '85%', label: { rotate: 'tangential', fontSize: 10, align: 'right' } },
+        // Inner ring: super-categories – always show, full name
+        {
+          r0: '15%', r: '45%',
+          label: {
+            show:         true,
+            rotate:       'tangential',
+            fontSize:     12,
+            fontWeight:   'bold',
+            formatter:    (p: any) => p.name,
+          },
+        },
+        // Outer ring: COG codes – show only when segment is large enough
+        {
+          r0: '46%', r: '85%',
+          minAngle: 8,
+          label: {
+            show:         true,
+            rotate:       'tangential',
+            fontSize:     10,
+            hideOverlap:  true,
+            // Show code letter only (e.g. "J") – name is in tooltip
+            formatter:    (p: any) => p.name.split(' – ')[0],
+          },
+        },
       ],
     }],
   })
@@ -273,21 +292,43 @@ async function renderGo() {
       data,
       radius:   ['15%', '85%'],
       sort:     undefined,
+      minAngle: 3,
       emphasis: { focus: 'ancestor' },
-      label: {
-        show:      true,
-        rotate:    'tangential',
-        fontSize:  10,
-        formatter: (p: any) => {
-          if (p.treeDepth === 0) return ''
-          const name = String(p.name).split('\n')[0]
-          return name.length > 20 ? name.slice(0, 18) + '…' : name
-        },
-      },
+      label: { show: false },
       levels: [
         {},
-        { r0: '15%', r: '42%', label: { fontSize: 13, fontWeight: 'bold' } },
-        { r0: '43%', r: '85%', label: { fontSize: 9, rotate: 'tangential', align: 'right' } },
+        // Inner ring: BP / MF / CC – always visible, short abbreviation
+        {
+          r0: '15%', r: '42%',
+          label: {
+            show:       true,
+            fontSize:   14,
+            fontWeight: 'bold',
+            formatter:  (p: any) => {
+              const abbr: Record<string, string> = {
+                'Biological Process': 'BP', 'Molecular Function': 'MF', 'Cellular Component': 'CC',
+              }
+              return abbr[p.name] ?? p.name
+            },
+          },
+        },
+        // Outer ring: individual GO terms – label only when space allows
+        {
+          r0: '43%', r: '85%',
+          minAngle: 6,
+          label: {
+            show:        true,
+            rotate:      'tangential',
+            fontSize:    9,
+            hideOverlap: true,
+            formatter:   (p: any) => {
+              // Prefer resolved human-readable name, fallback to GO ID
+              const parts = String(p.name).split('\n')
+              const label = parts[1] ?? parts[0]
+              return label.length > 22 ? label.slice(0, 20) + '…' : label
+            },
+          },
+        },
       ],
     }],
   })
@@ -306,9 +347,89 @@ const EC_CLASS: Record<string, { name: string; color: string }> = {
   '7': { name: 'Translocases',     color: '#558b2f' },
 }
 
+// EC sub-class names (x.y → description), sourced from IUBMB/ExplorEnz
+const EC_SUBCLASS: Record<string, string> = {
+  // EC 1 – Oxidoreductases
+  '1.1': 'Acting on CH-OH (alcohol oxidoreductases)',
+  '1.2': 'Acting on aldehyde/oxo group',
+  '1.3': 'Acting on CH-CH (bond oxidoreductases)',
+  '1.4': 'Acting on CH-NH₂ (amino-acid oxidoreductases)',
+  '1.5': 'Acting on CH-NH',
+  '1.6': 'Acting on NADH/NADPH',
+  '1.7': 'Acting on other N compounds',
+  '1.8': 'Acting on S group',
+  '1.9': 'Acting on heme group',
+  '1.10': 'Acting on diphenols / related',
+  '1.11': 'Acting on peroxide as acceptor (peroxidases)',
+  '1.12': 'Acting on hydrogen as donor',
+  '1.13': 'Acting on single donors with O₂ (oxygenases)',
+  '1.14': 'Acting on paired donors with O₂',
+  '1.15': 'Acting on superoxide as acceptor',
+  '1.16': 'Oxidising metal ions',
+  '1.17': 'Acting on CH or CH₂',
+  '1.18': 'Acting on iron-sulfur proteins',
+  '1.19': 'Acting on reduced flavodoxin',
+  '1.20': 'Acting on phosphorus/arsenic',
+  '1.21': 'Acting on X-H and Y-H to form X-Y',
+  '1.23': 'Reducing C-O-C group',
+  // EC 2 – Transferases
+  '2.1': 'Transferring one-carbon groups',
+  '2.2': 'Transferring aldehyde/ketone groups',
+  '2.3': 'Acyltransferases',
+  '2.4': 'Glycosyltransferases',
+  '2.5': 'Transferring alkyl/aryl (non-methyl)',
+  '2.6': 'Transferring nitrogenous groups',
+  '2.7': 'Transferring phosphorus-containing groups',
+  '2.8': 'Transferring sulfur-containing groups',
+  '2.9': 'Transferring selenium-containing groups',
+  '2.10': 'Transferring molybdenum/tungsten',
+  // EC 3 – Hydrolases
+  '3.1': 'Acting on ester bonds',
+  '3.2': 'Glycosylases',
+  '3.3': 'Acting on ether bonds',
+  '3.4': 'Acting on peptide bonds (peptidases)',
+  '3.5': 'Acting on C-N bonds (non-peptide)',
+  '3.6': 'Acting on acid anhydrides',
+  '3.7': 'Acting on C-C bonds',
+  '3.8': 'Acting on halide bonds',
+  '3.9': 'Acting on P-N bonds',
+  '3.10': 'Acting on S-N bonds',
+  '3.11': 'Acting on C-P bonds',
+  '3.12': 'Acting on S-S bonds',
+  '3.13': 'Acting on C-S bonds',
+  // EC 4 – Lyases
+  '4.1': 'C-C lyases',
+  '4.2': 'C-O lyases',
+  '4.3': 'C-N lyases',
+  '4.4': 'C-S lyases',
+  '4.5': 'C-halide lyases',
+  '4.6': 'P-O lyases',
+  '4.7': 'C-P lyases',
+  // EC 5 – Isomerases
+  '5.1': 'Racemases and epimerases',
+  '5.2': 'Cis-trans isomerases',
+  '5.3': 'Intramolecular oxidoreductases',
+  '5.4': 'Intramolecular transferases (mutases)',
+  '5.5': 'Intramolecular lyases',
+  '5.6': 'Isomerases altering macromolecular conformation',
+  // EC 6 – Ligases
+  '6.1': 'Forming C-O bonds',
+  '6.2': 'Forming C-S bonds',
+  '6.3': 'Forming C-N bonds',
+  '6.4': 'Forming C-C bonds',
+  '6.5': 'Forming phosphoric ester bonds',
+  '6.6': 'Forming N-metal bonds',
+  // EC 7 – Translocases
+  '7.1': 'Catalysing H⁺ translocation',
+  '7.2': 'Catalysing inorganic cation translocation',
+  '7.3': 'Catalysing inorganic anion translocation',
+  '7.4': 'Catalysing amino acid / peptide translocation',
+  '7.5': 'Catalysing carbohydrate translocation',
+  '7.6': 'Catalysing other compound translocation',
+}
+
 function buildEcSunburst(): any[] {
-  // Collect EC IDs from allSequences
-  const subClassCounts = new Map<string, number>()  // "1.1", "2.3" etc
+  const subClassCounts = new Map<string, number>()
   for (const seq of props.allSequences) {
     if (!seq.ec_ids) continue
     for (const ec of seq.ec_ids.split(',')) {
@@ -320,7 +441,6 @@ function buildEcSunburst(): any[] {
   }
   if (subClassCounts.size === 0) return []
 
-  // Group sub-classes by top-level class
   const classMap = new Map<string, Map<string, number>>()
   for (const [sub, count] of subClassCounts) {
     const cls = sub.split('.')[0]
@@ -335,7 +455,9 @@ function buildEcSunburst(): any[] {
         const children = [...subs.entries()]
             .sort((a, b) => b[1] - a[1])
             .map(([sub, count]) => ({
-              name:  `EC ${sub}.-.-`,
+              name:  EC_SUBCLASS[sub]
+                  ? `EC ${sub} – ${EC_SUBCLASS[sub]}`
+                  : `EC ${sub}.-.-`,
               value: count,
             }))
         return {
@@ -371,17 +493,42 @@ async function renderEc() {
       data,
       radius:   ['15%', '85%'],
       sort:     undefined,
+      minAngle: 3,
       emphasis: { focus: 'ancestor' },
-      label: {
-        show:      true,
-        rotate:    'tangential',
-        fontSize:  11,
-        formatter: (p: any) => p.treeDepth === 0 ? '' : String(p.name).replace('EC ', ''),
-      },
+      label: { show: false },
       levels: [
         {},
-        { r0: '15%', r: '45%', label: { fontSize: 13, fontWeight: 'bold' } },
-        { r0: '46%', r: '85%', label: { fontSize: 10, rotate: 'tangential', align: 'right' } },
+        // Inner ring: EC classes – always show class number + short name
+        {
+          r0: '15%', r: '45%',
+          label: {
+            show:       true,
+            rotate:     'tangential',
+            fontSize:   12,
+            fontWeight: 'bold',
+            formatter:  (p: any) => {
+              // "EC 1 – Oxidoreductases" → "EC 1\nOxidoreductases"
+              const parts = String(p.name).split(' – ')
+              return parts.length > 1 ? `${parts[0]}\n${parts[1]}` : p.name
+            },
+          },
+        },
+        // Outer ring: sub-classes – show only when large enough
+        {
+          r0: '46%', r: '85%',
+          minAngle: 6,
+          label: {
+            show:        true,
+            rotate:      'tangential',
+            fontSize:    9,
+            hideOverlap: true,
+            formatter:   (p: any) => {
+              // Show "x.y" short code only; full name in tooltip
+              const match = String(p.name).match(/EC (\d+\.\d+)/)
+              return match ? match[1] : p.name
+            },
+          },
+        },
       ],
     }],
   })
