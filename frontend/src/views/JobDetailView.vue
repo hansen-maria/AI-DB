@@ -465,6 +465,8 @@ function openBaktaConfig() {
             v-if="activeTab === 'visualization'"
             :jobId="jobId"
             :jobStatus="job.status"
+            :stats="stats"
+            :allSequences="allSequences"
         />
       </div>
 
