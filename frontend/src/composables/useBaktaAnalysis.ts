@@ -12,6 +12,22 @@ import {
  * Re-exports `groupFeaturesByType` and `deleteBaktaState` for use in the
  * results template.
  */
+/**
+ * localStorage key for the user's "save unmatched-sequence annotations to the
+ * AI-DB annotations DB" preference. Opt-OUT: absent/invalid → treated as enabled.
+ */
+const AUTO_INGEST_STORAGE_KEY = 'aidb-bakta-auto-ingest'
+
+function loadAutoIngestPreference(): boolean {
+  try {
+    const stored = localStorage.getItem(AUTO_INGEST_STORAGE_KEY)
+    // Opt-out: only an explicit "false" turns it off; everything else defaults to on.
+    return stored === null ? true : stored !== 'false'
+  } catch {
+    return true
+  }
+}
+
 export function useBaktaAnalysis(
   jobId: Ref<string>,
   unmatchedSequences: ComputedRef<any[]>,
@@ -30,6 +46,21 @@ export function useBaktaAnalysis(
   const baktaGenus          = ref('')
   const baktaSpecies        = ref('')
   const baktaCompleteGenome = ref(false)
+
+  /**
+   * Opt-OUT: whether annotations for unmatched sequences are automatically
+   * written back into the AI-DB annotations DB once a Bakta run completes.
+   * Defaults to enabled; the user can uncheck it in the UI to opt out.
+   * NOTE: only the MD5 hash of the sequence plus the resolved annotation
+   * fields (gene, product, EC/GO/COG, …) are ever stored — never the
+   * sequence itself.
+   */
+  const autoIngestAnnotations = ref(loadAutoIngestPreference())
+
+  function setAutoIngestAnnotations(value: boolean) {
+    autoIngestAnnotations.value = value
+    try { localStorage.setItem(AUTO_INGEST_STORAGE_KEY, String(value)) } catch { /* ignore */ }
+  }
 
   // Ingest state
   const baktaIngesting      = ref(false)
@@ -55,6 +86,9 @@ export function useBaktaAnalysis(
         .then(summary => {
           baktaResult.value = summary
           console.log('[Bakta] Restored completed result with fresh URLs')
+          if (autoIngestAnnotations.value && !baktaIngestResult.value) {
+            ingestBaktaAnnotations()
+          }
         })
         .catch(e => {
           baktaError.value = e instanceof Error ? e.message : 'Failed to restore Bakta results.'
@@ -88,7 +122,12 @@ export function useBaktaAnalysis(
       (stage, pct) => { baktaProgressLabel.value = stage; baktaProgressPercent.value = pct },
       baktaAbortController.value.signal,
     )
-      .then(summary => { baktaResult.value = summary })
+      .then(summary => {
+        baktaResult.value = summary
+        if (autoIngestAnnotations.value && !baktaIngestResult.value) {
+          ingestBaktaAnnotations()
+        }
+      })
       .catch(e => {
         baktaError.value = e instanceof Error && e.message === 'Aborted'
           ? 'Analysis cancelled.'
@@ -125,6 +164,9 @@ export function useBaktaAnalysis(
         baktaAbortController.value.signal,
         jobId.value,
       )
+      if (autoIngestAnnotations.value) {
+        await ingestBaktaAnnotations()
+      }
     } catch (e) {
       baktaError.value = e instanceof Error && e.message === 'Aborted'
         ? 'Analysis cancelled.'
@@ -190,6 +232,7 @@ export function useBaktaAnalysis(
     showBaktaPanel, baktaAnalyzing, baktaProgressLabel, baktaProgressPercent,
     baktaError, baktaResult, baktaAbortController,
     baktaGenus, baktaSpecies, baktaCompleteGenome,
+    autoIngestAnnotations,
     baktaIngesting, baktaIngestResult, baktaIngestError,
     // Re-exported helpers needed by the template
     groupFeaturesByType,
@@ -197,6 +240,7 @@ export function useBaktaAnalysis(
     loadExistingState,
     analyzeWithBakta,
     ingestBaktaAnnotations,
+    setAutoIngestAnnotations,
     resetBakta,
   }
 }

@@ -55,6 +55,7 @@ defineProps<{
   baktaGenus:           string
   baktaSpecies:         string
   baktaCompleteGenome:  boolean
+  baktaAutoIngestEnabled: boolean
   baktaIngesting:       boolean
   baktaIngestResult:    IngestResponse | null
   baktaIngestError:     string
@@ -89,6 +90,7 @@ const emit = defineEmits<{
   'update:baktaGenus':      [v: string]
   'update:baktaSpecies':    [v: string]
   'update:baktaCompleteGenome': [v: boolean]
+  'update:baktaAutoIngestEnabled': [v: boolean]
   'bakta-analyze':          []
   'bakta-ingest':           []
   'bakta-reset':            []
@@ -299,6 +301,7 @@ const emit = defineEmits<{
       :genus="baktaGenus"
       :species="baktaSpecies"
       :completeGenome="baktaCompleteGenome"
+      :autoIngestEnabled="baktaAutoIngestEnabled"
       :ingesting="baktaIngesting"
       :ingestResult="baktaIngestResult"
       :ingestError="baktaIngestError"
@@ -307,6 +310,7 @@ const emit = defineEmits<{
       @update:genus="emit('update:baktaGenus', $event)"
       @update:species="emit('update:baktaSpecies', $event)"
       @update:completeGenome="emit('update:baktaCompleteGenome', $event)"
+      @update:autoIngestEnabled="emit('update:baktaAutoIngestEnabled', $event)"
       @analyze="emit('bakta-analyze')"
       @ingest="emit('bakta-ingest')"
       @reset="emit('bakta-reset')"

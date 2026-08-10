@@ -14,6 +14,7 @@ defineProps<{
   genus:                 string
   species:               string
   completeGenome:        boolean
+  autoIngestEnabled:     boolean
   ingesting:             boolean
   ingestResult:          IngestResponse | null
   ingestError:           string
@@ -21,13 +22,14 @@ defineProps<{
 }>()
 
 const emit = defineEmits<{
-  'update:show':           [value: boolean]
-  'update:genus':          [value: string]
-  'update:species':        [value: string]
-  'update:completeGenome': [value: boolean]
-  'analyze':               []
-  'ingest':                []
-  'reset':                 []
+  'update:show':              [value: boolean]
+  'update:genus':             [value: string]
+  'update:species':           [value: string]
+  'update:completeGenome':    [value: boolean]
+  'update:autoIngestEnabled': [value: boolean]
+  'analyze':                  []
+  'ingest':                   []
+  'reset':                    []
 }>()
 </script>
 
@@ -93,6 +95,20 @@ const emit = defineEmits<{
         <p v-else class="bakta-note" style="margin-bottom:0.5rem">
           The bakta_proteins workflow requires no additional configuration.
         </p>
+
+        <!-- Opt-out: save annotations to the AI-DB annotations DB automatically -->
+        <div class="bakta-autoingest-toggle">
+          <label class="bakta-checkbox-label">
+            <input :checked="autoIngestEnabled" type="checkbox"
+                   @change="emit('update:autoIngestEnabled', ($event.target as HTMLInputElement).checked)" />
+            Save annotations to the AI-DB annotations DB automatically
+          </label>
+          <p class="bakta-note" style="margin:0.35rem 0 0">
+            Only the sequence's MD5 hash and the resolved annotation (gene, product, EC/GO/COG, …)
+            are stored — never the sequence itself. Uncheck this if you don't want unmatched
+            sequences' annotations added to the shared AI-DB annotations DB.
+          </p>
+        </div>
 
         <button class="btn btn-bakta" :disabled="unmatchedCount === 0" @click="emit('analyze')">
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
@@ -190,12 +206,21 @@ const emit = defineEmits<{
 
         <!-- Ingest into AI-DB DB -->
         <div class="bakta-ingest">
-          <h4 class="bakta-section-title">Add to AI-DB annotations DB</h4>
+          <h4 class="bakta-section-title">AI-DB annotations DB</h4>
           <p class="bakta-description" style="margin:0 0 0.6rem">
-            Write Bakta annotations back into the local AI-DB annotations DB so future jobs
-            recognize these sequences via hash lookup — without re-running Bakta.
-            Annotated proteins populate <code>ups</code>, <code>ips</code> and <code>psc</code>;
-            hypothetical proteins are stored in <code>ups</code> only.
+            <span v-if="autoIngestEnabled">
+              Bakta annotations are automatically written back into the local AI-DB annotations DB
+              so future jobs recognize these sequences via hash lookup — without re-running Bakta.
+            </span>
+            <span v-else>
+              Automatic saving is turned off for this run. You can still add these annotations to
+              the local AI-DB annotations DB manually below, so future jobs recognize these
+              sequences via hash lookup without re-running Bakta.
+            </span>
+            Only the MD5 hash of each sequence and the resolved annotation are stored,
+            <strong>never the sequence itself</strong>. Annotated proteins populate
+            <code>ups</code>, <code>ips</code> and <code>psc</code>; hypothetical proteins are
+            stored in <code>ups</code> only.
           </p>
 
           <div v-if="ingestResult" class="bakta-ingest-result">
@@ -206,28 +231,36 @@ const emit = defineEmits<{
             <span>
               <strong>{{ ingestResult.ingested }}</strong> new sequences added,
               <strong>{{ ingestResult.updated }}</strong> existing entries updated
-              ({{ ingestResult.total }} total)
+              ({{ ingestResult.total }} total)<span v-if="autoIngestEnabled"> — saved automatically</span>
             </span>
+          </div>
+
+          <div v-else-if="ingesting && autoIngestEnabled" class="bakta-ingest-status">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
+                 fill="none" stroke="currentColor" stroke-width="2" style="animation:spin 1s linear infinite">
+              <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+            </svg>
+            <span>Automatically saving annotations to the AI-DB annotations DB…</span>
           </div>
 
           <div v-else-if="ingestError" class="bakta-error" style="margin-bottom:0.5rem">
             <pre class="bakta-error-text">{{ ingestError }}</pre>
           </div>
 
-          <button v-if="!ingestResult" class="btn btn-bakta" :disabled="ingesting"
+          <!--
+            Manual button: always available when auto-save is switched off (opt-out),
+            and as a retry option if the automatic save failed.
+          -->
+          <button v-if="!ingestResult && !ingesting && (!autoIngestEnabled || ingestError)"
+                  class="btn btn-bakta" :disabled="ingesting"
                   style="margin-top:0.25rem" @click="emit('ingest')">
-            <svg v-if="ingesting" xmlns="http://www.w3.org/2000/svg" width="16" height="16"
-                 viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                 style="animation:spin 1s linear infinite">
-              <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
-            </svg>
-            <svg v-else xmlns="http://www.w3.org/2000/svg" width="16" height="16"
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"
                  viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
               <polyline points="7 10 12 15 17 10"/>
               <line x1="12" y1="15" x2="12" y2="3"/>
             </svg>
-            {{ ingesting ? 'Ingesting…' : `Add ${result?.featureCount ?? result?.features?.length ?? 0} features to AI-DB annotations DB` }}
+            {{ ingestError ? 'Retry' : `Add ${result?.featureCount ?? result?.features?.length ?? 0} features to AI-DB annotations DB` }}
           </button>
         </div>
 
@@ -293,6 +326,9 @@ const emit = defineEmits<{
   .bakta-ingest { border: 1px solid var(--color-border); border-radius: 8px; padding: 0.75rem; }
   .bakta-ingest-result { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.75rem; background: rgba(56,161,105,0.1); border: 1px solid rgba(56,161,105,0.3); border-radius: 6px; font-size: 0.875rem; color: var(--color-text); }
   .bakta-ingest-result svg { color: #38a169; flex-shrink: 0; }
+  .bakta-ingest-status { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.75rem; background: var(--color-background-soft); border: 1px solid var(--color-border); border-radius: 6px; font-size: 0.875rem; color: var(--color-text); opacity: 0.85; }
+  .bakta-ingest-status svg { color: #e08000; flex-shrink: 0; }
+  .bakta-autoingest-toggle { border: 1px solid var(--color-border); border-radius: 8px; padding: 0.65rem 0.85rem; background: var(--color-background-soft); }
   .bakta-error { background: rgba(244,67,54,0.1); border: 1px solid rgba(244,67,54,0.3); padding: 0.5rem; border-radius: 6px; }
   @keyframes spin { to { transform: rotate(360deg); } }
 </style>
