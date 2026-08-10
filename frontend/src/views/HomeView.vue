@@ -6,14 +6,48 @@ import { RouterLink } from 'vue-router'
   <div class="landing">
     <!-- Hero Section -->
     <section class="hero">
-      <h2 class="hero-title">Hash-Based Annotation Service for Microbial Sequencing Data</h2>
+      <h2 class="hero-title">Instant Protein Annotation via Hash Lookup</h2>
       <p class="hero-description">
-        AI-DB accelerates the analysis of microbial sequencing data while ensuring data privacy
-        and sovereignty through cryptographic hash-based annotations.
+        AI-DB is the fast first step in protein annotation: it matches your protein sequences
+        against a database of already-characterized proteins using cryptographic hashes, returning
+        annotations in seconds for known sequences — no alignment required.
+      </p>
+      <p class="hero-subnote">
+        Not a match? AI-DB lets you send unmatched sequences straight on to Bakta or Psos for
+        further annotation. AI-DB itself does not perform comparative or downstream analyses.
       </p>
       <div class="cta-buttons">
         <RouterLink to="/submit" class="btn btn-primary">Submit Job</RouterLink>
         <a href="/api/docs" target="_blank" class="btn btn-secondary">API Documentation</a>
+      </div>
+    </section>
+
+    <!-- Scope Section -->
+    <section class="section scope-section">
+      <h3 class="section-title">What AI-DB Does — and Doesn't</h3>
+      <p class="section-intro">
+        AI-DB is designed to be the quick entry point into protein annotation, not a replacement
+        for a full genome analysis pipeline.
+      </p>
+      <div class="scope-grid">
+        <div class="scope-card scope-does">
+          <h4>✓ AI-DB Does</h4>
+          <ul>
+            <li>Look up <strong>protein</strong> sequences against a hash database of known, characterized proteins</li>
+            <li>Return annotations (COG, GO, EC, cross-references) in seconds for exact matches</li>
+            <li>Offer a way to send unmatched sequences on to Bakta or Psos for further annotation</li>
+            <li>Grow over time as newly annotated sequences are added to the database</li>
+          </ul>
+        </div>
+        <div class="scope-card scope-does-not">
+          <h4>✕ AI-DB Does Not</h4>
+          <ul>
+            <li>Annotate <strong>DNA or RNA</strong> sequences — you can upload them, but hash lookup
+              only works on proteins, so no matches will be found</li>
+            <li>Perform comparative genomics, whole-genome annotation, or multi-step downstream analysis</li>
+            <li>Replace tools like Bakta — it's a fast pre-check that complements them</li>
+          </ul>
+        </div>
       </div>
     </section>
 
@@ -27,23 +61,23 @@ import { RouterLink } from 'vue-router'
         </div>
         <div class="feature">
           <h4>Instant Annotations</h4>
-          <p>Skip computationally expensive sequence alignments. Hash-based matching delivers annotations in seconds instead of hours.</p>
+          <p>Skip computationally expensive sequence alignments. Hash-based matching delivers annotations in seconds instead of hours — for already-known protein sequences.</p>
         </div>
         <div class="feature">
-          <h4>Comprehensive Coverage</h4>
-          <p>Access functional classifications, database cross-references, and metadata from extensively characterized UniRef protein sequences.</p>
+          <h4>Protein-Focused</h4>
+          <p>Access functional classifications, database cross-references, and metadata from extensively characterized UniRef protein sequences. AI-DB works on proteins only.</p>
         </div>
         <div class="feature">
-          <h4>Advanced Analysis</h4>
-          <p>Unmatched sequences can be seamlessly analyzed further using integrated Psos and Bakta tools directly from the web interface.</p>
+          <h4>A Starting Point, Not the Whole Pipeline</h4>
+          <p>Unmatched sequences can be forwarded to Bakta or Psos for further annotation directly from the web interface.</p>
         </div>
         <div class="feature">
           <h4>Continuously Expanding</h4>
           <p>Newly characterized sequences can be incorporated into the hash database, creating a growing knowledge base.</p>
         </div>
         <div class="feature">
-          <h4>Production Ready</h4>
-          <p>Built on the trusted Bakta framework, suitable for both individual research and large-scale comparative genomics.</p>
+          <h4>Built on Bakta</h4>
+          <p>Complements the trusted Bakta framework as a lightweight first pass before deeper, alignment-based annotation.</p>
         </div>
       </div>
     </section>
@@ -52,15 +86,16 @@ import { RouterLink } from 'vue-router'
     <section id="how-it-works" class="section section-alt">
       <h3 class="section-title">How It Works</h3>
       <p class="section-intro">
-        AI-DB implements a multi-tiered annotation strategy that combines instant hash-based
-        retrieval with powerful fallback analysis tools.
+        AI-DB is a single, fast lookup step — with the option to send unmatched sequences onward
+        for further annotation.
       </p>
       <div class="workflow">
         <div class="workflow-step">
           <div class="step-number">1</div>
           <div class="step-content">
             <h4>Upload FASTA</h4>
-            <p>Upload your FASTA file or paste sequence data directly into our web interface.</p>
+            <p>Upload your FASTA file or paste sequence data directly into our web interface. Note: AI-DB matches
+              <strong>protein</strong> sequences — DNA/RNA input can be uploaded, but won't produce any hash matches.</p>
           </div>
         </div>
         <div class="workflow-step">
@@ -80,8 +115,10 @@ import { RouterLink } from 'vue-router'
         <div class="workflow-step">
           <div class="step-number">4</div>
           <div class="step-content">
-            <h4>Get Results & Analyse</h4>
-            <p>Receive instant annotations for hash matches. Further analyze unmatched sequences using Psos or Bakta and ingest the results.</p>
+            <h4>Get Results</h4>
+            <p>Receive instant annotations for hash matches. For sequences without a match, you can optionally
+              forward them to Psos or Bakta for further annotation — this is a separate, additional step, not
+              something AI-DB does automatically.</p>
           </div>
         </div>
       </div>
@@ -173,11 +210,72 @@ import { RouterLink } from 'vue-router'
   margin: 0 auto 2rem;
 }
 
+.hero-subnote {
+  font-size: 0.95rem;
+  color: var(--color-text);
+  opacity: 0.7;
+  max-width: 650px;
+  margin: -1rem auto 2rem;
+  font-style: italic;
+}
+
 .cta-buttons {
   display: flex;
   gap: 1rem;
   justify-content: center;
   flex-wrap: wrap;
+}
+
+/* Scope Section */
+.scope-section {
+  background: var(--color-background-soft);
+  margin: 0 -2rem;
+  padding: 3rem 2rem;
+}
+
+.scope-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1.5rem;
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+.scope-card {
+  padding: 1.5rem 1.75rem;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  background: var(--color-background);
+}
+
+.scope-does {
+  border-left: 3px solid hsla(160, 100%, 37%, 1);
+}
+
+.scope-does-not {
+  border-left: 3px solid hsla(0, 70%, 55%, 1);
+}
+
+.scope-card h4 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin: 0 0 1rem 0;
+  color: var(--color-heading);
+}
+
+.scope-card ul {
+  margin: 0;
+  padding-left: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.scope-card li {
+  color: var(--color-text);
+  opacity: 0.85;
+  line-height: 1.5;
+  font-size: 0.95rem;
 }
 
 .btn {
