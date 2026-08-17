@@ -653,3 +653,229 @@ pub fn ingest_custom_annotations(
     );
     Ok((inserted, updated))
 }
+
+// ============================================================================
+// KPI / Analytics Storage
+//
+// Monthly-bucketed counters, incremented at the moment an event happens
+// (job completes, Bakta job starts, Psos results are saved). This is
+// deliberately NOT derived from the `jobs` table by aggregation, because
+// `jobs` rows are purged after JOB_RETENTION_DAYS (30 days) – aggregating
+// after the fact would silently lose all data older than ~1 month.
+// ============================================================================
+
+/// Initialize the kpi_monthly and kpi_monthly_owners tables.
+pub fn init_kpi_tables(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS kpi_monthly (
+            month               TEXT PRIMARY KEY,   -- 'YYYY-MM'
+            jobs_created        INTEGER NOT NULL DEFAULT 0,
+            jobs_failed         INTEGER NOT NULL DEFAULT 0,
+            sequences_processed INTEGER NOT NULL DEFAULT 0,
+            hash_matches_bakta  INTEGER NOT NULL DEFAULT 0,
+            hash_matches_aidb   INTEGER NOT NULL DEFAULT 0,
+            bakta_jobs_started  INTEGER NOT NULL DEFAULT 0,
+            psos_analyses       INTEGER NOT NULL DEFAULT 0,
+            updated_at          TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS kpi_monthly_owners (
+            month    TEXT NOT NULL,
+            owner_id TEXT NOT NULL,
+            PRIMARY KEY (month, owner_id)
+        );",
+    )?;
+    tracing::info!("KPI tables initialized");
+    Ok(())
+}
+
+/// Current month bucket key, e.g. "2026-08".
+fn current_month() -> String {
+    Utc::now().format("%Y-%m").to_string()
+}
+
+/// Ensures a row for the given month exists (idempotent no-op if it already does).
+fn ensure_month_row(conn: &Connection, month: &str) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "INSERT OR IGNORE INTO kpi_monthly (month, updated_at) VALUES (?1, ?2)",
+        params![month, Utc::now().to_rfc3339()],
+    )?;
+    Ok(())
+}
+
+/// Records a finalized job (Completed or Failed) in the current month's bucket.
+/// Called once per job, when it reaches its final state – not on every progress tick.
+pub fn record_job_completion(
+    conn: &Connection,
+    job: &JobResponse,
+    bakta_matches: usize,
+    aidb_matches: usize,
+) -> Result<(), rusqlite::Error> {
+    let month = current_month();
+    ensure_month_row(conn, &month)?;
+
+    let failed_increment = if job.status == JobStatus::Failed { 1 } else { 0 };
+
+    conn.execute(
+        "UPDATE kpi_monthly SET
+             jobs_created        = jobs_created + 1,
+             jobs_failed         = jobs_failed + ?2,
+             sequences_processed = sequences_processed + ?3,
+             hash_matches_bakta  = hash_matches_bakta + ?4,
+             hash_matches_aidb   = hash_matches_aidb + ?5,
+             updated_at          = ?6
+         WHERE month = ?1",
+        params![
+            month,
+            failed_increment,
+            job.processed_count as i64,
+            bakta_matches as i64,
+            aidb_matches as i64,
+            Utc::now().to_rfc3339(),
+        ],
+    )?;
+
+    if let Some(ref owner_id) = job.owner_id {
+        conn.execute(
+            "INSERT OR IGNORE INTO kpi_monthly_owners (month, owner_id) VALUES (?1, ?2)",
+            params![month, owner_id],
+        )?;
+    }
+
+    Ok(())
+}
+
+/// Records a job *retry* completion (via reannotate_sequences). Unlike
+/// `record_job_completion`, this does NOT increment jobs_created/jobs_failed –
+/// the job was already counted once when it first reached a final state.
+/// Only the resulting sequence/match counts are (re-)recorded.
+pub fn record_job_retry_completion(
+    conn: &Connection,
+    job: &JobResponse,
+    bakta_matches: usize,
+    aidb_matches: usize,
+) -> Result<(), rusqlite::Error> {
+    let month = current_month();
+    ensure_month_row(conn, &month)?;
+
+    conn.execute(
+        "UPDATE kpi_monthly SET
+             sequences_processed = sequences_processed + ?2,
+             hash_matches_bakta  = hash_matches_bakta + ?3,
+             hash_matches_aidb   = hash_matches_aidb + ?4,
+             updated_at          = ?5
+         WHERE month = ?1",
+        params![
+            month,
+            job.processed_count as i64,
+            bakta_matches as i64,
+            aidb_matches as i64,
+            Utc::now().to_rfc3339(),
+        ],
+    )?;
+
+    if let Some(ref owner_id) = job.owner_id {
+        conn.execute(
+            "INSERT OR IGNORE INTO kpi_monthly_owners (month, owner_id) VALUES (?1, ?2)",
+            params![month, owner_id],
+        )?;
+    }
+
+    Ok(())
+}
+
+/// Records that a new Bakta job was started (call only on first save of a
+/// given AI-DB job's Bakta state, not on every progress-tick upsert).
+pub fn record_bakta_job_started(conn: &Connection) -> Result<(), rusqlite::Error> {
+    let month = current_month();
+    ensure_month_row(conn, &month)?;
+    conn.execute(
+        "UPDATE kpi_monthly SET bakta_jobs_started = bakta_jobs_started + 1, updated_at = ?2
+         WHERE month = ?1",
+        params![month, Utc::now().to_rfc3339()],
+    )?;
+    Ok(())
+}
+
+/// Records `count` Psos-analyzed sequences in the current month's bucket.
+pub fn record_psos_analyses(conn: &Connection, count: usize) -> Result<(), rusqlite::Error> {
+    if count == 0 {
+        return Ok(());
+    }
+    let month = current_month();
+    ensure_month_row(conn, &month)?;
+    conn.execute(
+        "UPDATE kpi_monthly SET psos_analyses = psos_analyses + ?2, updated_at = ?3
+         WHERE month = ?1",
+        params![month, count as i64, Utc::now().to_rfc3339()],
+    )?;
+    Ok(())
+}
+
+/// One row of the monthly KPI overview, combining `jobs.db` counters with the
+/// distinct-owner count for that month.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct KpiMonthRow {
+    pub month: String,
+    pub jobs_created: i64,
+    pub jobs_failed: i64,
+    pub sequences_processed: i64,
+    pub hash_matches_bakta: i64,
+    pub hash_matches_aidb: i64,
+    pub bakta_jobs_started: i64,
+    pub psos_analyses: i64,
+    pub active_owners: i64,
+}
+
+/// Loads all monthly KPI rows (from `jobs.db`), newest month first.
+pub fn get_kpi_overview(conn: &Connection) -> Result<Vec<KpiMonthRow>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT m.month, m.jobs_created, m.jobs_failed, m.sequences_processed,
+                m.hash_matches_bakta, m.hash_matches_aidb, m.bakta_jobs_started, m.psos_analyses,
+                (SELECT COUNT(*) FROM kpi_monthly_owners o WHERE o.month = m.month) AS active_owners
+         FROM kpi_monthly m
+         ORDER BY m.month DESC",
+    )?;
+
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(KpiMonthRow {
+                month: row.get(0)?,
+                jobs_created: row.get(1)?,
+                jobs_failed: row.get(2)?,
+                sequences_processed: row.get(3)?,
+                hash_matches_bakta: row.get(4)?,
+                hash_matches_aidb: row.get(5)?,
+                bakta_jobs_started: row.get(6)?,
+                psos_analyses: row.get(7)?,
+                active_owners: row.get(8)?,
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    Ok(rows)
+}
+
+/// Monthly growth of the AI-DB annotations DB (new sequences saved per month).
+/// Reads `ups.created_at`, which is only populated by the migration added
+/// alongside `annotation_release` – rows ingested before that migration have
+/// `created_at IS NULL` and are excluded here (they still count towards the
+/// all-time total, just not attributable to a specific month).
+pub fn get_aidb_growth_by_month(
+    conn: &Connection,
+) -> Result<Vec<(String, i64)>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT strftime('%Y-%m', created_at) AS month, COUNT(*) AS new_sequences
+         FROM ups
+         WHERE created_at IS NOT NULL
+         GROUP BY month
+         ORDER BY month DESC",
+    )?;
+
+    let rows = stmt
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    Ok(rows)
+}

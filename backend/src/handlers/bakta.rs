@@ -45,6 +45,10 @@ pub async fn save_bakta_job(
         ));
     }
 
+    // Only count towards the "Bakta jobs started" KPI on the first save for this
+    // AI-DB job – subsequent calls are progress-tick upserts of the same job.
+    let is_new_bakta_job = state.load_bakta_job(&job_id).ok().flatten().is_none();
+
     state.upsert_bakta_job(&job_id, &request).map_err(|e| {
         tracing::error!("Failed to save bakta state for job {job_id}: {e}");
         (
@@ -52,6 +56,10 @@ pub async fn save_bakta_job(
             Json(ErrorResponse::new(e)),
         )
     })?;
+
+    if is_new_bakta_job {
+        state.record_bakta_job_started_kpi();
+    }
 
     tracing::debug!(
         "Bakta state saved | job={job_id} | bakta_id={} | status={} | {}%",

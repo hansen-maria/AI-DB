@@ -560,6 +560,7 @@ pub fn process_job_from_file(state: &AppState, job_id: &str, file_path: &Path, i
     // Persist final results to database
     if let Some(job) = final_job {
         state.save_job(&job);
+        state.record_job_kpi(&job, bakta_db_matches, aidb_db_matches);
     }
 
     tracing::info!(
@@ -727,6 +728,7 @@ pub fn reannotate_sequences(state: &AppState, job_id: &str, sequences: Vec<Seque
 
     if let Some(job) = final_job {
         state.save_job(&job);
+        state.record_job_retry_kpi(&job, bakta_matches, aidb_matches);
     }
 
     tracing::info!(

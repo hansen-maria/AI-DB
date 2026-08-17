@@ -12,6 +12,10 @@ use crate::storage;
 /// Default path for jobs database
 const DEFAULT_JOBS_DB: &str = "/data/jobs.db";
 
+/// Default path for the KPI database (separate, persistent volume –
+/// distinct from jobs.db, which is only retained for 30 days)
+const DEFAULT_KPI_DB: &str = "/kpi-db/kpi.db";
+
 /// Application state shared across all handlers
 #[derive(Clone)]
 pub struct AppState {
@@ -19,8 +23,15 @@ pub struct AppState {
     jobs: Arc<RwLock<HashMap<String, JobResponse>>>,
     /// Path to Bakta SQLite database (read-only)
     bakta_db_path: Option<PathBuf>,
-    /// Path to jobs database (open connections on-demand)
+    /// Path to jobs database (open connections on-demand).
+    /// Jobs (and their Bakta/Psos state) are purged after 30 days – this DB
+    /// is intentionally NOT treated as long-term storage.
     jobs_db_path: PathBuf,
+    /// Path to the KPI database (open connections on-demand). Deliberately a
+    /// SEPARATE file/volume from jobs.db: KPI counters are permanent and must
+    /// survive independently of the 30-day job retention policy and of
+    /// whatever happens to the jobs volume.
+    kpi_db_path: PathBuf,
     /// Path to AI-DB annotations DB (read-write, same schema as Bakta DB)
     custom_annotations_db_path: PathBuf,
 }
@@ -60,6 +71,13 @@ impl AppState {
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from(DEFAULT_JOBS_DB));
 
+        // Initialize KPI database path – SEPARATE from jobs_db_path on purpose.
+        // Points at its own persistent volume, independent of the 30-day
+        // job-retention policy and of jobs.db's lifecycle.
+        let kpi_db_path = env::var("AI_DB_KPI_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from(DEFAULT_KPI_DB));
+
         // Initialize AI-DB annotations DB path
         // Defaults to same directory as jobs DB so it ends up in the same volume
         let custom_annotations_db_path = env::var("AI_DB_CUSTOM_ANNOTATIONS_PATH")
@@ -71,8 +89,13 @@ impl AppState {
                     .join("custom_annotations.db")
             });
 
-        // Ensure parent directory exists
+        // Ensure parent directories exist
         if let Some(parent) = jobs_db_path.parent() {
+            if !parent.exists() {
+                std::fs::create_dir_all(parent).ok();
+            }
+        }
+        if let Some(parent) = kpi_db_path.parent() {
             if !parent.exists() {
                 std::fs::create_dir_all(parent).ok();
             }
@@ -90,6 +113,27 @@ impl AppState {
         // Initialize bakta_jobs table
         if let Err(e) = storage::init_bakta_table(&jobs_db) {
             tracing::warn!("Failed to initialize bakta_jobs table: {}", e);
+        }
+
+        // Initialize KPI tables in their OWN database file (not jobs_db!) so
+        // they're unaffected by job cleanup and live on their own volume.
+        match Connection::open(&kpi_db_path) {
+            Ok(kpi_conn) => {
+                if let Err(e) = storage::init_kpi_tables(&kpi_conn) {
+                    tracing::warn!("Failed to initialize KPI tables: {}", e);
+                } else {
+                    tracing::info!("KPI database ready at {:?}", kpi_db_path);
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to open KPI database at {:?}: {}. \
+                     KPI recording will be skipped until this is fixed. \
+                     Run ./setup-kpi-volume.sh on the server to provision this volume.",
+                    kpi_db_path,
+                    e
+                );
+            }
         }
 
         // AI-DB annotations DB is created by setup-custom-annotations-db.sh on the host.
@@ -136,6 +180,7 @@ impl AppState {
             jobs: Arc::new(RwLock::new(jobs_map)),
             bakta_db_path,
             jobs_db_path,
+            kpi_db_path,
             custom_annotations_db_path,
         }
     }
@@ -213,6 +258,18 @@ impl AppState {
         Connection::open(&self.jobs_db_path)
             .map_err(|e| {
                 tracing::error!("Failed to open jobs database: {}", e);
+                e
+            })
+            .ok()
+    }
+
+    /// Opens a new connection to the KPI database. This is a SEPARATE file
+    /// from jobs.db, living on its own persistent volume – KPI data must
+    /// survive independently of job cleanup and of the jobs volume's lifecycle.
+    pub fn open_kpi_db(&self) -> Option<Connection> {
+        Connection::open(&self.kpi_db_path)
+            .map_err(|e| {
+                tracing::error!("Failed to open KPI database: {}", e);
                 e
             })
             .ok()
@@ -398,6 +455,88 @@ impl AppState {
         storage::delete_bakta_job(&conn, job_id)
             .map(|_| ())
             .map_err(|e| format!("Failed to delete bakta job state: {e}"))
+    }
+
+    // ========================================================================
+    // KPI / Analytics Methods
+    //
+    // All of these use open_kpi_db() (a separate DB file/volume from
+    // open_jobs_db()) so KPI data is fully decoupled from the 30-day job
+    // retention policy and from jobs.db's lifecycle.
+    // ========================================================================
+
+    /// Records a finalized job (Completed or Failed) for monthly KPI tracking.
+    /// Call exactly once per job, when it reaches its final state.
+    pub fn record_job_kpi(
+        &self,
+        job: &crate::models::JobResponse,
+        bakta_matches: usize,
+        aidb_matches: usize,
+    ) {
+        let Some(conn) = self.open_kpi_db() else {
+            tracing::warn!("Failed to open KPI database for recording");
+            return;
+        };
+        if let Err(e) = storage::record_job_completion(&conn, job, bakta_matches, aidb_matches) {
+            tracing::warn!("Failed to record job KPI for {}: {}", job.job_id, e);
+        }
+    }
+
+    /// Records a job *retry* completion. Doesn't double-count jobs_created/jobs_failed.
+    pub fn record_job_retry_kpi(
+        &self,
+        job: &crate::models::JobResponse,
+        bakta_matches: usize,
+        aidb_matches: usize,
+    ) {
+        let Some(conn) = self.open_kpi_db() else {
+            tracing::warn!("Failed to open KPI database for recording");
+            return;
+        };
+        if let Err(e) = storage::record_job_retry_completion(&conn, job, bakta_matches, aidb_matches) {
+            tracing::warn!("Failed to record job retry KPI for {}: {}", job.job_id, e);
+        }
+    }
+
+    /// Records that a new Bakta job was started (first save only, not every progress tick).
+    pub fn record_bakta_job_started_kpi(&self) {
+        let Some(conn) = self.open_kpi_db() else {
+            tracing::warn!("Failed to open KPI database for recording");
+            return;
+        };
+        if let Err(e) = storage::record_bakta_job_started(&conn) {
+            tracing::warn!("Failed to record bakta_jobs_started KPI: {}", e);
+        }
+    }
+
+    /// Records `count` Psos-analyzed sequences for monthly KPI tracking.
+    pub fn record_psos_analyses_kpi(&self, count: usize) {
+        let Some(conn) = self.open_kpi_db() else {
+            tracing::warn!("Failed to open KPI database for recording");
+            return;
+        };
+        if let Err(e) = storage::record_psos_analyses(&conn, count) {
+            tracing::warn!("Failed to record psos_analyses KPI: {}", e);
+        }
+    }
+
+    /// Loads the monthly KPI overview from the KPI database (jobs, matches,
+    /// Bakta/Psos counts, active owners). Combine with
+    /// `get_aidb_growth_by_month()` at the call site for the full picture,
+    /// since that data lives in yet another separate database.
+    pub fn get_kpi_overview(&self) -> Result<Vec<crate::storage::KpiMonthRow>, String> {
+        let conn = self
+            .open_kpi_db()
+            .ok_or_else(|| "Failed to open KPI database".to_string())?;
+        storage::get_kpi_overview(&conn).map_err(|e| format!("KPI query failed: {e}"))
+    }
+
+    /// Loads AI-DB annotations DB growth by month as a lookup map (month -> new sequences).
+    pub fn get_aidb_growth_by_month(&self) -> HashMap<String, i64> {
+        self.open_custom_annotations_db()
+            .and_then(|conn| storage::get_aidb_growth_by_month(&conn).ok())
+            .map(|rows| rows.into_iter().collect())
+            .unwrap_or_default()
     }
 }
 

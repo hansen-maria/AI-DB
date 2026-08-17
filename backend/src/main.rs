@@ -33,9 +33,9 @@ use utoipa_swagger_ui::SwaggerUi;
 
 use crate::handlers::{
     bulk_delete_jobs, create_job, db_info, delete_bakta_job, delete_job, delete_psos_results,
-    download_job, export_job_stats, get_bakta_job, get_job, get_job_stats, get_psos_results,
-    get_sequence, health_check, ingest_bakta_results, list_jobs, rename_job, retry_job,
-    save_bakta_job, save_psos_results,
+    download_job, export_job_stats, get_bakta_job, get_job, get_job_stats, get_kpi_overview,
+    get_psos_results, get_sequence, health_check, ingest_bakta_results, list_jobs, rename_job,
+    retry_job, save_bakta_job, save_psos_results,
 };
 use crate::models::{
     BaktaJobStateResponse, BulkDeleteRequest, BulkDeleteResponse, CustomAnnotationEntry,
@@ -68,6 +68,7 @@ use crate::state::AppState;
         (name = "Jobs", description = "Annotation job management - create and query jobs"),
         (name = "psos", description = "Psos analysis results storage"),
         (name = "bakta", description = "Bakta job state persistence"),
+        (name = "admin", description = "Admin-only endpoints (shared-secret protected)"),
         (name = "Health", description = "Health check and database info")
     ),
     paths(
@@ -89,6 +90,7 @@ use crate::state::AppState;
         handlers::bakta::get_bakta_job,
         handlers::bakta::delete_bakta_job,
         handlers::bakta::ingest_bakta_results,
+        handlers::kpi::get_kpi_overview,
         handlers::health::health_check,
         handlers::health::db_info
     ),
@@ -117,6 +119,8 @@ use crate::state::AppState;
         CustomAnnotationEntry,
         IngestCustomAnnotationsRequest,
         IngestCustomAnnotationsResponse,
+        crate::handlers::kpi::KpiMonthEntry,
+        crate::handlers::kpi::KpiOverviewResponse,
     ))
 )]
 struct ApiDoc;
@@ -182,6 +186,8 @@ async fn main() {
         // Bakta → custom annotations ingest
         .route("/api/job/{job_id}/bakta/ingest", post(ingest_bakta_results))
         .route("/api/jobs/", get(list_jobs).delete(bulk_delete_jobs))
+        // Admin KPI overview (shared-secret protected, see handlers::kpi)
+        .route("/api/admin/kpis", get(get_kpi_overview))
         // Swagger UI
         .merge(SwaggerUi::new("/api/docs/").url("/api/openapi.json", ApiDoc::openapi()))
         // Middleware

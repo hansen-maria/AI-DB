@@ -30,12 +30,15 @@ services:
       - BAKTA_DB=/bakta-db
       - AI_DB_TEMP_DIR=/tmp-data
       - AI_DB_JOBS_PATH=/data/jobs.db
+      - AI_DB_KPI_PATH=/kpi-db/kpi.db
       - AI_DB_CUSTOM_ANNOTATIONS_PATH=/custom-db/custom_annotations.db
+      - ADMIN_KPI_SECRET=${ADMIN_KPI_SECRET:-}
     volumes:
       - /mnt/bakta-db/db:/bakta-db:ro
       - /mnt/ai-db-custom:/custom-db
       - /mnt/ai-db-tmp:/tmp-data
       - jobs-data:/data
+      - /mnt/ai-db-kpi:/kpi-db
     restart: unless-stopped
     networks:
       - app-network

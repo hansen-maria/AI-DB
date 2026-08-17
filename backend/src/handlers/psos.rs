@@ -55,6 +55,8 @@ pub async fn save_psos_results(
             )
         })?;
 
+    state.record_psos_analyses_kpi(request.results.len());
+
     tracing::info!(
         "Saved {} psos results for job {}, total: {}",
         request.results.len(),
