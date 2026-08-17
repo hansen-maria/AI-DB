@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { filterOptions, cogCategories, ecClasses, getUniRef100Url, getUniParcUrl, getNcbiUrl, hasAnnotationLinks } from '../../constants/sequences.ts'
+import { ref, watch } from 'vue'
+import { filterOptions, cogCategories, ecClasses, getUniRef100Url, getUniParcUrl, getNcbiUrl, hasAnnotationLinks, checkUniRefExists, checkNcbiProteinExists } from '../../constants/sequences.ts'
 import type { SequenceFilter, FilteredDownloadFormat } from '../../api/jobs.ts'
 import PsosPanel from './PsosPanel.vue'
 import BaktaPanel from './BaktaPanel.vue'
@@ -37,7 +38,7 @@ function sourceBadgeTitle(seq: any): string {
 }
 
 // ── Sequence data props ────────────────────────────────────────────────────
-defineProps<{
+const props = defineProps<{
   // Data
   allSequences:         any[]
   filteredSequences:    any[]
@@ -125,6 +126,36 @@ const emit = defineEmits<{
   'bakta-ingest':           []
   'bakta-reset':            []
 }>()
+
+// ── Dead-link protection (UniRef / NCBI) ────────────────────────────────────
+// UniRef clusters and NCBI protein records occasionally get retired/merged
+// after Bakta's DB snapshot was built. We batch-check the IDs on the current
+// page against the live UniProt / NCBI services and hide links that no longer
+// resolve, so the user never clicks through to a 404.
+//
+// Fail-open by design: IDs not yet checked (or checks that errored, e.g. due
+// to a CORS block) are treated as valid and shown as normal links. Only IDs
+// explicitly confirmed missing are hidden – see checkUniRefExists /
+// checkNcbiProteinExists in constants/sequences.ts for the fail-open behavior.
+const invalidUniRefIds = ref<Set<string>>(new Set())
+const invalidNcbiIds   = ref<Set<string>>(new Set())
+
+async function validateVisibleLinks(sequences: any[]) {
+  const uniRefIds = sequences.map(s => s.uniref100_id).filter(Boolean) as string[]
+  const ncbiIds    = sequences.map(s => s.ncbi_nrp_id).filter(Boolean) as string[]
+
+  const [validUniRef, validNcbi] = await Promise.all([
+    checkUniRefExists(uniRefIds),
+    checkNcbiProteinExists(ncbiIds),
+  ])
+
+  invalidUniRefIds.value = new Set(uniRefIds.filter(id => !validUniRef.has(id)))
+  invalidNcbiIds.value   = new Set(ncbiIds.filter(id => !validNcbi.has(id)))
+}
+
+// Re-validate whenever the visible page of sequences changes (pagination, filtering, etc.)
+watch(() => props.paginatedSequences, (seqs) => { validateVisibleLinks(seqs) }, { immediate: true })
+
 </script>
 
 <template>
@@ -274,15 +305,25 @@ const emit = defineEmits<{
             <td class="annotation-cell">
               <template v-if="hasAnnotationLinks(seq)">
                 <div class="annotation-links">
-                  <a v-if="seq.uniref100_id" :href="getUniRef100Url(seq.uniref100_id)" target="_blank" class="db-link uniref">UniRef</a>
-                  <a v-if="seq.uniparc_id"   :href="getUniParcUrl(seq.uniparc_id)"     target="_blank" class="db-link uniparc">UniParc</a>
-                  <a v-if="seq.ncbi_nrp_id"  :href="getNcbiUrl(seq.ncbi_nrp_id)"       target="_blank" class="db-link ncbi">NCBI</a>
+                  <a v-if="seq.uniref100_id && !invalidUniRefIds.has(seq.uniref100_id)"
+                     :href="getUniRef100Url(seq.uniref100_id)" target="_blank" class="db-link uniref">UniRef</a>
+                  <span v-else-if="seq.uniref100_id" class="db-link uniref-gone has-tooltip"
+                        data-tooltip="This UniRef entry has since been removed/merged upstream"
+                        aria-label="This UniRef entry has since been removed/merged upstream">UniRef ⚠</span>
+                  <a v-if="seq.uniparc_id" :href="getUniParcUrl(seq.uniparc_id, seq.uniref100_id)" target="_blank" class="db-link uniparc">UniParc</a>
+                  <a v-if="seq.ncbi_nrp_id && !invalidNcbiIds.has(seq.ncbi_nrp_id)"
+                     :href="getNcbiUrl(seq.ncbi_nrp_id)" target="_blank" class="db-link ncbi">NCBI</a>
+                  <span v-else-if="seq.ncbi_nrp_id" class="db-link ncbi-gone has-tooltip"
+                        data-tooltip="This NCBI record has since been removed/merged upstream"
+                        aria-label="This NCBI record has since been removed/merged upstream">NCBI ⚠</span>
                   <span v-if="seq.annotation_source === 'bakta_db'"
-                        class="db-link bakta-source" :title="sourceBadgeTitle(seq)">
+                        class="db-link bakta-source has-tooltip"
+                        :data-tooltip="sourceBadgeTitle(seq)" :aria-label="sourceBadgeTitle(seq)">
                       Bakta<template v-if="seq.annotation_release"> · {{ formatAnnotationRelease(seq) }}</template>
                     </span>
                   <span v-else-if="seq.annotation_source === 'aidb_db'"
-                        class="db-link aidb-source" :title="sourceBadgeTitle(seq)">
+                        class="db-link aidb-source has-tooltip"
+                        :data-tooltip="sourceBadgeTitle(seq)" :aria-label="sourceBadgeTitle(seq)">
                       AI-DB<template v-if="seq.annotation_release"> · {{ formatAnnotationRelease(seq) }}</template>
                     </span>
                 </div>
@@ -437,6 +478,58 @@ const emit = defineEmits<{
   .db-link.ncbi    { background: rgba(156,39,176,0.12); color: #6a1b9a; }
   .db-link.aidb-source { background: rgba(224,128,0,0.12); color: #a05a00; cursor: help; }
   .db-link.bakta-source { background: rgba(0,110,224,0.12); color: #0058b0; cursor: help; }
+  .db-link.uniref-gone, .db-link.ncbi-gone { background: rgba(150,150,150,0.12); color: #888; cursor: help; text-decoration: line-through; }
+
+  /* Self-contained tooltip (doesn't rely on the native browser [title] popup,
+     which can be delayed, suppressed by OS settings, or intercepted by other
+     tooltip libraries). Shown via ::after on hover/focus. */
+  .has-tooltip { position: relative; }
+  .has-tooltip::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: #1f1f1f;
+    color: #fff;
+    padding: 0.35rem 0.6rem;
+    border-radius: 4px;
+    font-size: 0.72rem;
+    font-weight: 400;
+    line-height: 1.3;
+    white-space: normal;
+    width: max-content;
+    max-width: 260px;
+    text-align: center;
+    z-index: 30;
+    pointer-events: none;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.12s ease;
+  }
+  .has-tooltip::before {
+    content: '';
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    border: 5px solid transparent;
+    border-top-color: #1f1f1f;
+    margin-bottom: -4px;
+    z-index: 30;
+    pointer-events: none;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.12s ease;
+  }
+  .has-tooltip:hover::after, .has-tooltip:hover::before,
+  .has-tooltip:focus-visible::after, .has-tooltip:focus-visible::before {
+    opacity: 1;
+    visibility: visible;
+  }
+  /* Table wrapper clips horizontal overflow for scrolling – tooltips must not be clipped */
+  .table-wrapper { overflow-x: auto; overflow-y: visible; }
+  .sequences-table { overflow: visible; }
   .empty-filter-results { text-align: center; padding: 3rem 1rem; color: var(--color-text); opacity: 0.6; }
   .empty-filter-results svg { margin: 0 auto 1rem; display: block; opacity: 0.4; }
   /* Pagination */
