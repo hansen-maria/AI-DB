@@ -13,6 +13,42 @@ use crate::models::{HashLookupResult, JobStatus, SequenceInfo};
 use crate::services::fasta::{compute_md5, FastaIterator, BATCH_SIZE, MAX_RESULTS};
 use crate::state::AppState;
 
+/// Reads the Bakta DB release/version label from `version.json`.
+///
+/// Bakta stores its release metadata NOT inside the SQLite DB, but as a separate
+/// `version.json` file living alongside `bakta.db` in the same database directory
+/// (format: `{"date": "2025-01-15", "major": 6, "minor": 0, ...}`). This file is
+/// part of every official Bakta DB release/update, so it is always current after
+/// a `bakta_db update` – no extra deployment or cron changes are needed.
+///
+/// Returns a human-readable label such as `"6.0 (2025-01-15)"`, or `None` if the
+/// file is missing or malformed.
+pub fn get_bakta_db_release(bakta_db_dir: &Path) -> Option<String> {
+    let version_path = bakta_db_dir.join("version.json");
+    let content = std::fs::read_to_string(&version_path)
+        .map_err(|e| {
+            tracing::debug!(
+                "Could not read Bakta DB version file {:?}: {}",
+                version_path,
+                e
+            );
+            e
+        })
+        .ok()?;
+
+    let value: serde_json::Value = serde_json::from_str(&content).ok()?;
+
+    let major = value.get("major").and_then(|v| v.as_i64());
+    let minor = value.get("minor").and_then(|v| v.as_i64());
+    let date = value.get("date").and_then(|v| v.as_str());
+
+    match (major, minor, date) {
+        (Some(maj), Some(min), Some(d)) => Some(format!("{maj}.{min} ({d})")),
+        (Some(maj), Some(min), None) => Some(format!("{maj}.{min}")),
+        _ => None,
+    }
+}
+
 /// Performs hash lookup in a single database connection (Bakta or AI-DB annotations DB).
 /// Reads the standard ups schema (no product column).
 fn lookup_in_db(conn: &Connection, hash_bytes: &[u8], seq_length: usize) -> HashLookupResult {
@@ -31,6 +67,7 @@ fn lookup_in_db(conn: &Connection, hash_bytes: &[u8], seq_length: usize) -> Hash
             cog_category: None,
             ec_ids: None,
             go_ids: None,
+            annotation_release: None,
         })
     }) {
         Ok(mut result) => {
@@ -69,8 +106,10 @@ fn lookup_in_db(conn: &Connection, hash_bytes: &[u8], seq_length: usize) -> Hash
 /// When uniref100_id is set the ips/psc chain is followed as usual.
 /// When uniref100_id is null the product column is used directly (hypothetical proteins).
 fn lookup_in_aidb(conn: &Connection, hash_bytes: &[u8], seq_length: usize) -> HashLookupResult {
-    let query =
-        "SELECT length, uniparc_id, ncbi_nrp_id, uniref100_id, product FROM ups WHERE hash = ?";
+    // `updated_at` reflects when this entry was last (re-)annotated via a Bakta ingest –
+    // used as the per-row "release" timestamp shown to the user for AI-DB matches.
+    let query = "SELECT length, uniparc_id, ncbi_nrp_id, uniref100_id, product, updated_at \
+                 FROM ups WHERE hash = ?";
 
     match conn.query_row(query, [hash_bytes], |row| {
         Ok(HashLookupResult {
@@ -84,6 +123,7 @@ fn lookup_in_aidb(conn: &Connection, hash_bytes: &[u8], seq_length: usize) -> Ha
             cog_category: None,
             ec_ids: None,
             go_ids: None,
+            annotation_release: row.get(5).ok(),
         })
     }) {
         Ok(mut result) => {
@@ -340,6 +380,16 @@ pub fn process_job_from_file(state: &AppState, job_id: &str, file_path: &Path, i
     let aidb_conn = state.open_custom_annotations_db();
     let _db_available = db_conn.is_some() || aidb_conn.is_some();
 
+    // Read the Bakta DB release/version once for the whole job (cheap, avoids
+    // re-reading version.json for every single sequence).
+    let bakta_release = state
+        .bakta_db_path()
+        .and_then(|p| p.parent())
+        .and_then(get_bakta_db_release);
+    if let Some(ref release) = bakta_release {
+        tracing::info!("Job {}: Bakta DB release = {}", job_id, release);
+    }
+
     match (db_conn.is_some(), aidb_conn.is_some()) {
         (true,  true)  => tracing::info!(
             "Job {}: Bakta DB ✓  AI-DB annotations DB ✓  (two-tier lookup active)", job_id
@@ -401,12 +451,13 @@ pub fn process_job_from_file(state: &AppState, job_id: &str, file_path: &Path, i
             seq_length,
         );
 
-        let (annotation, annotation_source) = match lookup_source {
+        let (annotation, annotation_source, annotation_release) = match lookup_source {
             "bakta_db" => {
                 bakta_db_matches += 1;
                 (
                     format_annotation(&lookup_result),
                     Some("bakta_db".to_string()),
+                    bakta_release.clone(),
                 )
             }
             "aidb_db" => {
@@ -414,9 +465,10 @@ pub fn process_job_from_file(state: &AppState, job_id: &str, file_path: &Path, i
                 (
                     format_annotation(&lookup_result),
                     Some("aidb_db".to_string()),
+                    lookup_result.annotation_release.clone(),
                 )
             }
-            _ => (None, None),
+            _ => (None, None, None),
         };
 
         // Only store results if we haven't hit the limit
@@ -428,6 +480,7 @@ pub fn process_job_from_file(state: &AppState, job_id: &str, file_path: &Path, i
                 sequence: Some(seq),
                 annotation,
                 annotation_source,
+                annotation_release,
                 uniparc_id: lookup_result.uniparc_id,
                 ncbi_nrp_id: lookup_result.ncbi_nrp_id,
                 uniref100_id: lookup_result.uniref100_id,
@@ -553,6 +606,10 @@ pub fn reannotate_sequences(state: &AppState, job_id: &str, sequences: Vec<Seque
 
     let db_conn = state.open_db_connection();
     let aidb_conn = state.open_custom_annotations_db();
+    let bakta_release = state
+        .bakta_db_path()
+        .and_then(|p| p.parent())
+        .and_then(get_bakta_db_release);
 
     let total = sequences.len();
     let mut updated = Vec::with_capacity(total);
@@ -591,6 +648,11 @@ pub fn reannotate_sequences(state: &AppState, job_id: &str, sequences: Vec<Seque
                 _ => {}
             }
             if result.found {
+                let annotation_release = match source {
+                    "bakta_db" => bakta_release.clone(),
+                    "aidb_db" => result.annotation_release.clone(),
+                    _ => None,
+                };
                 SequenceInfo {
                     annotation: format_annotation(&result),
                     annotation_source: if source.is_empty() {
@@ -598,6 +660,7 @@ pub fn reannotate_sequences(state: &AppState, job_id: &str, sequences: Vec<Seque
                     } else {
                         Some(source.to_string())
                     },
+                    annotation_release,
                     uniparc_id: result.uniparc_id,
                     ncbi_nrp_id: result.ncbi_nrp_id,
                     uniref100_id: result.uniref100_id,
@@ -612,6 +675,7 @@ pub fn reannotate_sequences(state: &AppState, job_id: &str, sequences: Vec<Seque
                 SequenceInfo {
                     annotation: None,
                     annotation_source: None,
+                    annotation_release: None,
                     uniparc_id: None,
                     ncbi_nrp_id: None,
                     uniref100_id: None,

@@ -545,18 +545,29 @@ pub fn ingest_custom_annotation(
 
     // ups – upsert with product column (extended AI-DB annotations DB schema).
     // product is stored directly here for entries without a UniRef ID (hypotheticals).
-    // INSERT OR REPLACE deletes+inserts, so we check existence beforehand.
-    let existing: Option<i64> = conn
+    // INSERT OR REPLACE deletes+inserts, so we check existence (and the original
+    // created_at, which must survive re-ingests) beforehand.
+    let existing: Option<(i64, Option<String>)> = conn
         .query_row(
-            "SELECT rowid FROM ups WHERE hash = ?1",
+            "SELECT rowid, created_at FROM ups WHERE hash = ?1",
             params![hash_bytes],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()?;
 
+    let now = Utc::now().to_rfc3339();
+    // created_at is set once and preserved across re-ingests; updated_at always
+    // reflects the most recent (re-)annotation and is what gets shown to the user
+    // as the "release" timestamp for AI-DB matches.
+    let created_at = existing
+        .as_ref()
+        .and_then(|(_, c)| c.clone())
+        .unwrap_or_else(|| now.clone());
+
     conn.execute(
-        "INSERT OR REPLACE INTO ups (hash, length, uniparc_id, ncbi_nrp_id, uniref100_id, product)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT OR REPLACE INTO ups
+             (hash, length, uniparc_id, ncbi_nrp_id, uniref100_id, product, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
             hash_bytes,
             entry.length as i64,
@@ -564,6 +575,8 @@ pub fn ingest_custom_annotation(
             entry.ncbi_nrp_id,
             entry.uniref100_id,
             entry.product,
+            created_at,
+            now,
         ],
     )?;
 

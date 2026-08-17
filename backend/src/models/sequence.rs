@@ -26,6 +26,11 @@ pub struct SequenceInfo {
     /// Source of annotation (used for filtering, not displayed)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub annotation_source: Option<String>,
+    /// Release/version of the source database.
+    /// - `bakta_db` matches: version label of the Bakta DB (e.g. "6.0 (2025-01-15)")
+    /// - `aidb_db` matches: ISO-8601 timestamp of when the entry was (re-)annotated
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub annotation_release: Option<String>,
     /// UniParc ID (if found)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uniparc_id: Option<String>,
@@ -70,6 +75,9 @@ pub struct HashLookupResult {
     pub ec_ids: Option<String>,
     /// GO terms (comma-separated)
     pub go_ids: Option<String>,
+    /// Release/version of the source database, or ingestion timestamp for AI-DB matches.
+    /// See `SequenceInfo::annotation_release` for details.
+    pub annotation_release: Option<String>,
 }
 
 impl Default for HashLookupResult {
@@ -85,6 +93,7 @@ impl Default for HashLookupResult {
             cog_category: None,
             ec_ids: None,
             go_ids: None,
+            annotation_release: None,
         }
     }
 }

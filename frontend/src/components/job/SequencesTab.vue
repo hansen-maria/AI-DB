@@ -6,6 +6,36 @@ import BaktaPanel from './BaktaPanel.vue'
 import type { PsosAnnotation, PsosProfile } from '../../api/psos.ts'
 import type { BaktaAnnotationSummary, IngestResponse, SequenceType } from '../../api/bakta.ts'
 
+// ── Match-source / release display helpers ─────────────────────────────────
+
+/**
+ * Formats `annotation_release` for display.
+ * - bakta_db: already a human-readable version label (e.g. "6.0 (2025-01-15)") – shown as-is
+ * - aidb_db: an ISO-8601 timestamp – formatted as a locale date
+ */
+function formatAnnotationRelease(seq: any): string {
+  if (!seq.annotation_release) return ''
+  if (seq.annotation_source === 'aidb_db') {
+    const d = new Date(seq.annotation_release)
+    return Number.isNaN(d.getTime()) ? seq.annotation_release : d.toLocaleDateString()
+  }
+  return seq.annotation_release
+}
+
+function sourceBadgeTitle(seq: any): string {
+  if (seq.annotation_source === 'bakta_db') {
+    return seq.annotation_release
+        ? `Bakta DB · Release ${seq.annotation_release}`
+        : 'Bakta DB'
+  }
+  if (seq.annotation_source === 'aidb_db') {
+    return seq.annotation_release
+        ? `AI-DB annotations DB · annotated ${formatAnnotationRelease(seq)}`
+        : 'AI-DB annotations DB'
+  }
+  return ''
+}
+
 // ── Sequence data props ────────────────────────────────────────────────────
 defineProps<{
   // Data
@@ -224,36 +254,42 @@ const emit = defineEmits<{
       <div class="table-wrapper">
         <table>
           <thead>
-            <tr>
-              <th>ID</th><th>Length</th><th>Gene</th><th>Function / Product</th><th>Links</th>
-            </tr>
+          <tr>
+            <th>ID</th><th>Length</th><th>Gene</th><th>Function / Product</th><th>Links</th>
+          </tr>
           </thead>
           <tbody>
-            <tr v-for="seq in paginatedSequences" :key="seq.id" :class="{ 'has-match': hasAnnotationLinks(seq) }">
-              <td class="seq-id">{{ seq.id }}</td>
-              <td class="seq-length">{{ seq.length.toLocaleString() }}</td>
-              <td class="seq-gene">
-                <span v-if="seq.gene" class="gene-name">{{ seq.gene }}</span>
-                <span v-else class="no-data">-</span>
-              </td>
-              <td class="seq-product">
-                <span v-if="seq.product === 'hypothetical protein'" class="hypothetical-badge">hypothetical</span>
-                <span v-else-if="seq.product" class="product-desc">{{ seq.product }}</span>
-                <span v-else class="no-data">-</span>
-              </td>
-              <td class="annotation-cell">
-                <template v-if="hasAnnotationLinks(seq)">
-                  <div class="annotation-links">
-                    <a v-if="seq.uniref100_id" :href="getUniRef100Url(seq.uniref100_id)" target="_blank" class="db-link uniref">UniRef</a>
-                    <a v-if="seq.uniparc_id"   :href="getUniParcUrl(seq.uniparc_id)"     target="_blank" class="db-link uniparc">UniParc</a>
-                    <a v-if="seq.ncbi_nrp_id"  :href="getNcbiUrl(seq.ncbi_nrp_id)"       target="_blank" class="db-link ncbi">NCBI</a>
-                    <span v-if="seq.annotation_source === 'aidb_db' && seq.product === 'hypothetical protein'"
-                          class="db-link aidb-source" title="Identified via AI-DB annotations DB">AI-DB</span>
-                  </div>
-                </template>
-                <span v-else class="no-data">-</span>
-              </td>
-            </tr>
+          <tr v-for="seq in paginatedSequences" :key="seq.id" :class="{ 'has-match': hasAnnotationLinks(seq) }">
+            <td class="seq-id">{{ seq.id }}</td>
+            <td class="seq-length">{{ seq.length.toLocaleString() }}</td>
+            <td class="seq-gene">
+              <span v-if="seq.gene" class="gene-name">{{ seq.gene }}</span>
+              <span v-else class="no-data">-</span>
+            </td>
+            <td class="seq-product">
+              <span v-if="seq.product === 'hypothetical protein'" class="hypothetical-badge">hypothetical</span>
+              <span v-else-if="seq.product" class="product-desc">{{ seq.product }}</span>
+              <span v-else class="no-data">-</span>
+            </td>
+            <td class="annotation-cell">
+              <template v-if="hasAnnotationLinks(seq)">
+                <div class="annotation-links">
+                  <a v-if="seq.uniref100_id" :href="getUniRef100Url(seq.uniref100_id)" target="_blank" class="db-link uniref">UniRef</a>
+                  <a v-if="seq.uniparc_id"   :href="getUniParcUrl(seq.uniparc_id)"     target="_blank" class="db-link uniparc">UniParc</a>
+                  <a v-if="seq.ncbi_nrp_id"  :href="getNcbiUrl(seq.ncbi_nrp_id)"       target="_blank" class="db-link ncbi">NCBI</a>
+                  <span v-if="seq.annotation_source === 'bakta_db'"
+                        class="db-link bakta-source" :title="sourceBadgeTitle(seq)">
+                      Bakta<template v-if="seq.annotation_release"> · {{ formatAnnotationRelease(seq) }}</template>
+                    </span>
+                  <span v-else-if="seq.annotation_source === 'aidb_db'"
+                        class="db-link aidb-source" :title="sourceBadgeTitle(seq)">
+                      AI-DB<template v-if="seq.annotation_release"> · {{ formatAnnotationRelease(seq) }}</template>
+                    </span>
+                </div>
+              </template>
+              <span v-else class="no-data">-</span>
+            </td>
+          </tr>
           </tbody>
         </table>
       </div>
@@ -400,6 +436,7 @@ const emit = defineEmits<{
   .db-link.uniparc { background: rgba(33,150,243,0.12); color: #1565c0; }
   .db-link.ncbi    { background: rgba(156,39,176,0.12); color: #6a1b9a; }
   .db-link.aidb-source { background: rgba(224,128,0,0.12); color: #a05a00; cursor: help; }
+  .db-link.bakta-source { background: rgba(0,110,224,0.12); color: #0058b0; cursor: help; }
   .empty-filter-results { text-align: center; padding: 3rem 1rem; color: var(--color-text); opacity: 0.6; }
   .empty-filter-results svg { margin: 0 auto 1rem; display: block; opacity: 0.4; }
   /* Pagination */

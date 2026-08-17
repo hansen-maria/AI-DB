@@ -39,6 +39,8 @@ export interface SequenceInfo {
     sequence?: string | null;  // Amino acid sequence (for Psos analysis)
     annotation?: string | null;  // Legacy field
     annotation_source?: string | null;  // Used for filtering
+    /** Release/version of the source DB (bakta_db) or ingestion timestamp (aidb_db) */
+    annotation_release?: string | null;
     uniparc_id?: string | null;
     ncbi_nrp_id?: string | null;
     uniref100_id?: string | null;
@@ -174,7 +176,16 @@ export interface DbInfoResponse {
     path: string | null;
     ups_entries?: number | null;
     version?: string | null;
+    /** Same value as `version` – human-readable Bakta DB release label */
+    release?: string | null;
     error?: string;
+    /** AI-DB annotations DB freshness info */
+    aidb_db?: {
+        available: boolean;
+        ups_entries?: number | null;
+        /** ISO-8601 timestamp of the most recently (re-)annotated entry */
+        last_updated?: string | null;
+    };
 }
 
 export interface ApiError {
