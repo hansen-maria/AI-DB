@@ -27,6 +27,12 @@ export function useJobPolling(jobId: Ref<string>) {
     loading.value = true
     error.value   = ''
     try {
+      // NOTE: intentionally NOT passing includeSequences here – the raw
+      // `sequence` text field is by far the largest part of the payload
+      // (full protein/DNA text × up to 10,000 entries) and isn't used
+      // anywhere in the table/filtering UI. For a completed job, unmatched
+      // sequences' text is fetched separately below (much smaller subset,
+      // filtered server-side) only once it's actually needed.
       const response    = await getJob(jobId.value, 1, 10_000, 'all')
       job.value         = response
       allSequences.value = response.sequences || []
@@ -35,6 +41,7 @@ export function useJobPolling(jobId: Ref<string>) {
         startPolling(onCompleted)
       } else if (response.status === 'completed') {
         if (!stats.value) await loadStats()
+        await loadUnmatchedSequenceText()
         await onCompleted?.()
       }
     } catch (e) {
@@ -53,6 +60,29 @@ export function useJobPolling(jobId: Ref<string>) {
     }
   }
 
+  /**
+   * Fetches the raw `sequence` text for unmatched sequences only (server-side
+   * `filter=none`, so this is typically a much smaller response than the full
+   * job) and merges it into `allSequences` by id. The Bakta and Psos
+   * "unmatched sequences" workflows both need the actual sequence text
+   * (to build FASTA uploads); everything else in the UI works fine without it.
+   * Safe/cheap to call repeatedly – merges by id, never duplicates entries.
+   */
+  async function loadUnmatchedSequenceText() {
+    try {
+      const response = await getJob(jobId.value, 1, 10_000, 'none', undefined, true)
+      const textById = new Map((response.sequences || []).map(s => [s.id, s.sequence]))
+      if (textById.size === 0) return
+      allSequences.value = allSequences.value.map(s =>
+          textById.has(s.id) ? { ...s, sequence: textById.get(s.id) } : s,
+      )
+    } catch (e) {
+      // Non-critical: Bakta/Psos will just show "no sequence text available"
+      // for affected entries rather than blocking the whole page load.
+      console.warn('Failed to load unmatched sequence text:', e)
+    }
+  }
+
   function startPolling(onCompleted?: () => Promise<void>) {
     if (pollInterval) return
     pollInterval = window.setInterval(async () => {
@@ -64,6 +94,7 @@ export function useJobPolling(jobId: Ref<string>) {
           stopPolling()
           if (response.status === 'completed') {
             await loadStats()
+            await loadUnmatchedSequenceText()
             await onCompleted?.()
           }
         }

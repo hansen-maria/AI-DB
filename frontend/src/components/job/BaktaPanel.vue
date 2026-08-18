@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { BaktaAnnotationSummary, IngestResponse, SequenceType } from '../../api/bakta.ts'
+import type { BaktaAnnotationSummary, IngestResponse, SequenceType, BaktaWorkflowMode } from '../../api/bakta.ts'
 
 defineProps<{
   unmatchedCount:        number
@@ -14,6 +14,7 @@ defineProps<{
   genus:                 string
   species:               string
   completeGenome:        boolean
+  workflowMode:          BaktaWorkflowMode
   autoIngestEnabled:     boolean
   ingesting:             boolean
   ingestResult:          IngestResponse | null
@@ -26,6 +27,7 @@ const emit = defineEmits<{
   'update:genus':             [value: string]
   'update:species':           [value: string]
   'update:completeGenome':    [value: boolean]
+  'update:workflowMode':      [value: BaktaWorkflowMode]
   'update:autoIngestEnabled': [value: boolean]
   'analyze':                  []
   'ingest':                   []
@@ -45,8 +47,9 @@ const emit = defineEmits<{
           <path d="M7.5 12H10"/><path d="M14 12h2.5"/>
         </svg>
         <span>Analyze {{ unmatchedCount }} unmatched sequences with Bakta</span>
-        <span v-if="result"    class="bakta-badge bakta-badge--done">✓ Done</span>
-        <span v-else-if="analyzing" class="bakta-badge bakta-badge--running">Running…</span>
+        <span v-if="workflowMode === 'baktfold' && !result && !analyzing" class="bakta-badge bakta-badge--baktfold">+ Baktfold</span>
+        <span v-if="result"    class="bakta-badge bakta-badge--done">✓ Done{{ result.workflowMode === 'baktfold' ? ' (+ Baktfold)' : '' }}</span>
+        <span v-else-if="analyzing" class="bakta-badge bakta-badge--running">Running{{ workflowMode === 'baktfold' ? ' (+ Baktfold)' : '' }}…</span>
       </div>
       <svg :class="{ rotated: show }" xmlns="http://www.w3.org/2000/svg" width="20" height="20"
            viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -65,12 +68,51 @@ const emit = defineEmits<{
         </span>
         <span v-else>
           Sequences detected as <strong>nucleotide</strong> — using the full
-          <strong>genome annotation</strong> workflow (V1 API).
+          <strong>genome annotation</strong> workflow (V1 API, or V2 when Baktfold is enabled below).
+        </span>
+        <span v-if="(result?.workflowMode ?? workflowMode) === 'baktfold'">
+          <a href="https://bakta.computational.bio" target="_blank">Baktfold</a> adds structure-based
+          annotation on top of Bakta's sequence-based search, which can surface additional matches —
+          at the cost of significantly more compute time.
         </span>
       </p>
 
       <!-- Config form (only before first run) -->
       <div v-if="!analyzing && !result" class="bakta-form">
+        <!-- Workflow choice: plain Bakta vs. Bakta + Baktfold -->
+        <div class="bakta-workflow-toggle">
+          <label class="bakta-workflow-option">
+            <input type="radio" name="bakta-workflow-mode" value="bakta"
+                   :checked="workflowMode === 'bakta'"
+                   @change="emit('update:workflowMode', 'bakta')" />
+            <span>
+              <strong>Bakta</strong>
+              <span class="bakta-note" style="margin:0">Standard annotation.</span>
+            </span>
+          </label>
+          <label class="bakta-workflow-option">
+            <input type="radio" name="bakta-workflow-mode" value="baktfold"
+                   :checked="workflowMode === 'baktfold'"
+                   @change="emit('update:workflowMode', 'baktfold')" />
+            <span>
+              <strong>Bakta + <a href="https://bakta.computational.bio" target="_blank" @click.stop>Baktfold</a></strong>
+              <span class="bakta-note" style="margin:0">Adds structure-based annotation on top of Bakta.</span>
+            </span>
+          </label>
+          <p v-if="workflowMode === 'baktfold'" class="bakta-warning">
+            ⚠ Baktfold may find additional matches that Bakta's sequence-based search misses, but
+            it needs significantly more compute time
+            <span v-if="sequenceType === 'protein'">
+              — it runs as a second step after Bakta finishes (structure prediction is the slow part),
+              so expect the combined run to take a good deal longer than plain Bakta alone.
+            </span>
+            <span v-else>
+              — often a multiple of Bakta's normal runtime, since structure prediction runs for every
+              predicted protein in the genome.
+            </span>
+          </p>
+        </div>
+
         <template v-if="sequenceType === 'nucleotide'">
           <div class="bakta-form-row">
             <div class="bakta-field">
@@ -93,7 +135,8 @@ const emit = defineEmits<{
           </div>
         </template>
         <p v-else class="bakta-note" style="margin-bottom:0.5rem">
-          The bakta_proteins workflow requires no additional configuration.
+          The {{ workflowMode === 'baktfold' ? 'bakta_proteins + baktfold' : 'bakta_proteins' }}
+          workflow requires no additional configuration.
         </p>
 
         <!-- Opt-out: save annotations to the AI-DB annotations DB automatically -->
@@ -115,7 +158,8 @@ const emit = defineEmits<{
                fill="none" stroke="currentColor" stroke-width="2">
             <polygon points="5 3 19 12 5 21 5 3"/>
           </svg>
-          Run Bakta Annotation ({{ unmatchedCount }} sequences)
+          Run {{ workflowMode === 'baktfold' ? 'Bakta + Baktfold' : 'Bakta' }} Annotation
+          ({{ unmatchedCount }} sequences)
         </button>
       </div>
 
@@ -127,7 +171,12 @@ const emit = defineEmits<{
         </div>
         <span class="bakta-progress-pct">{{ progressPercent }}%</span>
         <p class="bakta-note">
-          <span v-if="sequenceType === 'protein'">Protein annotation typically takes 2–5 minutes.</span>
+          <span v-if="workflowMode === 'baktfold'">
+            Bakta + Baktfold runs can take considerably longer than plain Bakta — the structural
+            analysis step often dominates runtime, especially for larger inputs. This may run for
+            an hour or more; feel free to navigate away, progress is saved and resumes automatically.
+          </span>
+          <span v-else-if="sequenceType === 'protein'">Protein annotation typically takes 2–5 minutes.</span>
           <span v-else>Genome annotation typically takes 10–15 minutes.</span>
         </p>
         <button class="btn btn-secondary-psos" style="margin-top:0.5rem"
@@ -201,6 +250,25 @@ const emit = defineEmits<{
             <a v-if="result.resultFilesProtein.faa"               :href="result.resultFilesProtein.faa"               target="_blank" class="bakta-dl-link">FAA (proteins)</a>
             <a v-if="result.resultFilesProtein.hypotheticals_tsv" :href="result.resultFilesProtein.hypotheticals_tsv" target="_blank" class="bakta-dl-link">Hypotheticals TSV</a>
             <a v-if="result.resultFilesProtein.json"              :href="result.resultFilesProtein.json"              target="_blank" class="bakta-dl-link">JSON</a>
+          </div>
+        </div>
+
+        <!-- Download links – Bakta + Baktfold (V2 combined / two-step) -->
+        <div v-if="result.resultFilesBaktfold" class="bakta-downloads">
+          <h4 class="bakta-section-title">Download results (Bakta + Baktfold)</h4>
+          <div class="bakta-download-links">
+            <a v-if="result.resultFilesBaktfold.tsv"               :href="result.resultFilesBaktfold.tsv"               target="_blank" class="bakta-dl-link">TSV</a>
+            <a v-if="result.resultFilesBaktfold.gff3"              :href="result.resultFilesBaktfold.gff3"              target="_blank" class="bakta-dl-link">GFF3</a>
+            <a v-if="result.resultFilesBaktfold.gbff"              :href="result.resultFilesBaktfold.gbff"              target="_blank" class="bakta-dl-link">GenBank</a>
+            <a v-if="result.resultFilesBaktfold.faa"               :href="result.resultFilesBaktfold.faa"               target="_blank" class="bakta-dl-link">FAA (proteins)</a>
+            <a v-if="result.resultFilesBaktfold.ffn"               :href="result.resultFilesBaktfold.ffn"               target="_blank" class="bakta-dl-link">FFN (genes)</a>
+            <a v-if="result.resultFilesBaktfold.fna"               :href="result.resultFilesBaktfold.fna"               target="_blank" class="bakta-dl-link">FNA</a>
+            <a v-if="result.resultFilesBaktfold.embl"              :href="result.resultFilesBaktfold.embl"              target="_blank" class="bakta-dl-link">EMBL</a>
+            <a v-if="result.resultFilesBaktfold.hypotheticals_faa" :href="result.resultFilesBaktfold.hypotheticals_faa" target="_blank" class="bakta-dl-link">Hypotheticals FAA</a>
+            <a v-if="result.resultFilesBaktfold.hypotheticals_tsv" :href="result.resultFilesBaktfold.hypotheticals_tsv" target="_blank" class="bakta-dl-link">Hypotheticals TSV</a>
+            <a v-if="result.resultFilesBaktfold.inference_tsv"     :href="result.resultFilesBaktfold.inference_tsv"     target="_blank" class="bakta-dl-link">Inference TSV</a>
+            <a v-if="result.resultFilesBaktfold.json"              :href="result.resultFilesBaktfold.json"              target="_blank" class="bakta-dl-link">JSON</a>
+            <a v-if="result.resultFilesBaktfold.logs_txt"          :href="result.resultFilesBaktfold.logs_txt"          target="_blank" class="bakta-dl-link">Log</a>
           </div>
         </div>
 
@@ -283,6 +351,7 @@ const emit = defineEmits<{
   .bakta-badge { padding: 0.15rem 0.5rem; border-radius: 99px; font-size: 0.75rem; font-weight: 600; }
   .bakta-badge--done    { background: rgba(76,175,80,0.15); color: #2e7d32; }
   .bakta-badge--running { background: rgba(33,150,243,0.15); color: #1565c0; }
+  .bakta-badge--baktfold { background: rgba(107,91,149,0.15); color: #6b5b95; }
   .bakta-content { padding: 1.25rem; display: flex; flex-direction: column; gap: 1rem; }
   .bakta-description { margin: 0; color: var(--color-text); font-size: 0.9rem; line-height: 1.6; }
   .bakta-form { display: flex; flex-direction: column; gap: 1rem; }
@@ -329,6 +398,13 @@ const emit = defineEmits<{
   .bakta-ingest-status { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.75rem; background: var(--color-background-soft); border: 1px solid var(--color-border); border-radius: 6px; font-size: 0.875rem; color: var(--color-text); opacity: 0.85; }
   .bakta-ingest-status svg { color: #e08000; flex-shrink: 0; }
   .bakta-autoingest-toggle { border: 1px solid var(--color-border); border-radius: 8px; padding: 0.65rem 0.85rem; background: var(--color-background-soft); }
+  .bakta-workflow-toggle { display: flex; flex-direction: column; gap: 0.6rem; border: 1px solid var(--color-border); border-radius: 8px; padding: 0.75rem 0.85rem; background: var(--color-background-soft); }
+  .bakta-workflow-option { display: flex; align-items: flex-start; gap: 0.6rem; cursor: pointer; }
+  .bakta-workflow-option input[type="radio"] { margin-top: 0.2rem; flex-shrink: 0; }
+  .bakta-workflow-option > span { display: flex; flex-direction: column; gap: 0.15rem; font-size: 0.875rem; color: var(--color-text); }
+  .bakta-workflow-option strong { color: var(--color-heading); }
+  .bakta-workflow-option a { color: #6b5b95; }
+  .bakta-warning { margin: 0; padding: 0.6rem 0.75rem; background: rgba(255,152,0,0.1); border: 1px solid rgba(255,152,0,0.3); border-radius: 6px; font-size: 0.82rem; line-height: 1.5; color: var(--color-text); }
   .bakta-error { background: rgba(244,67,54,0.1); border: 1px solid rgba(244,67,54,0.3); padding: 0.5rem; border-radius: 6px; }
   @keyframes spin { to { transform: rotate(360deg); } }
 </style>

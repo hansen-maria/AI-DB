@@ -25,8 +25,26 @@ use crate::services::process_job_from_file;
 use crate::services::reannotate_sequences;
 use crate::state::AppState;
 
+use serde::Deserialize;
+
 /// Maximum upload size (100 MB)
 const MAX_UPLOAD_SIZE: usize = 100 * 1024 * 1024;
+
+/// Additional query param for GET /api/job/{job_id}, kept as its own small
+/// extractor (rather than adding a field to `GetJobQuery` in models/pagination.rs)
+/// so this change doesn't require touching that shared struct. Axum allows
+/// multiple `Query<T>` extractors per handler since they only read the URI's
+/// query string, which isn't consumed.
+#[derive(Debug, Deserialize)]
+pub struct IncludeSequencesQuery {
+    /// Defaults to false: the raw `sequence` field is stripped from the
+    /// response unless explicitly requested. It's by far the largest field
+    /// per entry (full protein/DNA text) and isn't used anywhere in the
+    /// sequences table/filtering UI – only the Bakta/Psos "unmatched
+    /// sequences" workflows need it, and they request it explicitly via a
+    /// separate, `filter=none`-scoped call (see useJobPolling.ts).
+    pub include_sequences: Option<bool>,
+}
 
 /// Get temp directory from environment or use default
 fn get_temp_dir() -> PathBuf {
@@ -51,7 +69,8 @@ fn get_temp_dir() -> PathBuf {
         ("cog" = Option<String>, Query, description = "Filter by COG category"),
         ("ec_class" = Option<String>, Query, description = "Filter by EC class (1-7)"),
         ("has_gene" = Option<bool>, Query, description = "Only sequences with gene name"),
-        ("has_product" = Option<bool>, Query, description = "Only sequences with product")
+        ("has_product" = Option<bool>, Query, description = "Only sequences with product"),
+        ("include_sequences" = Option<bool>, Query, description = "Include the raw sequence text field (default: false – it's the largest field per entry and unused by the table UI; only needed for Bakta/Psos 'unmatched sequences' workflows)")
     ),
     responses(
         (status = 200, description = "Job found", body = PaginatedJobResponse),
@@ -62,6 +81,7 @@ pub async fn get_job(
     State(state): State<AppState>,
     Path(job_id): Path<String>,
     Query(query): Query<GetJobQuery>,
+    Query(include_seq): Query<IncludeSequencesQuery>,
 ) -> impl IntoResponse {
     let page = query.page.unwrap_or(1).max(1);
     let per_page = query
@@ -104,13 +124,24 @@ pub async fn get_job(
             let pagination = PaginationInfo::new(page, per_page, filtered_count);
 
             // Get paginated sequences from filtered results
-            let paginated_sequences = {
+            let include_sequence_text = include_seq.include_sequences.unwrap_or(false);
+            let paginated_sequences: Vec<SequenceInfo> = {
                 let start = (page - 1) * per_page;
                 let end = (start + per_page).min(filtered_count);
                 if start < filtered_count {
                     filtered_sequences[start..end]
                         .iter()
-                        .map(|s| (*s).clone())
+                        .map(|s| {
+                            let mut seq = (*s).clone();
+                            // Strip the raw sequence text unless explicitly requested –
+                            // it's by far the largest field per entry (full protein/DNA
+                            // text) and dominates response size for large jobs, but isn't
+                            // used anywhere in the table/filtering UI.
+                            if !include_sequence_text {
+                                seq.sequence = None;
+                            }
+                            seq
+                        })
                         .collect()
                 } else {
                     Vec::new()

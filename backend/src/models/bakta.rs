@@ -5,6 +5,10 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+fn default_workflow_mode() -> String {
+    "bakta".to_string()
+}
+
 /// Persisted Bakta job state – one row per AI-DB job.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct StoredBaktaJob {
@@ -17,12 +21,25 @@ pub struct StoredBaktaJob {
     pub status: String,
     pub progress_label: String,
     pub progress_percent: i64,
-    /// JSON of BaktaResultFiles | BaktaProteinsResultFiles (all S3 URLs).
+    /// JSON of BaktaResultFiles | BaktaProteinsResultFiles | BaktfoldResultFiles (all S3 URLs).
     /// Refreshed on every reload of a completed job so presigned URLs stay valid.
     pub result_files_json: Option<String>,
     /// Full BaktaAnnotationSummary JSON (stats + features + file URLs).
     /// Set once on first SUCCESSFUL completion.
     pub result_json: Option<String>,
+    /// "bakta" (default, plain annotation) | "baktfold" (also runs Baktfold –
+    /// finds more but takes considerably longer). Defaults to "bakta" for rows
+    /// persisted before this field existed.
+    #[serde(default = "default_workflow_mode")]
+    pub workflow_mode: String,
+    /// Only meaningful when workflow_mode == "baktfold" and sequence_type ==
+    /// "protein": Baktfold has no combined protein workflow on the Bakta API,
+    /// so it runs as two chained jobs. "bakta_proteins" | "baktfold" tracks
+    /// which leg is currently in flight so a resumed session continues into
+    /// stage 2 automatically once stage 1 finishes. Unused (None) for the
+    /// nucleotide combined workflow, which is a single job.
+    #[serde(default)]
+    pub workflow_stage: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -40,6 +57,13 @@ pub struct SaveBaktaJobRequest {
     pub result_files_json: Option<String>,
     /// Full summary JSON – sent once on first successful completion.
     pub result_json: Option<String>,
+    /// See `StoredBaktaJob::workflow_mode`. Defaults to "bakta" so older
+    /// frontend builds that don't send this field keep working unchanged.
+    #[serde(default = "default_workflow_mode")]
+    pub workflow_mode: String,
+    /// See `StoredBaktaJob::workflow_stage`.
+    #[serde(default)]
+    pub workflow_stage: Option<String>,
 }
 
 /// Response body for POST /api/job/{job_id}/bakta

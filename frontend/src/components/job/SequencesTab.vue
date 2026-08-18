@@ -86,6 +86,7 @@ const props = defineProps<{
   baktaGenus:           string
   baktaSpecies:         string
   baktaCompleteGenome:  boolean
+  baktaWorkflowMode:    'bakta' | 'baktfold'
   baktaAutoIngestEnabled: boolean
   baktaIngesting:       boolean
   baktaIngestResult:    IngestResponse | null
@@ -121,6 +122,7 @@ const emit = defineEmits<{
   'update:baktaGenus':      [v: string]
   'update:baktaSpecies':    [v: string]
   'update:baktaCompleteGenome': [v: boolean]
+  'update:baktaWorkflowMode': [v: 'bakta' | 'baktfold']
   'update:baktaAutoIngestEnabled': [v: boolean]
   'bakta-analyze':          []
   'bakta-ingest':           []
@@ -378,6 +380,7 @@ watch(() => props.paginatedSequences, (seqs) => { validateVisibleLinks(seqs) }, 
       :genus="baktaGenus"
       :species="baktaSpecies"
       :completeGenome="baktaCompleteGenome"
+      :workflowMode="baktaWorkflowMode"
       :autoIngestEnabled="baktaAutoIngestEnabled"
       :ingesting="baktaIngesting"
       :ingestResult="baktaIngestResult"
@@ -387,6 +390,7 @@ watch(() => props.paginatedSequences, (seqs) => { validateVisibleLinks(seqs) }, 
       @update:genus="emit('update:baktaGenus', $event)"
       @update:species="emit('update:baktaSpecies', $event)"
       @update:completeGenome="emit('update:baktaCompleteGenome', $event)"
+      @update:workflowMode="emit('update:baktaWorkflowMode', $event)"
       @update:autoIngestEnabled="emit('update:baktaAutoIngestEnabled', $event)"
       @analyze="emit('bakta-analyze')"
       @ingest="emit('bakta-ingest')"

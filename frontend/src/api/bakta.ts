@@ -20,6 +20,26 @@ export type SequenceType = 'nucleotide' | 'protein'
 export type DermType = 'unknown' | 'monoderm' | 'diderm'
 export type RepliconTableType = 'CSV' | 'TSV'
 
+/**
+ * "bakta"     – plain annotation (default, current behavior)
+ * "baktfold"  – also runs Baktfold structural analysis. May find additional
+ *               matches Bakta's sequence-based search misses, but takes
+ *               considerably longer (Baktfold's structure prediction step
+ *               dominates runtime; nucleotide jobs especially can take much
+ *               longer than plain Bakta).
+ */
+export type BaktaWorkflowMode = 'bakta' | 'baktfold'
+
+/**
+ * For the protein path there is no combined "bakta_proteins + baktfold"
+ * workflow on the Bakta API – Baktfold needs the JSON result of a finished
+ * Bakta(-proteins) job as input. So protein+baktfold runs as two chained V2
+ * jobs; this tracks which leg is in flight (used for persistence/resume).
+ * Unused for the nucleotide path, which has a single combined V2 workflow
+ * ("bakta_baktfold") and therefore only ever has one job.
+ */
+export type BaktaWorkflowStage = 'bakta_proteins' | 'baktfold'
+
 /** Normalised job status (uppercase) used throughout the workflow functions. */
 export type BaktaJobStatusEnum = 'INIT' | 'RUNNING' | 'SUCCESSFUL' | 'ERROR'
 
@@ -125,7 +145,9 @@ export interface JobReference {
 
 export interface V2InitRequest {
   name: string
-  workflow_kind: 'bakta_proteins'   // the only V2 kind used here
+  /** 'bakta_proteins' (plain protein), 'bakta_baktfold' (nucleotide + Baktfold
+   *  combined), or 'baktfold' (standalone – protein two-step, stage 2) */
+  workflow_kind: string
 }
 
 export interface V2UploadLink {
@@ -168,6 +190,67 @@ export interface BaktaProteinsResultFiles {
   hypotheticals_tsv?: string | null
 }
 
+/**
+ * Schema: BaktfoldResultFiles – result of the "baktfold" and "bakta_baktfold"
+ * workflow kinds. json required, rest optional (omitted when the pipeline
+ * stage that would produce them didn't run, e.g. no plot for protein-only input).
+ */
+export interface BaktfoldResultFiles {
+  json: string
+  embl?: string | null
+  faa?: string | null
+  ffn?: string | null
+  fna?: string | null
+  gbff?: string | null
+  gff3?: string | null
+  hypotheticals_faa?: string | null
+  hypotheticals_tsv?: string | null
+  inference_tsv?: string | null
+  logs_txt?: string | null
+  tsv?: string | null
+}
+
+/**
+ * Schema: BaktaV2Config – config accepted by the 'bakta' and 'bakta_baktfold'
+ * V2 workflow kinds. Snake_case, unlike the V1 JobConfig (camelCase) – these
+ * are two genuinely different schemas on the Bakta API, not just a naming
+ * convention difference, so they're kept as separate types rather than reused.
+ */
+export interface BaktaV2Config {
+  complete_genome?: boolean
+  compliant?: boolean
+  derm_type?: DermType | null
+  genus?: string | null
+  keep_contig_headers?: boolean
+  locus?: string | null
+  locus_tag?: string | null
+  locus_tag_increment?: number
+  meta?: boolean
+  min_contig_length?: number
+  plasmid?: string | null
+  skip_cds?: boolean
+  skip_crispr?: boolean
+  skip_filter?: boolean
+  skip_gap?: boolean
+  skip_ncrna?: boolean
+  skip_ncrna_region?: boolean
+  skip_ori?: boolean
+  skip_plot?: boolean
+  skip_pseudo?: boolean
+  skip_rrna?: boolean
+  skip_sorf?: boolean
+  skip_tmrna?: boolean
+  skip_trna?: boolean
+  species?: string | null
+  strain?: string | null
+  translation_table?: number
+  use_hmms?: boolean
+  use_prodigal_training_file?: boolean
+  use_regions?: boolean
+  use_replicons?: boolean
+  use_trusted_proteins?: boolean
+}
+
 export interface V2ResultResponse {
   job_id: string
   workflow_kind: string
@@ -175,8 +258,12 @@ export interface V2ResultResponse {
   started: string
   updated: string
   result: {
-    result_kind: 'bakta_proteins'
-    files: BaktaProteinsResultFiles
+    /** 'bakta_proteins' for plain protein jobs, 'baktfold' for both the
+     *  nucleotide combined workflow and the protein two-step's stage 2 –
+     *  the API always tags the *final* pipeline output, regardless of how
+     *  many internal stages produced it. */
+    result_kind: string
+    files: BaktaProteinsResultFiles | BaktfoldResultFiles
   }
 }
 
@@ -241,10 +328,15 @@ export interface BaktaAnnotationSummary {
   secret: string
   jobStatus: BaktaJobStatusEnum
   sequenceType: SequenceType
-  /** Present when sequenceType === 'nucleotide' (V1 workflow) */
+  /** 'bakta' (default, omitted by plain runs) | 'baktfold' (also ran Baktfold structural analysis) */
+  workflowMode?: BaktaWorkflowMode
+  /** Present when sequenceType === 'nucleotide' && workflowMode === 'bakta' (V1 workflow) */
   resultFilesNucleotide?: BaktaResultFiles
-  /** Present when sequenceType === 'protein' (V2 workflow) */
+  /** Present when sequenceType === 'protein' && workflowMode === 'bakta' (V2 bakta_proteins) */
   resultFilesProtein?: BaktaProteinsResultFiles
+  /** Present when workflowMode === 'baktfold' (either sequence type – V2 bakta_baktfold
+   *  or the protein two-step's stage 2 result) */
+  resultFilesBaktfold?: BaktfoldResultFiles
   stats?: BaktaJsonResult['stats']
   featureCount?: number
   features?: BaktaFeature[]     // first 200 for display
@@ -294,6 +386,28 @@ export function buildJobConfig(options: BaktaJobOptions = {}): BaktaJobConfig {
     ...(options.locus !== undefined     && { locus: options.locus }),
     ...(options.locusTag !== undefined  && { locusTag: options.locusTag }),
     ...(options.plasmid !== undefined   && { plasmid: options.plasmid }),
+  }
+}
+
+/**
+ * Merge user options into a valid V2 BaktaV2Config (snake_case) – used for the
+ * 'bakta_baktfold' combined workflow. Same source options (BaktaJobOptions) as
+ * buildJobConfig(), just mapped onto the V2 API's different field naming.
+ */
+export function buildV2Config(options: BaktaJobOptions = {}): BaktaV2Config {
+  return {
+    complete_genome: options.completeGenome ?? false,
+    compliant: options.compliant ?? false,
+    keep_contig_headers: options.keepContigHeaders ?? true,
+    min_contig_length: options.minContigLength ?? 0,
+    translation_table: options.translationTable ?? 11,
+    ...(options.genus !== undefined    && { genus: options.genus }),
+    ...(options.species !== undefined  && { species: options.species }),
+    ...(options.strain !== undefined   && { strain: options.strain }),
+    ...(options.dermType !== undefined && { derm_type: options.dermType }),
+    ...(options.locus !== undefined    && { locus: options.locus }),
+    ...(options.locusTag !== undefined && { locus_tag: options.locusTag }),
+    ...(options.plasmid !== undefined  && { plasmid: options.plasmid }),
   }
 }
 
@@ -440,11 +554,14 @@ export async function getBaktaVersion() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /** POST /api/v2/job/init */
-export async function initV2Job(name: string): Promise<V2InitResponse> {
+export async function initV2Job(
+    name: string,
+    workflowKind: string = 'bakta_proteins',
+): Promise<V2InitResponse> {
   const resp = await fetch(`${BAKTA_V2}/job/init`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ name, workflow_kind: 'bakta_proteins' } satisfies V2InitRequest),
+    body: JSON.stringify({ name, workflow_kind: workflowKind } satisfies V2InitRequest),
   })
   if (!resp.ok) {
     const detail = await resp.text().catch(() => '')
@@ -453,12 +570,20 @@ export async function initV2Job(name: string): Promise<V2InitResponse> {
   return await resp.json() as Promise<V2InitResponse>
 }
 
-/** POST /api/v2/job/start – config is EmptyConfig ({}) for bakta_proteins */
-export async function startV2Job(job: JobReference): Promise<void> {
+/**
+ * POST /api/v2/job/start
+ * config is EmptyConfig ({}) for 'bakta_proteins' and 'baktfold';
+ * a BaktaV2Config for 'bakta_baktfold' (see buildV2Config()).
+ */
+export async function startV2Job(
+    job: JobReference,
+    workflowKind: string = 'bakta_proteins',
+    config: BaktaV2Config | Record<string, never> = {},
+): Promise<void> {
   const resp = await fetch(`${BAKTA_V2}/job/start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ job, workflow_kind: 'bakta_proteins', config: {} }),
+    body: JSON.stringify({ job, workflow_kind: workflowKind, config }),
   })
   if (!resp.ok) {
     const detail = await resp.text().catch(() => '')
@@ -526,7 +651,28 @@ export async function deleteV2Job(job: JobReference): Promise<void> {
 export type BaktaProgressCallback = (stage: string, percent: number) => void
 
 const POLL_INTERVAL_MS = 5_000
-const MAX_WAIT_MS = 20 * 60 * 1_000    // 20 min
+const MAX_WAIT_MS = 20 * 60 * 1_000    // 20 min – plain Bakta
+// Baktfold's structure-prediction step dominates runtime and can take
+// considerably longer than plain Bakta, especially for larger inputs.
+const BAKTFOLD_MAX_WAIT_MS = 90 * 60 * 1_000   // 90 min
+
+/** Finds a specific upload slot by kind in a V2 init response's upload list. */
+function findUploadSlot(uploads: V2UploadLink[], kind: string): V2UploadLink | undefined {
+  return uploads.find(u => u.upload_kind === kind)
+}
+
+/** Fetch a URL as raw text, or null on error/CORS – used to re-upload a prior
+ *  job's JSON result as input to a chained job (Baktfold needs the exact
+ *  Bakta JSON bytes, not a reparsed/re-stringified copy). */
+async function fetchTextOrNull(url: string): Promise<string | null> {
+  try {
+    const resp = await fetch(url)
+    if (!resp.ok) return null
+    return await resp.text()
+  } catch {
+    return null
+  }
+}
 
 /**
  * V1 nucleotide workflow:
@@ -656,6 +802,152 @@ async function runNucleotideAnnotation(
     sequence_type: 'nucleotide', status: 'SUCCESSFUL',
     progress_label: 'Done', progress_percent: 100,
     result_files_json: JSON.stringify(resultResp.ResultFiles),
+    result_json: JSON.stringify(summary),
+  })
+
+  return summary
+}
+
+/**
+ * V2 combined nucleotide + Baktfold workflow ('bakta_baktfold' workflow_kind):
+ * init → find genome_fasta upload slot → S3 upload → start → poll → result → parse JSON
+ *
+ * Unlike the protein path, the Bakta API offers a single combined workflow
+ * kind for nucleotide input, so this is one job (not a two-step chain) –
+ * Baktfold runs automatically server-side after Bakta finishes.
+ */
+async function runNucleotideBaktfoldAnnotation(
+    sequences: Array<{ id: string; sequence: string }>,
+    options: BaktaJobOptions,
+    onProgress: BaktaProgressCallback,
+    signal?: AbortSignal,
+    aidbJobId?: string,
+): Promise<BaktaAnnotationSummary> {
+  const fastaContent = sequences.map(s => `>${s.id}\n${s.sequence}`).join('\n')
+  const jobName = `aidb-nucleotide-baktfold-${Date.now()}`
+  const config = buildV2Config(options)
+
+  console.group('[Bakta V2] Nucleotide + Baktfold annotation workflow')
+  console.log('Sequences:', sequences.length, '| Job name:', jobName)
+  console.log('Config:', config)
+
+  // 1 – Init
+  onProgress('Initializing Bakta + Baktfold job (nucleotide)…', 3)
+  if (signal?.aborted) throw new Error('Aborted')
+  const init = await initV2Job(jobName, 'bakta_baktfold')
+  const jobRef = init.job
+  const webViewerUrl = `https://bakta.computational.bio/ui/result?jobID=${jobRef.job_id}&secret=${jobRef.secret}`
+
+  console.log('[Bakta V2] Job initialized | ID:', jobRef.job_id)
+  console.log('[Bakta V2] Upload slots:', init.uploads.map(u => `${u.upload_kind} (required: ${u.required})`).join(', '))
+  console.log('[Bakta V2] Web viewer:', webViewerUrl)
+
+  if (aidbJobId) await saveBaktaState(aidbJobId, {
+    bakta_job_id: jobRef.job_id, bakta_secret: jobRef.secret,
+    sequence_type: 'nucleotide', status: 'INIT', workflow_mode: 'baktfold',
+    progress_label: 'Initializing…', progress_percent: 3,
+  })
+
+  // 2 – Find genome_fasta upload slot
+  const genomeUpload = findUploadSlot(init.uploads, 'genome_fasta')
+  if (!genomeUpload) throw new Error('Bakta V2 did not return a genome_fasta upload URL')
+
+  onProgress('Uploading nucleotide sequences…', 10)
+  if (signal?.aborted) throw new Error('Aborted')
+  await uploadFastaToS3(genomeUpload.url, fastaContent)
+  console.log('[Bakta V2] Genome FASTA uploaded | Size:', fastaContent.length, 'chars')
+
+  // 3 – Start
+  onProgress('Starting genome annotation + Baktfold…', 18)
+  if (signal?.aborted) throw new Error('Aborted')
+  await startV2Job(jobRef, 'bakta_baktfold', config)
+  console.log('[Bakta V2] Job started')
+
+  if (aidbJobId) await saveBaktaState(aidbJobId, {
+    bakta_job_id: jobRef.job_id, bakta_secret: jobRef.secret,
+    sequence_type: 'nucleotide', status: 'RUNNING', workflow_mode: 'baktfold',
+    progress_label: 'Bakta + Baktfold started', progress_percent: 18,
+  })
+
+  // 4 – Poll (Baktfold runs considerably longer than plain Bakta – wider time budget)
+  let rawStatus = 'running'
+  let elapsed = 0
+  while (elapsed < BAKTFOLD_MAX_WAIT_MS) {
+    if (signal?.aborted) throw new Error('Aborted')
+    await new Promise(r => setTimeout(r, POLL_INTERVAL_MS))
+    elapsed += POLL_INTERVAL_MS
+    const entry = await listV2Job(jobRef)
+    if (!entry) continue
+    rawStatus = entry.status
+    const normalised = rawStatus.toUpperCase() as BaktaJobStatusEnum
+    console.log(`[Bakta V2] Poll +${Math.round(elapsed / 1000)}s | Status: ${rawStatus} | Updated: ${entry.updated}`)
+    const pct = Math.min(85, 18 + (elapsed / BAKTFOLD_MAX_WAIT_MS) * 67)
+    onProgress(`Running Bakta + Baktfold… (${rawStatus})`, Math.round(pct))
+    if (aidbJobId) await saveBaktaState(aidbJobId, {
+      bakta_job_id: jobRef.job_id, bakta_secret: jobRef.secret,
+      sequence_type: 'nucleotide', status: normalised, workflow_mode: 'baktfold',
+      progress_label: `Running Bakta + Baktfold… (${rawStatus})`, progress_percent: Math.round(pct),
+    })
+    if (normalised === 'SUCCESSFUL' || normalised === 'ERROR') break
+  }
+
+  const jobStatus = rawStatus.toUpperCase() as BaktaJobStatusEnum
+
+  if (jobStatus !== 'SUCCESSFUL') {
+    onProgress('Fetching error logs…', 87)
+    let logs = ''
+    try { logs = await getV2Logs(jobRef) } catch { /* non-critical */ }
+    console.error('[Bakta V2] Job failed | Status:', rawStatus, '\nLogs:\n', logs)
+    console.groupEnd()
+    if (aidbJobId) await saveBaktaState(aidbJobId, {
+      bakta_job_id: jobRef.job_id, bakta_secret: jobRef.secret,
+      sequence_type: 'nucleotide', status: jobStatus, workflow_mode: 'baktfold',
+      progress_label: 'Error', progress_percent: 87,
+    })
+    throw new Error(`Bakta + Baktfold job ended with status: ${jobStatus}${logs ? `\n\nBakta log:\n${logs}` : ''}`)
+  }
+
+  // 5 – Result URLs
+  onProgress('Retrieving result URLs…', 90)
+  const resultResp = await getV2Result(jobRef)
+  const files = resultResp.result.files as BaktfoldResultFiles
+  console.log('[Bakta V2] Baktfold results ready | Files:', Object.keys(files).join(', '))
+
+  // 6 – Parse JSON
+  let stats: BaktaJsonResult['stats'] | undefined
+  let features: BaktaFeature[] | undefined
+  onProgress('Parsing annotation results…', 96)
+  const json = await fetchBaktaJsonResult(files.json)
+  if (json) {
+    stats = json.stats
+    features = json.features
+    console.log('[Bakta V2] JSON parsed | CDSs:', stats?.no_cdss, '| Features:', features?.length)
+  } else {
+    console.warn('[Bakta V2] JSON not available (likely CORS) – use web viewer for full results')
+  }
+
+  onProgress('Done', 100)
+  console.log('[Bakta V2] Workflow complete')
+  console.groupEnd()
+
+  const summary: BaktaAnnotationSummary = {
+    jobID: jobRef.job_id,
+    secret: jobRef.secret,
+    jobStatus,
+    sequenceType: 'nucleotide',
+    workflowMode: 'baktfold',
+    resultFilesBaktfold: files,
+    stats,
+    featureCount: features?.length,
+    features: features?.slice(0, 200),
+    webViewerUrl,
+  }
+
+  if (aidbJobId) await saveBaktaState(aidbJobId, {
+    bakta_job_id: jobRef.job_id, bakta_secret: jobRef.secret,
+    sequence_type: 'nucleotide', status: 'SUCCESSFUL', workflow_mode: 'baktfold',
+    progress_label: 'Done', progress_percent: 100,
+    result_files_json: JSON.stringify(files),
     result_json: JSON.stringify(summary),
   })
 
@@ -801,28 +1093,274 @@ async function runProteinAnnotation(
 }
 
 /**
+ * Stage 2 of the protein + Baktfold two-step chain: takes the raw JSON text of
+ * a finished bakta_proteins job and feeds it into a standalone 'baktfold' V2
+ * job. Shared by both the initial run (runProteinBaktfoldAnnotation) and the
+ * resume path (a stage-1-interrupted session that just finished stage 1).
+ *
+ * @param proteinsJsonText Raw JSON body of the bakta_proteins result (exact
+ *                         bytes – Baktfold needs this as-is, not a reparsed copy)
+ * @param startPct         Progress % to resume the combined bar from (stage 1's end point)
+ */
+async function runBaktfoldStageFromJson(
+    proteinsJsonText: string,
+    onProgress: BaktaProgressCallback,
+    signal: AbortSignal | undefined,
+    aidbJobId: string | undefined,
+    startPct: number,
+): Promise<BaktaAnnotationSummary> {
+  const jobName = `aidb-baktfold-${Date.now()}`
+
+  onProgress('Stage 2/2: Initializing Baktfold…', startPct)
+  if (signal?.aborted) throw new Error('Aborted')
+  const init = await initV2Job(jobName, 'baktfold')
+  const jobRef = init.job
+  const webViewerUrl = `https://bakta.computational.bio/ui/result?jobID=${jobRef.job_id}&secret=${jobRef.secret}`
+
+  console.log('[Bakta V2] Baktfold stage initialized | ID:', jobRef.job_id)
+  console.log('[Bakta V2] Upload slots:', init.uploads.map(u => `${u.upload_kind} (required: ${u.required})`).join(', '))
+
+  if (aidbJobId) await saveBaktaState(aidbJobId, {
+    bakta_job_id: jobRef.job_id, bakta_secret: jobRef.secret,
+    sequence_type: 'protein', status: 'INIT', workflow_mode: 'baktfold', workflow_stage: 'baktfold',
+    progress_label: 'Stage 2/2: Initializing Baktfold…', progress_percent: startPct,
+  })
+
+  const jsonUpload = findUploadSlot(init.uploads, 'bakta_json')
+  if (!jsonUpload) throw new Error('Bakta V2 did not return a bakta_json upload URL for the Baktfold workflow')
+
+  const uploadPct = startPct + 6
+  onProgress('Stage 2/2: Uploading Bakta result for Baktfold…', uploadPct)
+  if (signal?.aborted) throw new Error('Aborted')
+  await uploadFastaToS3(jsonUpload.url, proteinsJsonText)
+  console.log('[Bakta V2] Bakta JSON uploaded to Baktfold job | Size:', proteinsJsonText.length, 'chars')
+
+  const startJobPct = startPct + 10
+  onProgress('Stage 2/2: Starting Baktfold structural analysis…', startJobPct)
+  if (signal?.aborted) throw new Error('Aborted')
+  await startV2Job(jobRef, 'baktfold', {})
+  console.log('[Bakta V2] Baktfold job started')
+
+  if (aidbJobId) await saveBaktaState(aidbJobId, {
+    bakta_job_id: jobRef.job_id, bakta_secret: jobRef.secret,
+    sequence_type: 'protein', status: 'RUNNING', workflow_mode: 'baktfold', workflow_stage: 'baktfold',
+    progress_label: 'Stage 2/2: Baktfold started', progress_percent: startJobPct,
+  })
+
+  // Baktfold's structure prediction dominates runtime – wide time budget
+  let rawStatus = 'running'
+  let elapsed = 0
+  const endPct = 95
+  while (elapsed < BAKTFOLD_MAX_WAIT_MS) {
+    if (signal?.aborted) throw new Error('Aborted')
+    await new Promise(r => setTimeout(r, POLL_INTERVAL_MS))
+    elapsed += POLL_INTERVAL_MS
+    const entry = await listV2Job(jobRef)
+    if (!entry) continue
+    rawStatus = entry.status
+    const normalised = rawStatus.toUpperCase() as BaktaJobStatusEnum
+    console.log(`[Bakta V2] Baktfold poll +${Math.round(elapsed / 1000)}s | Status: ${rawStatus}`)
+    const pct = Math.min(endPct, startJobPct + (elapsed / BAKTFOLD_MAX_WAIT_MS) * (endPct - startJobPct))
+    onProgress(`Stage 2/2: Baktfold structural analysis… (${rawStatus})`, Math.round(pct))
+    if (aidbJobId) await saveBaktaState(aidbJobId, {
+      bakta_job_id: jobRef.job_id, bakta_secret: jobRef.secret,
+      sequence_type: 'protein', status: normalised, workflow_mode: 'baktfold', workflow_stage: 'baktfold',
+      progress_label: `Stage 2/2: Baktfold structural analysis… (${rawStatus})`, progress_percent: Math.round(pct),
+    })
+    if (normalised === 'SUCCESSFUL' || normalised === 'ERROR') break
+  }
+
+  const jobStatus = rawStatus.toUpperCase() as BaktaJobStatusEnum
+
+  if (jobStatus !== 'SUCCESSFUL') {
+    onProgress('Fetching error logs…', 96)
+    let logs = ''
+    try { logs = await getV2Logs(jobRef) } catch { /* non-critical */ }
+    console.error('[Bakta V2] Baktfold stage failed | Status:', rawStatus, '\nLogs:\n', logs)
+    if (aidbJobId) await saveBaktaState(aidbJobId, {
+      bakta_job_id: jobRef.job_id, bakta_secret: jobRef.secret,
+      sequence_type: 'protein', status: jobStatus, workflow_mode: 'baktfold', workflow_stage: 'baktfold',
+      progress_label: 'Error', progress_percent: 96,
+    })
+    throw new Error(`Baktfold stage ended with status: ${jobStatus}${logs ? `\n\nBakta log:\n${logs}` : ''}`)
+  }
+
+  onProgress('Retrieving Baktfold result URLs…', 97)
+  const resultResp = await getV2Result(jobRef)
+  const files = resultResp.result.files as BaktfoldResultFiles
+  console.log('[Bakta V2] Baktfold results ready | Files:', Object.keys(files).join(', '))
+
+  let stats: BaktaJsonResult['stats'] | undefined
+  let features: BaktaFeature[] | undefined
+  onProgress('Parsing annotation results…', 99)
+  const json = await fetchBaktaJsonResult(files.json)
+  if (json) { stats = json.stats; features = json.features }
+
+  onProgress('Done', 100)
+
+  const summary: BaktaAnnotationSummary = {
+    jobID: jobRef.job_id,
+    secret: jobRef.secret,
+    jobStatus,
+    sequenceType: 'protein',
+    workflowMode: 'baktfold',
+    resultFilesBaktfold: files,
+    stats,
+    featureCount: features?.length,
+    features: features?.slice(0, 200),
+    webViewerUrl,
+  }
+
+  if (aidbJobId) await saveBaktaState(aidbJobId, {
+    bakta_job_id: jobRef.job_id, bakta_secret: jobRef.secret,
+    sequence_type: 'protein', status: 'SUCCESSFUL', workflow_mode: 'baktfold', workflow_stage: 'baktfold',
+    progress_label: 'Done', progress_percent: 100,
+    result_files_json: JSON.stringify(files),
+    result_json: JSON.stringify(summary),
+  })
+
+  return summary
+}
+
+/**
+ * Protein + Baktfold two-step chain: no combined workflow_kind exists for
+ * protein input on the Bakta API, so this runs 'bakta_proteins' to completion
+ * (stage 1), then feeds its JSON result into a standalone 'baktfold' job
+ * (stage 2, via runBaktfoldStageFromJson). Combined progress bar: 0–50% for
+ * stage 1, 50–100% for stage 2.
+ */
+async function runProteinBaktfoldAnnotation(
+    sequences: Array<{ id: string; sequence: string }>,
+    onProgress: BaktaProgressCallback,
+    signal?: AbortSignal,
+    aidbJobId?: string,
+): Promise<BaktaAnnotationSummary> {
+  const fastaContent = sequences.map(s => `>${s.id}\n${s.sequence}`).join('\n')
+  const jobName = `aidb-proteins-baktfold-${Date.now()}`
+
+  console.group('[Bakta V2] Protein + Baktfold annotation workflow (two-step)')
+  console.log('Sequences:', sequences.length, '| Job name:', jobName)
+
+  // ── Stage 1: bakta_proteins (progress 0–50%) ──────────────────────────────
+  onProgress('Stage 1/2: Initializing protein annotation…', 2)
+  if (signal?.aborted) throw new Error('Aborted')
+  const init1 = await initV2Job(jobName, 'bakta_proteins')
+  const jobRef1 = init1.job
+
+  console.log('[Bakta V2] Stage 1 job initialized | ID:', jobRef1.job_id)
+
+  if (aidbJobId) await saveBaktaState(aidbJobId, {
+    bakta_job_id: jobRef1.job_id, bakta_secret: jobRef1.secret,
+    sequence_type: 'protein', status: 'INIT', workflow_mode: 'baktfold', workflow_stage: 'bakta_proteins',
+    progress_label: 'Stage 1/2: Initializing…', progress_percent: 2,
+  })
+
+  const proteinUpload = findUploadSlot(init1.uploads, 'protein_fasta')
+  if (!proteinUpload) throw new Error('Bakta V2 did not return a protein_fasta upload URL')
+
+  onProgress('Stage 1/2: Uploading protein sequences…', 8)
+  if (signal?.aborted) throw new Error('Aborted')
+  await uploadFastaToS3(proteinUpload.url, fastaContent)
+  console.log('[Bakta V2] Stage 1 protein FASTA uploaded | Size:', fastaContent.length, 'chars')
+
+  onProgress('Stage 1/2: Starting protein annotation…', 12)
+  if (signal?.aborted) throw new Error('Aborted')
+  await startV2Job(jobRef1, 'bakta_proteins', {})
+  console.log('[Bakta V2] Stage 1 job started')
+
+  if (aidbJobId) await saveBaktaState(aidbJobId, {
+    bakta_job_id: jobRef1.job_id, bakta_secret: jobRef1.secret,
+    sequence_type: 'protein', status: 'RUNNING', workflow_mode: 'baktfold', workflow_stage: 'bakta_proteins',
+    progress_label: 'Stage 1/2: Protein annotation started', progress_percent: 12,
+  })
+
+  let rawStatus1 = 'running'
+  let elapsed1 = 0
+  while (elapsed1 < MAX_WAIT_MS) {
+    if (signal?.aborted) throw new Error('Aborted')
+    await new Promise(r => setTimeout(r, POLL_INTERVAL_MS))
+    elapsed1 += POLL_INTERVAL_MS
+    const entry = await listV2Job(jobRef1)
+    if (!entry) continue
+    rawStatus1 = entry.status
+    const normalised = rawStatus1.toUpperCase() as BaktaJobStatusEnum
+    console.log(`[Bakta V2] Stage 1 poll +${Math.round(elapsed1 / 1000)}s | Status: ${rawStatus1}`)
+    const pct = Math.min(48, 12 + (elapsed1 / MAX_WAIT_MS) * 36)
+    onProgress(`Stage 1/2: Annotating proteins… (${rawStatus1})`, Math.round(pct))
+    if (aidbJobId) await saveBaktaState(aidbJobId, {
+      bakta_job_id: jobRef1.job_id, bakta_secret: jobRef1.secret,
+      sequence_type: 'protein', status: normalised, workflow_mode: 'baktfold', workflow_stage: 'bakta_proteins',
+      progress_label: `Stage 1/2: Annotating proteins… (${rawStatus1})`, progress_percent: Math.round(pct),
+    })
+    if (normalised === 'SUCCESSFUL' || normalised === 'ERROR') break
+  }
+
+  const stage1Status = rawStatus1.toUpperCase() as BaktaJobStatusEnum
+  if (stage1Status !== 'SUCCESSFUL') {
+    let logs = ''
+    try { logs = await getV2Logs(jobRef1) } catch { /* non-critical */ }
+    console.error('[Bakta V2] Stage 1 (bakta_proteins) failed | Status:', rawStatus1, '\nLogs:\n', logs)
+    console.groupEnd()
+    if (aidbJobId) await saveBaktaState(aidbJobId, {
+      bakta_job_id: jobRef1.job_id, bakta_secret: jobRef1.secret,
+      sequence_type: 'protein', status: stage1Status, workflow_mode: 'baktfold', workflow_stage: 'bakta_proteins',
+      progress_label: 'Error', progress_percent: 49,
+    })
+    throw new Error(`Bakta proteins stage ended with status: ${stage1Status}${logs ? `\n\nBakta log:\n${logs}` : ''}`)
+  }
+
+  onProgress('Stage 1/2: Retrieving protein annotation JSON…', 50)
+  const proteinsResult = await getV2Result(jobRef1)
+  const proteinsFiles = proteinsResult.result.files as BaktaProteinsResultFiles
+  const proteinsJsonText = await fetchTextOrNull(proteinsFiles.json)
+  if (!proteinsJsonText) {
+    console.groupEnd()
+    throw new Error(
+        'Could not retrieve the Bakta proteins JSON result needed to start Baktfold ' +
+        '(CORS-blocked or the result URL expired). Try again, or use plain Bakta instead.',
+    )
+  }
+
+  // ── Stage 2: baktfold (progress 50–100%) ──────────────────────────────────
+  const summary = await runBaktfoldStageFromJson(proteinsJsonText, onProgress, signal, aidbJobId, 52)
+
+  console.log('[Bakta V2] Protein + Baktfold workflow complete')
+  console.groupEnd()
+
+  return summary
+}
+
+/**
  * Main entry point – auto-detects sequence type and routes to the correct workflow.
  *
- * @param sequences  Sequences to annotate (nucleotide or protein)
- * @param options    V1 job config options (ignored for protein sequences)
- * @param onProgress Progress callback (stage label, 0–100 %)
- * @param signal     AbortSignal to cancel
- * @param aidbJobId  ID of AI-DB Job
+ * @param sequences    Sequences to annotate (nucleotide or protein)
+ * @param options      V1 job config options (ignored for protein sequences)
+ * @param onProgress   Progress callback (stage label, 0–100 %)
+ * @param signal       AbortSignal to cancel
+ * @param aidbJobId    ID of AI-DB Job
+ * @param workflowMode 'bakta' (default) or 'baktfold' – see BaktaWorkflowMode.
+ *                     Baktfold may find additional matches Bakta's sequence
+ *                     search misses, but takes considerably longer.
  */
 export async function runBaktaAnnotation(
-  sequences: Array<{ id: string; sequence: string }>,
-  options: BaktaJobOptions,
-  onProgress: BaktaProgressCallback,
-  signal?: AbortSignal,
-  aidbJobId?: string,
+    sequences: Array<{ id: string; sequence: string }>,
+    options: BaktaJobOptions,
+    onProgress: BaktaProgressCallback,
+    signal?: AbortSignal,
+    aidbJobId?: string,
+    workflowMode: BaktaWorkflowMode = 'bakta',
 ): Promise<BaktaAnnotationSummary> {
   const seqType = detectSequenceType(sequences)
-  console.log('[Bakta] Detected sequence type:', seqType)
+  console.log('[Bakta] Detected sequence type:', seqType, '| Workflow mode:', workflowMode)
 
   if (seqType === 'protein') {
-    return runProteinAnnotation(sequences, onProgress, signal, aidbJobId)
+    return workflowMode === 'baktfold'
+        ? runProteinBaktfoldAnnotation(sequences, onProgress, signal, aidbJobId)
+        : runProteinAnnotation(sequences, onProgress, signal, aidbJobId)
   } else {
-    return runNucleotideAnnotation(sequences, options, onProgress, signal, aidbJobId)
+    return workflowMode === 'baktfold'
+        ? runNucleotideBaktfoldAnnotation(sequences, options, onProgress, signal, aidbJobId)
+        : runNucleotideAnnotation(sequences, options, onProgress, signal, aidbJobId)
   }
 }
 
@@ -851,12 +1389,18 @@ export interface BaktaPersistedState {
   status: BaktaJobStatusEnum
   progress_label: string
   progress_percent: number
-  /** JSON of BaktaResultFiles | BaktaProteinsResultFiles – all S3 URLs.
+  /** JSON of BaktaResultFiles | BaktaProteinsResultFiles | BaktfoldResultFiles – all S3 URLs.
    *  Refreshed on every reload of a completed job. */
   result_files_json?: string | null
   /** Full BaktaAnnotationSummary JSON (stats + features + files).
    *  Set once on first SUCCESSFUL completion. */
   result_json?: string | null
+  /** 'bakta' (default) | 'baktfold'. Omitted by older/plain-mode runs – the
+   *  backend defaults missing values to 'bakta', so this stays optional here
+   *  rather than forcing every existing call site to set it explicitly. */
+  workflow_mode?: BaktaWorkflowMode
+  /** Only set for the protein + baktfold two-step chain (see BaktaWorkflowStage). */
+  workflow_stage?: BaktaWorkflowStage
 }
 
 /**
@@ -922,17 +1466,10 @@ export async function deleteBaktaState(aidbJobId: string): Promise<void> {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
- * Resume polling a Bakta job that is already running on the Bakta server.
- * Called when the user navigates back to a job page that has a persisted
- * RUNNING state. Re-uses the existing jobID + secret to poll until done,
- * then fetches result URLs and (optionally) the JSON result.
- *
- * @param aidbJobId  AI-DB job ID (for saving state)
- * @param persisted  The state loaded from the backend
- * @param onProgress Progress callback (stage label, 0–100 %)
- * @param signal     AbortSignal to cancel
+ * Resume polling a plain ('bakta' workflow mode) Bakta job that is already
+ * running on the Bakta server. Handles both V1 nucleotide and V2 protein.
  */
-export async function resumeBaktaAnnotation(
+async function resumePlainBaktaAnnotation(
   aidbJobId: string,
   persisted: BaktaPersistedState,
   onProgress: BaktaProgressCallback,
@@ -1172,6 +1709,338 @@ export async function resumeBaktaAnnotation(
   })
 
   return summary
+}
+
+/**
+ * Resume a nucleotide + Baktfold ('bakta_baktfold') job – single V2 job,
+ * same shape as the plain V1/V2 resume but for BaktfoldResultFiles and the
+ * wider Baktfold time budget.
+ */
+async function resumeNucleotideBaktfoldAnnotation(
+    aidbJobId: string,
+    persisted: BaktaPersistedState,
+    onProgress: BaktaProgressCallback,
+    signal?: AbortSignal,
+): Promise<BaktaAnnotationSummary> {
+  const jobRef = { job_id: persisted.bakta_job_id, secret: persisted.bakta_secret }
+  const webViewerUrl = `https://bakta.computational.bio/ui/result?jobID=${persisted.bakta_job_id}&secret=${persisted.bakta_secret}`
+
+  console.group('[Bakta] Resuming V2 nucleotide + Baktfold job')
+  console.log(`[Bakta] ID: ${persisted.bakta_job_id} | Last known status: ${persisted.status} @ ${persisted.progress_percent}%`)
+
+  if (persisted.status === 'SUCCESSFUL') {
+    console.log('[Bakta] Already SUCCESSFUL – refreshing S3 result URLs')
+    try {
+      const freshFiles = (await getV2Result(jobRef)).result.files as BaktfoldResultFiles
+      let summary: BaktaAnnotationSummary
+      if (persisted.result_json) {
+        summary = JSON.parse(persisted.result_json) as BaktaAnnotationSummary
+        summary.resultFilesBaktfold = freshFiles
+      } else {
+        summary = {
+          jobID: persisted.bakta_job_id, secret: persisted.bakta_secret,
+          jobStatus: 'SUCCESSFUL', sequenceType: 'nucleotide', workflowMode: 'baktfold',
+          resultFilesBaktfold: freshFiles, webViewerUrl,
+        }
+      }
+      await saveBaktaState(aidbJobId, {
+        bakta_job_id: persisted.bakta_job_id, bakta_secret: persisted.bakta_secret,
+        sequence_type: 'nucleotide', status: 'SUCCESSFUL', workflow_mode: 'baktfold',
+        progress_label: 'Done', progress_percent: 100,
+        result_files_json: JSON.stringify(freshFiles), result_json: JSON.stringify(summary),
+      })
+      console.groupEnd()
+      return summary
+    } catch (e) {
+      console.warn('[Bakta] Could not refresh Baktfold URLs, falling back to cache:', e)
+      if (persisted.result_json) { console.groupEnd(); return JSON.parse(persisted.result_json) as BaktaAnnotationSummary }
+      console.groupEnd()
+      throw new Error('Baktfold results are no longer available (job may have expired on the Bakta server)')
+    }
+  }
+
+  if (persisted.status === 'ERROR') {
+    console.groupEnd()
+    throw new Error('Bakta + Baktfold job had previously ended with status: ERROR')
+  }
+
+  let jobStatus: BaktaJobStatusEnum = persisted.status
+  let elapsed = 0
+  const startPct = persisted.progress_percent
+  onProgress(`Resuming… (${jobStatus})`, startPct)
+
+  while (elapsed < BAKTFOLD_MAX_WAIT_MS) {
+    if (signal?.aborted) throw new Error('Aborted')
+    await new Promise(r => setTimeout(r, POLL_INTERVAL_MS))
+    elapsed += POLL_INTERVAL_MS
+    const entry = await listV2Job(jobRef)
+    if (!entry) continue
+    jobStatus = entry.status.toUpperCase() as BaktaJobStatusEnum
+    const remaining = Math.max(0, 85 - startPct)
+    const pct = Math.min(85, startPct + (elapsed / BAKTFOLD_MAX_WAIT_MS) * remaining)
+    const label = `Running Bakta + Baktfold… (${jobStatus})`
+    onProgress(label, Math.round(pct))
+    await saveBaktaState(aidbJobId, {
+      bakta_job_id: persisted.bakta_job_id, bakta_secret: persisted.bakta_secret,
+      sequence_type: 'nucleotide', status: jobStatus, workflow_mode: 'baktfold',
+      progress_label: label, progress_percent: Math.round(pct),
+    })
+    if (jobStatus === 'SUCCESSFUL' || jobStatus === 'ERROR') break
+  }
+
+  if (jobStatus !== 'SUCCESSFUL') {
+    let logs = ''
+    try { logs = await getV2Logs(jobRef) } catch { /* non-critical */ }
+    console.groupEnd()
+    await saveBaktaState(aidbJobId, {
+      bakta_job_id: persisted.bakta_job_id, bakta_secret: persisted.bakta_secret,
+      sequence_type: 'nucleotide', status: jobStatus, workflow_mode: 'baktfold',
+      progress_label: 'Error', progress_percent: 87,
+    })
+    throw new Error(`Bakta + Baktfold job ended with status: ${jobStatus}${logs ? `\n\nBakta log:\n${logs}` : ''}`)
+  }
+
+  onProgress('Retrieving result URLs…', 90)
+  const files = (await getV2Result(jobRef)).result.files as BaktfoldResultFiles
+
+  let stats: BaktaJsonResult['stats'] | undefined
+  let features: BaktaFeature[] | undefined
+  onProgress('Parsing annotation results…', 96)
+  const json = await fetchBaktaJsonResult(files.json)
+  if (json) { stats = json.stats; features = json.features }
+
+  onProgress('Done', 100)
+  console.groupEnd()
+
+  const summary: BaktaAnnotationSummary = {
+    jobID: persisted.bakta_job_id, secret: persisted.bakta_secret,
+    jobStatus, sequenceType: 'nucleotide', workflowMode: 'baktfold',
+    resultFilesBaktfold: files, stats,
+    featureCount: features?.length, features: features?.slice(0, 200),
+    webViewerUrl,
+  }
+
+  await saveBaktaState(aidbJobId, {
+    bakta_job_id: persisted.bakta_job_id, bakta_secret: persisted.bakta_secret,
+    sequence_type: 'nucleotide', status: 'SUCCESSFUL', workflow_mode: 'baktfold',
+    progress_label: 'Done', progress_percent: 100,
+    result_files_json: JSON.stringify(files), result_json: JSON.stringify(summary),
+  })
+
+  return summary
+}
+
+/**
+ * Resume the protein + Baktfold two-step chain. Branches on which stage was
+ * persisted:
+ *   - stage 'baktfold' (or missing → treated as legacy stage-2-only data):
+ *     resume polling that job directly, same pattern as the plain V2 resume.
+ *   - stage 'bakta_proteins': the interruption happened before stage 2 even
+ *     started. Resume polling stage 1 to completion, then continue straight
+ *     into stage 2 via runBaktfoldStageFromJson – from the user's perspective
+ *     this is one continuous resume, just with an extra stage-1 wait first.
+ */
+async function resumeProteinBaktfoldAnnotation(
+    aidbJobId: string,
+    persisted: BaktaPersistedState,
+    onProgress: BaktaProgressCallback,
+    signal?: AbortSignal,
+): Promise<BaktaAnnotationSummary> {
+  const stage = persisted.workflow_stage ?? 'baktfold'
+
+  if (stage === 'bakta_proteins') {
+    console.group('[Bakta] Resuming protein + Baktfold job (stage 1/2: bakta_proteins)')
+    const jobRef1 = { job_id: persisted.bakta_job_id, secret: persisted.bakta_secret }
+
+    if (persisted.status === 'ERROR') {
+      console.groupEnd()
+      throw new Error('Bakta proteins stage had previously ended with status: ERROR')
+    }
+
+    let stage1Status: BaktaJobStatusEnum = persisted.status
+    if (stage1Status !== 'SUCCESSFUL') {
+      let elapsed = 0
+      const startPct = persisted.progress_percent
+      onProgress(`Stage 1/2: Resuming… (${stage1Status})`, startPct)
+
+      while (elapsed < MAX_WAIT_MS) {
+        if (signal?.aborted) throw new Error('Aborted')
+        await new Promise(r => setTimeout(r, POLL_INTERVAL_MS))
+        elapsed += POLL_INTERVAL_MS
+        const entry = await listV2Job(jobRef1)
+        if (!entry) continue
+        stage1Status = entry.status.toUpperCase() as BaktaJobStatusEnum
+        const remaining = Math.max(0, 48 - startPct)
+        const pct = Math.min(48, startPct + (elapsed / MAX_WAIT_MS) * remaining)
+        const label = `Stage 1/2: Annotating proteins… (${stage1Status})`
+        onProgress(label, Math.round(pct))
+        await saveBaktaState(aidbJobId, {
+          bakta_job_id: persisted.bakta_job_id, bakta_secret: persisted.bakta_secret,
+          sequence_type: 'protein', status: stage1Status, workflow_mode: 'baktfold', workflow_stage: 'bakta_proteins',
+          progress_label: label, progress_percent: Math.round(pct),
+        })
+        if (stage1Status === 'SUCCESSFUL' || stage1Status === 'ERROR') break
+      }
+    }
+
+    if (stage1Status !== 'SUCCESSFUL') {
+      let logs = ''
+      try { logs = await getV2Logs(jobRef1) } catch { /* non-critical */ }
+      console.groupEnd()
+      await saveBaktaState(aidbJobId, {
+        bakta_job_id: persisted.bakta_job_id, bakta_secret: persisted.bakta_secret,
+        sequence_type: 'protein', status: stage1Status, workflow_mode: 'baktfold', workflow_stage: 'bakta_proteins',
+        progress_label: 'Error', progress_percent: 49,
+      })
+      throw new Error(`Bakta proteins stage ended with status: ${stage1Status}${logs ? `\n\nBakta log:\n${logs}` : ''}`)
+    }
+
+    onProgress('Stage 1/2: Retrieving protein annotation JSON…', 50)
+    const proteinsFiles = (await getV2Result(jobRef1)).result.files as BaktaProteinsResultFiles
+    const proteinsJsonText = await fetchTextOrNull(proteinsFiles.json)
+    if (!proteinsJsonText) {
+      console.groupEnd()
+      throw new Error('Could not retrieve the Bakta proteins JSON result needed to start Baktfold (CORS-blocked or expired).')
+    }
+
+    const summary = await runBaktfoldStageFromJson(proteinsJsonText, onProgress, signal, aidbJobId, 52)
+    console.groupEnd()
+    return summary
+  }
+
+  // stage === 'baktfold' – stage 2 is (or was) already in flight
+  console.group('[Bakta] Resuming protein + Baktfold job (stage 2/2: baktfold)')
+  const jobRef2 = { job_id: persisted.bakta_job_id, secret: persisted.bakta_secret }
+  const webViewerUrl = `https://bakta.computational.bio/ui/result?jobID=${persisted.bakta_job_id}&secret=${persisted.bakta_secret}`
+
+  if (persisted.status === 'SUCCESSFUL') {
+    try {
+      const freshFiles = (await getV2Result(jobRef2)).result.files as BaktfoldResultFiles
+      let summary: BaktaAnnotationSummary
+      if (persisted.result_json) {
+        summary = JSON.parse(persisted.result_json) as BaktaAnnotationSummary
+        summary.resultFilesBaktfold = freshFiles
+      } else {
+        summary = {
+          jobID: persisted.bakta_job_id, secret: persisted.bakta_secret,
+          jobStatus: 'SUCCESSFUL', sequenceType: 'protein', workflowMode: 'baktfold',
+          resultFilesBaktfold: freshFiles, webViewerUrl,
+        }
+      }
+      await saveBaktaState(aidbJobId, {
+        bakta_job_id: persisted.bakta_job_id, bakta_secret: persisted.bakta_secret,
+        sequence_type: 'protein', status: 'SUCCESSFUL', workflow_mode: 'baktfold', workflow_stage: 'baktfold',
+        progress_label: 'Done', progress_percent: 100,
+        result_files_json: JSON.stringify(freshFiles), result_json: JSON.stringify(summary),
+      })
+      console.groupEnd()
+      return summary
+    } catch (e) {
+      console.warn('[Bakta] Could not refresh Baktfold URLs, falling back to cache:', e)
+      if (persisted.result_json) { console.groupEnd(); return JSON.parse(persisted.result_json) as BaktaAnnotationSummary }
+      console.groupEnd()
+      throw new Error('Baktfold results are no longer available (job may have expired on the Bakta server)')
+    }
+  }
+
+  if (persisted.status === 'ERROR') {
+    console.groupEnd()
+    throw new Error('Baktfold stage had previously ended with status: ERROR')
+  }
+
+  let jobStatus: BaktaJobStatusEnum = persisted.status
+  let elapsed = 0
+  const startPct = persisted.progress_percent
+  onProgress(`Stage 2/2: Resuming… (${jobStatus})`, startPct)
+
+  while (elapsed < BAKTFOLD_MAX_WAIT_MS) {
+    if (signal?.aborted) throw new Error('Aborted')
+    await new Promise(r => setTimeout(r, POLL_INTERVAL_MS))
+    elapsed += POLL_INTERVAL_MS
+    const entry = await listV2Job(jobRef2)
+    if (!entry) continue
+    jobStatus = entry.status.toUpperCase() as BaktaJobStatusEnum
+    const remaining = Math.max(0, 95 - startPct)
+    const pct = Math.min(95, startPct + (elapsed / BAKTFOLD_MAX_WAIT_MS) * remaining)
+    const label = `Stage 2/2: Baktfold structural analysis… (${jobStatus})`
+    onProgress(label, Math.round(pct))
+    await saveBaktaState(aidbJobId, {
+      bakta_job_id: persisted.bakta_job_id, bakta_secret: persisted.bakta_secret,
+      sequence_type: 'protein', status: jobStatus, workflow_mode: 'baktfold', workflow_stage: 'baktfold',
+      progress_label: label, progress_percent: Math.round(pct),
+    })
+    if (jobStatus === 'SUCCESSFUL' || jobStatus === 'ERROR') break
+  }
+
+  if (jobStatus !== 'SUCCESSFUL') {
+    let logs = ''
+    try { logs = await getV2Logs(jobRef2) } catch { /* non-critical */ }
+    console.groupEnd()
+    await saveBaktaState(aidbJobId, {
+      bakta_job_id: persisted.bakta_job_id, bakta_secret: persisted.bakta_secret,
+      sequence_type: 'protein', status: jobStatus, workflow_mode: 'baktfold', workflow_stage: 'baktfold',
+      progress_label: 'Error', progress_percent: 96,
+    })
+    throw new Error(`Baktfold stage ended with status: ${jobStatus}${logs ? `\n\nBakta log:\n${logs}` : ''}`)
+  }
+
+  onProgress('Retrieving Baktfold result URLs…', 97)
+  const files = (await getV2Result(jobRef2)).result.files as BaktfoldResultFiles
+
+  let stats: BaktaJsonResult['stats'] | undefined
+  let features: BaktaFeature[] | undefined
+  onProgress('Parsing annotation results…', 99)
+  const json = await fetchBaktaJsonResult(files.json)
+  if (json) { stats = json.stats; features = json.features }
+
+  onProgress('Done', 100)
+  console.groupEnd()
+
+  const summary: BaktaAnnotationSummary = {
+    jobID: persisted.bakta_job_id, secret: persisted.bakta_secret,
+    jobStatus, sequenceType: 'protein', workflowMode: 'baktfold',
+    resultFilesBaktfold: files, stats,
+    featureCount: features?.length, features: features?.slice(0, 200),
+    webViewerUrl,
+  }
+
+  await saveBaktaState(aidbJobId, {
+    bakta_job_id: persisted.bakta_job_id, bakta_secret: persisted.bakta_secret,
+    sequence_type: 'protein', status: 'SUCCESSFUL', workflow_mode: 'baktfold', workflow_stage: 'baktfold',
+    progress_label: 'Done', progress_percent: 100,
+    result_files_json: JSON.stringify(files), result_json: JSON.stringify(summary),
+  })
+
+  return summary
+}
+
+/**
+ * Resume polling a Bakta (or Bakta + Baktfold) job that is already running on
+ * the Bakta server. Called when the user navigates back to a job page that
+ * has a persisted RUNNING (or INIT) state. Dispatches on `persisted.workflow_mode`
+ * (and, for the protein two-step chain, `persisted.workflow_stage`) to the
+ * matching resume implementation.
+ *
+ * @param aidbJobId  AI-DB job ID (for saving state)
+ * @param persisted  The state loaded from the backend
+ * @param onProgress Progress callback (stage label, 0–100 %)
+ * @param signal     AbortSignal to cancel
+ */
+export async function resumeBaktaAnnotation(
+    aidbJobId: string,
+    persisted: BaktaPersistedState,
+    onProgress: BaktaProgressCallback,
+    signal?: AbortSignal,
+): Promise<BaktaAnnotationSummary> {
+  const mode = persisted.workflow_mode ?? 'bakta'
+
+  if (mode === 'baktfold' && persisted.sequence_type === 'nucleotide') {
+    return resumeNucleotideBaktfoldAnnotation(aidbJobId, persisted, onProgress, signal)
+  }
+  if (mode === 'baktfold' && persisted.sequence_type === 'protein') {
+    return resumeProteinBaktfoldAnnotation(aidbJobId, persisted, onProgress, signal)
+  }
+  return resumePlainBaktaAnnotation(aidbJobId, persisted, onProgress, signal)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -403,6 +403,29 @@ pub fn init_bakta_table(conn: &Connection) -> Result<(), rusqlite::Error> {
         tracing::info!("Bakta jobs table: migrated – added result_files_json column");
     }
 
+    // Migration: add workflow_mode ("bakta" | "baktfold") and workflow_stage
+    // (only used for the protein two-step baktfold chain). Existing rows get
+    // workflow_mode = 'bakta' via the DEFAULT so old, in-progress Bakta jobs
+    // keep behaving exactly as before.
+    if let Err(e) = conn.execute(
+        "ALTER TABLE bakta_jobs ADD COLUMN workflow_mode TEXT NOT NULL DEFAULT 'bakta'",
+        [],
+    ) {
+        if !e.to_string().contains("duplicate column name") {
+            tracing::warn!("Unexpected error during bakta_jobs workflow_mode migration: {}", e);
+        }
+    } else {
+        tracing::info!("Bakta jobs table: migrated – added workflow_mode column");
+    }
+
+    if let Err(e) = conn.execute("ALTER TABLE bakta_jobs ADD COLUMN workflow_stage TEXT", []) {
+        if !e.to_string().contains("duplicate column name") {
+            tracing::warn!("Unexpected error during bakta_jobs workflow_stage migration: {}", e);
+        }
+    } else {
+        tracing::info!("Bakta jobs table: migrated – added workflow_stage column");
+    }
+
     tracing::info!("Bakta jobs table initialized");
     Ok(())
 }
@@ -420,9 +443,9 @@ pub fn upsert_bakta_job(
         "INSERT INTO bakta_jobs
              (job_id, bakta_job_id, bakta_secret, sequence_type,
               status, progress_label, progress_percent,
-              result_files_json, result_json,
+              result_files_json, result_json, workflow_mode, workflow_stage,
               created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)
          ON CONFLICT(job_id) DO UPDATE SET
              bakta_job_id      = excluded.bakta_job_id,
              bakta_secret      = excluded.bakta_secret,
@@ -432,6 +455,8 @@ pub fn upsert_bakta_job(
              progress_percent  = excluded.progress_percent,
              result_files_json = excluded.result_files_json,
              result_json       = excluded.result_json,
+             workflow_mode     = excluded.workflow_mode,
+             workflow_stage    = excluded.workflow_stage,
              updated_at        = excluded.updated_at",
         params![
             job_id,
@@ -443,6 +468,8 @@ pub fn upsert_bakta_job(
             req.progress_percent,
             req.result_files_json,
             req.result_json,
+            req.workflow_mode,
+            req.workflow_stage,
             now,
         ],
     )?;
@@ -458,7 +485,7 @@ pub fn load_bakta_job(
     conn.query_row(
         "SELECT job_id, bakta_job_id, bakta_secret, sequence_type,
                 status, progress_label, progress_percent,
-                result_files_json, result_json,
+                result_files_json, result_json, workflow_mode, workflow_stage,
                 created_at, updated_at
          FROM bakta_jobs WHERE job_id = ?1",
         [job_id],
@@ -473,8 +500,10 @@ pub fn load_bakta_job(
                 progress_percent: row.get(6)?,
                 result_files_json: row.get(7)?,
                 result_json: row.get(8)?,
-                created_at: row.get(9)?,
-                updated_at: row.get(10)?,
+                workflow_mode: row.get(9)?,
+                workflow_stage: row.get(10)?,
+                created_at: row.get(11)?,
+                updated_at: row.get(12)?,
             })
         },
     )

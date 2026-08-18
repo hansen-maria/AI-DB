@@ -271,20 +271,32 @@ export async function createJobWithContent(
 }
 
 /**
- * Get job status and results with pagination and filtering
+ * Get job status and results with pagination and filtering.
+ *
+ * @param includeSequences Include the raw `sequence` text field (default:
+ *   false). It's by far the largest field per entry and unused by the
+ *   sequences table/filtering UI – only pass true for the dedicated
+ *   unmatched-sequences fetch used by the Bakta/Psos workflows
+ *   (see useJobPolling.ts's `loadUnmatchedSequenceText`), never for the
+ *   main bulk/polling load.
  */
 export async function getJob(
     jobId: string,
     page = 1,
     perPage = 20,
     filter: SequenceFilter = 'all',
-    advancedFilters?: AdvancedFilterOptions
+    advancedFilters?: AdvancedFilterOptions,
+    includeSequences = false,
 ): Promise<PaginatedJobResponse> {
     const params = new URLSearchParams({
         page: page.toString(),
         per_page: perPage.toString(),
         filter: advancedFilters?.filter || filter,
     });
+
+    if (includeSequences) {
+        params.set('include_sequences', 'true');
+    }
 
     // Add advanced filter parameters if provided
     if (advancedFilters) {

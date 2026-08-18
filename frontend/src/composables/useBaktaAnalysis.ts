@@ -4,7 +4,7 @@ import {
   loadBaktaState, deleteBaktaState, groupFeaturesByType,
   ingestBaktaResults, buildIngestEntries,
   type BaktaJobOptions, type BaktaAnnotationSummary,
-  type IngestResponse, type BaktaProteinFeature,
+  type IngestResponse, type BaktaProteinFeature, type BaktaWorkflowMode,
 } from '../api/bakta.ts'
 
 /**
@@ -48,6 +48,15 @@ export function useBaktaAnalysis(
   const baktaCompleteGenome = ref(false)
 
   /**
+   * 'bakta' (default) | 'baktfold' – whether to also run Baktfold structural
+   * analysis. Baktfold may find additional matches Bakta's sequence-based
+   * search misses, but takes considerably longer (for protein input it's a
+   * two-step chain on top of the normal Bakta run; for nucleotide input the
+   * Bakta API runs it as one combined job, still notably slower than plain Bakta).
+   */
+  const baktaWorkflowMode = ref<BaktaWorkflowMode>('bakta')
+
+  /**
    * Opt-OUT: whether annotations for unmatched sequences are automatically
    * written back into the AI-DB annotations DB once a Bakta run completes.
    * Defaults to enabled; the user can uncheck it in the UI to opt out.
@@ -62,6 +71,10 @@ export function useBaktaAnalysis(
     try { localStorage.setItem(AUTO_INGEST_STORAGE_KEY, String(value)) } catch { /* ignore */ }
   }
 
+  function setBaktaWorkflowMode(value: BaktaWorkflowMode) {
+    baktaWorkflowMode.value = value
+  }
+
   // Ingest state
   const baktaIngesting      = ref(false)
   const baktaIngestResult   = ref<IngestResponse | null>(null)
@@ -73,8 +86,13 @@ export function useBaktaAnalysis(
     const persisted = await loadBaktaState(jobId.value)
     if (!persisted) return
 
-    console.log('[Bakta] Persisted state | status:', persisted.status, '| type:', persisted.sequence_type)
+    console.log('[Bakta] Persisted state | status:', persisted.status, '| type:', persisted.sequence_type, '| workflow:', persisted.workflow_mode ?? 'bakta')
     showBaktaPanel.value = true
+    // Reflect the actual running/finished job's mode in the toggle, so a
+    // resumed session doesn't show "Bakta" selected while a Baktfold job
+    // (started before navigating away, possibly in an earlier browser tab)
+    // is actually what's in flight or completed.
+    baktaWorkflowMode.value = persisted.workflow_mode ?? 'bakta'
 
     if (persisted.status === 'SUCCESSFUL') {
       baktaProgressPercent.value = 100
@@ -163,6 +181,7 @@ export function useBaktaAnalysis(
         (stage, pct) => { baktaProgressLabel.value = stage; baktaProgressPercent.value = pct },
         baktaAbortController.value.signal,
         jobId.value,
+        baktaWorkflowMode.value,
       )
       if (autoIngestAnnotations.value) {
         await ingestBaktaAnnotations()
@@ -232,6 +251,7 @@ export function useBaktaAnalysis(
     showBaktaPanel, baktaAnalyzing, baktaProgressLabel, baktaProgressPercent,
     baktaError, baktaResult, baktaAbortController,
     baktaGenus, baktaSpecies, baktaCompleteGenome,
+    baktaWorkflowMode,
     autoIngestAnnotations,
     baktaIngesting, baktaIngestResult, baktaIngestError,
     // Re-exported helpers needed by the template
@@ -241,6 +261,7 @@ export function useBaktaAnalysis(
     analyzeWithBakta,
     ingestBaktaAnnotations,
     setAutoIngestAnnotations,
+    setBaktaWorkflowMode,
     resetBakta,
   }
 }
