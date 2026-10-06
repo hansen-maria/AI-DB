@@ -31,13 +31,15 @@ pub fn generate_tsv(job: &JobResponse) -> String {
         "sequence_id\tlength\tannotation_source\tgene\tproduct\t\
          cog_category\tec_ids\tgo_ids\t\
          uniref100_id\tuniparc_id\tncbi_nrp_id\t\
-         uniref100_url\tuniparc_url\tncbi_url\n",
+         uniref100_url\tuniparc_url\tncbi_url\tannotation_status\n",
     );
 
     // Data rows
     if let Some(ref sequences) = job.sequences {
         for seq in sequences {
             let source = seq.annotation_source.as_deref().unwrap_or("");
+            // curation status of community (aidb_db) matches; empty otherwise
+            let status = seq.annotation_status.as_deref().unwrap_or("");
             let gene = seq.gene.as_deref().unwrap_or("");
             let product = seq.product.as_deref().unwrap_or("");
             let cog = seq.cog_category.as_deref().unwrap_or("");
@@ -64,7 +66,7 @@ pub fn generate_tsv(job: &JobResponse) -> String {
                 .unwrap_or_default();
 
             output.push_str(&format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                 seq.id,
                 seq.length,
                 source,
@@ -79,6 +81,7 @@ pub fn generate_tsv(job: &JobResponse) -> String {
                 uniref_url,
                 uniparc_url,
                 ncbi_url,
+                status,
             ));
         }
     }

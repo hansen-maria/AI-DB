@@ -83,6 +83,27 @@ export function useJobPolling(jobId: Ref<string>) {
     }
   }
 
+  /**
+   * Fetches the raw sequence text for specific sequence ids (e.g. community
+   * entries that are re-checked with Bakta) and merges it into `allSequences`.
+   * Needs the full job payload with sequences, so it is only called on demand.
+   */
+  async function loadSequenceText(ids: string[]) {
+    if (ids.length === 0) return
+    const wanted = new Set(ids)
+    try {
+      const response = await getJob(jobId.value, 1, 10_000, 'all', undefined, true)
+      const textById = new Map(
+        (response.sequences || []).filter(s => wanted.has(s.id)).map(s => [s.id, s.sequence]),
+      )
+      allSequences.value = allSequences.value.map(s =>
+          textById.has(s.id) ? { ...s, sequence: textById.get(s.id) } : s,
+      )
+    } catch (e) {
+      console.warn('Failed to load sequence text for re-check:', e)
+    }
+  }
+
   function startPolling(onCompleted?: () => Promise<void>) {
     if (pollInterval) return
     pollInterval = window.setInterval(async () => {
@@ -111,5 +132,5 @@ export function useJobPolling(jobId: Ref<string>) {
     }
   }
 
-  return { job, allSequences, stats, loading, error, loadJob, loadStats, stopPolling }
+  return { job, allSequences, stats, loading, error, loadJob, loadStats, loadSequenceText, stopPolling }
 }

@@ -17,8 +17,9 @@ user-expandable AI-DB Annotations Database.
 - **Functional Analysis**: Interactive visualizations of COG categories, EC classes, and top genes/products
 - **Advanced Search**: Real-time client-side filtering by sequence ID, gene name, product, length, and functional categories
 - **Persistent**: Jobs are stored for 30 days
-- **User-friendly**: Jobs are associated with users via cookies
-- **Shareable**: Jobs can be shared via Job-ID
+- **User-friendly**: Jobs are associated with users via cookies (browser) or an API token (scripts/pipelines)
+- **Shareable**: Jobs can be shared via Job-ID (read-only for everyone except the owner)
+- **Pipeline-ready**: Full REST API with OpenAPI spec; no cookie handling needed
 - **Export**: Download results in TSV, JSON, FASTA, or GFF3 format
 - **Pagination**: Efficient browsing of large result sets
 - **Filtering**: Filter sequences by annotation source (hash match, no match)
@@ -71,7 +72,7 @@ ai-db/
     ├── Cargo.toml
     └── src/
         ├── main.rs                     # Entry point, router, OpenAPI
-        ├── auth.rs                     # Cookie-based authentication
+        ├── auth.rs                     # Owner auth (cookie or API token), read-only sharing
         ├── state.rs                    # AppState, DB connection, job management
         ├── storage.rs                  # SQLite job persistence (30 days)
         ├── models/                     # Data structures
@@ -180,14 +181,61 @@ Backend hashes each sequence (MD5)
 | FASTA    | `/api/job/{id}/download/fasta` | `text/x-fasta`              | Bioinformatics tools           |
 | GFF3     | `/api/job/{id}/download/gff3`  | `text/x-gff3`               | Genome browsers (IGV, JBrowse) |
 
-### Cookie-based Authorization
+### Authorization and Sharing
 
-- On first job submission, an `ai_db_owner` cookie is automatically set (valid for 1 year)
-- The job list shows only your own jobs
-- Jobs can only be deleted by their creator
-- Analysis triggers (Psos/Bakta) and ingestion require ownership
-- Downloads require ownership
-- Anyone with the Job-ID can view a job (for sharing)
+A job belongs to a random owner identifier (UUIDv4), transported in one of two ways:
+
+- **Browser**: on first job submission, an HTTP-only `ai_db_user` cookie is set automatically (valid for 1 year).
+- **API / pipelines**: generate your own UUIDv4 once (`uuidgen`) and send it with every request as
+  `Authorization: Bearer <token>` or `X-API-Key: <token>`. No cookies are needed; no cookie is set.
+  Only UUIDv4 values are accepted (anything else: `401` on job creation, anonymous otherwise).
+  Treat the token like a password. If both token and cookie are sent, the token wins.
+- **Storage**: the secret (cookie value or token) is **never stored**. The server keeps only a one-way digest
+  (`md5("aidb-owner:" + secret)`, 32 hex characters) as `owner_id`, in the jobs DB and in the KPI counters.
+  A database leak therefore does not reveal usable credentials. On startup, existing rows that still hold a
+  raw UUID are converted automatically (idempotent). Contributor ids in the curation DB are a second digest of the owner digest.
+
+```bash
+TOKEN=$(uuidgen)
+curl -H "Authorization: Bearer $TOKEN" -F "file=@proteins.faa" https://ai-db.computational.bio/api/job/
+curl -H "Authorization: Bearer $TOKEN" -OJ https://ai-db.computational.bio/api/job/<id>/download/tsv
+```
+
+| Operation                                                              | Who                                                                        |
+|------------------------------------------------------------------------|----------------------------------------------------------------------------|
+| View job, sequences, stats, saved Psos/Bakta results                   | Anyone with the Job-ID (read-only; `GET /api/job/{id}` returns `is_owner`) |
+| List jobs                                                              | Owner (only own jobs)                                                      |
+| Download (TSV/JSON/FASTA/GFF3)                                         | Owner                                                                      |
+| Delete, bulk delete, rename, retry                                     | Owner                                                                      |
+| Save/delete Psos and Bakta state, ingest into the AI-DB annotations DB | Owner                                                                      |
+
+Shared jobs are therefore **read-only** for everyone but the owner. Jobs created before token/ownership
+enforcement may have no owner and can then no longer be modified (they expire after 30 days).
+
+### Community curation of the AI-DB annotations DB
+
+Annotations contributed from Bakta runs are **verified, versioned and curated**, not blindly trusted:
+
+1. **Verification** – only hashes of the submitting job's unmatched sequences (or of its unreviewed community matches)
+   are accepted; length and all fields (UniRef/EC/GO/COG formats, text without control characters) are validated.
+   Everything else is rejected. Contributions are rate-limited per contributor (`AI_DB_INGEST_DAILY_LIMIT`).
+2. **Provenance, no overwriting** – every contribution is stored with a pseudonymous contributor id (a one-way digest;
+   the API token itself is never stored), job, timestamp, workflow (`bakta`/`baktfold`) and the PSC identity / e-value.
+   An existing annotation is never overwritten by a single contribution.
+3. **Consensus** – a new entry is `candidate`. When `AI_DB_CONFIRMATIONS` (default 2) independent contributors submit
+   the *same* annotation it becomes `confirmed`; competing annotations make it `conflicted`; if a different annotation
+   reaches the threshold on its own, it replaces the first-come one. Admins can confirm or reject entries
+   (`GET /api/admin/annotations?status=…`, `POST /api/admin/annotations/{md5}/review` with
+   `{"status":"confirmed|rejected|candidate"}`; header `X-Admin-Secret`, same secret as `ADMIN_KPI_SECRET`).
+   Reviewed entries are locked against consensus changes. In the UI, job owners can opt in to **re-check
+   unconfirmed community entries** with Bakta; an independent result counts as a vote. Entries from before curation tracking are `legacy`.
+
+Lookups return the status as `annotation_status` (`confirmed`, `candidate`, `conflicted`, `legacy`; absent for Bakta DB
+matches). The first start after the update migrates `custom_annotations.db` additively
+(see `migrate-custom-annotations-db.sql`); existing data is kept.
+
+Limits: "independent" means different API tokens / browsers, which raises the cost of manipulation but is not
+identity-proof; and the status stored in a job is the status at lookup time (retry refreshes it).
 
 ### API Documentation
 
@@ -213,9 +261,10 @@ Update `nginx.conf` to set your domain and backend address before deploying.
 ## Security
 
 - HTTPS with Let's Encrypt
-- HTTP-Only cookies with SameSite=Lax
+- HTTP-Only cookies with SameSite=Lax; API tokens are random UUIDv4 values (UUIDv4 only); only a one-way digest of the secret is stored
+- State-changing endpoints are owner-only; shared Job-IDs are read-only
 - Security headers (HSTS, X-Frame-Options)
-- CORS with explicit origins
+- CORS mirrors the request origin with credentials; cookies are SameSite=Lax (not sent on cross-site requests) and API tokens are never sent automatically by browsers
 - Non-root container user
 - Memory-safe Rust backend
 - Read-only Bakta database mount

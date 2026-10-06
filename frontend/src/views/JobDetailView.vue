@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter, RouterLink } from 'vue-router'
 import { detectSequenceType } from '../api/bakta.ts'
 import { downloadOptions, deleteJob, renameJob, retryJob, type DownloadFormat } from '../api/jobs.ts'
@@ -25,7 +25,10 @@ const router = useRouter()
 const jobId  = computed(() => route.params.id as string)
 
 // ── Polling ───────────────────────────────────────────────────────────────────
-const { job, allSequences, stats, loading, error, loadJob, stopPolling } = useJobPolling(jobId)
+const { job, allSequences, stats, loading, error, loadJob, loadSequenceText, stopPolling } = useJobPolling(jobId)
+
+// Share links are read-only: only the owner (cookie / API token) may modify
+const isOwner = computed(() => job.value?.is_owner !== false)
 
 // ── Derived cross-composable data ─────────────────────────────────────────────
 const unmatchedSequences   = computed(() => allSequences.value.filter(s => !s.annotation_source))
@@ -34,14 +37,40 @@ const detectedSequenceType = computed(() => {
   return seqs.length === 0 ? 'protein' : detectSequenceType(seqs.map(s => ({ sequence: s.sequence })))
 })
 
+// Community entries that are not yet confirmed can be re-checked with Bakta:
+// an independent result is what lets them reach consensus (server-side the
+// ingest only accepts such hashes if they belong to this job).
+const recheckCandidates = computed(() =>
+  allSequences.value.filter(s =>
+    s.annotation_source === 'aidb_db' &&
+    (s.annotation_status === 'candidate' || s.annotation_status === 'conflicted')))
+const includeRecheck = ref(false)
+watch(includeRecheck, async (on) => {
+  if (on) await loadSequenceText(recheckCandidates.value.filter(s => !s.sequence).map(s => s.id))
+})
+// Sequences sent to Bakta: unmatched ones, plus re-check candidates if opted in
+const baktaTargets = computed(() =>
+  includeRecheck.value ? [...unmatchedSequences.value, ...recheckCandidates.value] : unmatchedSequences.value)
+
+// Community entries (aidb_db matches) by curation status
+const communityStats = computed(() => {
+  const s = { confirmed: 0, unreviewed: 0 }
+  for (const seq of allSequences.value) {
+    if (seq.annotation_source !== 'aidb_db') continue
+    if (seq.annotation_status === 'confirmed') s.confirmed++
+    else s.unreviewed++
+  }
+  return s
+})
+
 // ── Sequence filters ──────────────────────────────────────────────────────────
 const filters = useSequenceFilters(allSequences, job)
 
 // ── Psos ──────────────────────────────────────────────────────────────────────
-const psos = usePsosAnalysis(jobId, unmatchedSequences, computed(() => job.value?.filename ?? undefined))
+const psos = usePsosAnalysis(jobId, unmatchedSequences, computed(() => job.value?.filename ?? undefined), isOwner)
 
 // ── Bakta ─────────────────────────────────────────────────────────────────────
-const bakta = useBaktaAnalysis(jobId, unmatchedSequences)
+const bakta = useBaktaAnalysis(jobId, baktaTargets, isOwner)
 
 // ── UI state ──────────────────────────────────────────────────────────────────
 const TABS = ['overview', 'sequences', 'analysis', 'visualization'] as const
@@ -209,7 +238,8 @@ function openBaktaConfig() {
           </div>
           <div v-else class="title-row">
             <h2>{{ job.filename || 'Direct Input' }}</h2>
-            <button class="rename-icon-btn" title="Rename job" @click="startRename">
+            <span v-if="!isOwner" class="readonly-badge" title="You opened this job via its ID. Only the owner can modify it.">Shared · read-only</span>
+            <button v-if="isOwner" class="rename-icon-btn" title="Rename job" @click="startRename">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
                 <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
@@ -217,7 +247,7 @@ function openBaktaConfig() {
             </button>
           </div>
         </div>
-        <button class="delete-btn" :disabled="deleting" @click="handleDelete">
+        <button v-if="isOwner" class="delete-btn" :disabled="deleting" @click="handleDelete">
           {{ deleting ? 'Deleting…' : 'Delete' }}
         </button>
       </div>
@@ -284,6 +314,12 @@ function openBaktaConfig() {
               </div>
             </div>
 
+            <p v-if="communityStats.confirmed + communityStats.unreviewed > 0" class="community-note">
+              {{ (communityStats.confirmed + communityStats.unreviewed).toLocaleString() }} matches come from the community database:
+              {{ communityStats.confirmed.toLocaleString() }} confirmed by independent contributors,
+              {{ communityStats.unreviewed.toLocaleString() }} unreviewed (single contribution or conflicting annotations).
+            </p>
+
             <!-- Action cards -->
             <div class="action-cards">
               <button class="action-card action-card--sequences" @click="setTab('sequences')">
@@ -325,10 +361,11 @@ function openBaktaConfig() {
                 <div class="action-card__body">
                   <template v-if="!bakta.baktaAnalyzing.value && !bakta.baktaResult.value">
                     <span class="action-card__title">Annotate Unmatched</span>
-                    <span class="action-card__desc" v-if="unmatchedSequences.length > 0">Run Bakta on {{ unmatchedSequences.length.toLocaleString() }} sequences with no database match.</span>
+                    <span class="action-card__desc" v-if="unmatchedSequences.length > 0 && !isOwner">Only the job owner can annotate the {{ unmatchedSequences.length.toLocaleString() }} unmatched sequences.</span>
+                    <span class="action-card__desc" v-else-if="unmatchedSequences.length > 0">Run Bakta on {{ unmatchedSequences.length.toLocaleString() }} sequences with no database match.</span>
                     <span class="action-card__desc" v-else>All sequences are annotated.</span>
                     <div v-if="bakta.baktaError.value" class="annotate-card-error">{{ bakta.baktaError.value }}</div>
-                    <div v-if="unmatchedSequences.length > 0" class="annotate-card-actions">
+                    <div v-if="unmatchedSequences.length > 0 && isOwner" class="annotate-card-actions">
                       <button class="annotate-card-btn" :disabled="bakta.baktaAnalyzing.value" @click.stop="startAnnotateFromOverview">
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
                         Start with defaults
@@ -347,7 +384,7 @@ function openBaktaConfig() {
                   </template>
                   <template v-else-if="bakta.baktaResult.value">
                     <span class="action-card__title">Annotation complete</span>
-                    <span class="action-card__desc">{{ bakta.baktaResult.value.featureCount ?? '?' }} features found.<span v-if="bakta.baktaIngestResult.value"> {{ bakta.baktaIngestResult.value.updated }} sequences updated.</span></span>
+                    <span class="action-card__desc">{{ bakta.baktaResult.value.featureCount ?? '?' }} features found.<span v-if="bakta.baktaIngestResult.value"> Contributed to the community database: {{ bakta.baktaIngestResult.value.ingested }} new (unreviewed), {{ bakta.baktaIngestResult.value.updated }} added to existing entries<span v-if="bakta.baktaIngestResult.value.newly_confirmed"> ({{ bakta.baktaIngestResult.value.newly_confirmed }} now confirmed)</span>.</span></span>
                     <div class="annotate-card-actions">
                       <button v-if="detectedSequenceType === 'nucleotide'" class="annotate-card-configure" @click.stop="openBaktaConfig">View results →</button>
                     </div>
@@ -362,8 +399,12 @@ function openBaktaConfig() {
               </div>
             </div>
 
-            <!-- Download section -->
-            <div class="download-section">
+            <!-- Download section (owner only) -->
+            <div v-if="!isOwner" class="download-section">
+              <h4>Download Results</h4>
+              <p class="download-note">Downloads are available to the job owner. You can browse all results in the Sequences tab.</p>
+            </div>
+            <div v-else class="download-section">
               <h4>Download Results</h4>
               <div v-if="downloadError" class="download-error">{{ downloadError }}</div>
               <div class="download-buttons">
@@ -387,6 +428,8 @@ function openBaktaConfig() {
             :filteredSequences="filters.filteredSequences.value"
             :paginatedSequences="filters.paginatedSequences.value"
             :unmatchedSequences="unmatchedSequences"
+            :recheckCount="isOwner ? recheckCandidates.length : 0"
+            :includeRecheck="includeRecheck"
             :detectedSequenceType="detectedSequenceType"
             :currentFilter="filters.currentFilter.value"
             :searchText="filters.searchText.value"
@@ -445,6 +488,7 @@ function openBaktaConfig() {
             @psos-open="psos.handleOpenInPsos()"
             @psos-download-fasta="psos.handleDownloadForPsos()"
             @psos-download-tsv="psos.downloadPsosResults()"
+            @update:includeRecheck="includeRecheck = $event"
             @update:baktaShow="bakta.showBaktaPanel.value = $event"
             @update:baktaGenus="bakta.baktaGenus.value = $event"
             @update:baktaSpecies="bakta.baktaSpecies.value = $event"
@@ -478,7 +522,7 @@ function openBaktaConfig() {
       <div v-if="job.status === 'failed'" class="error-section">
         <h3>Job Failed</h3>
         <p>{{ job.error_message || 'An unknown error occurred.' }}</p>
-        <div class="retry-row">
+        <div v-if="isOwner" class="retry-row">
           <button class="btn btn-primary" :disabled="retrying" @click="handleRetry">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
               <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
@@ -514,6 +558,9 @@ function openBaktaConfig() {
 .job-header h2, .title-row h2 { margin: 0; font-size: 1.5rem; color: var(--color-heading); }
 .rename-icon-btn { display: flex; align-items: center; padding: 0.25rem; background: none; border: none; color: var(--color-text); opacity: 0.4; cursor: pointer; border-radius: 4px; transition: opacity 0.15s; }
 .rename-icon-btn:hover { opacity: 1; }
+.readonly-badge { font-size: 0.72rem; font-weight: 600; padding: 0.15rem 0.55rem; border-radius: 99px; background: var(--color-background-soft); border: 1px solid var(--color-border); color: var(--color-text); opacity: 0.8; white-space: nowrap; }
+.community-note { margin: -1rem 0 1.5rem; font-size: 0.82rem; color: var(--color-text); opacity: 0.75; }
+.download-note { margin: 0; font-size: 0.85rem; color: var(--color-text); opacity: 0.75; }
 
 /* Inline rename form */
 .rename-form { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }

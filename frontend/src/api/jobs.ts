@@ -41,6 +41,8 @@ export interface SequenceInfo {
     annotation_source?: string | null;  // Used for filtering
     /** Release/version of the source DB (bakta_db) or ingestion timestamp (aidb_db) */
     annotation_release?: string | null;
+    /** Curation status of aidb_db matches: confirmed | candidate | conflicted | legacy */
+    annotation_status?: 'confirmed' | 'candidate' | 'conflicted' | 'legacy' | null;
     uniparc_id?: string | null;
     ncbi_nrp_id?: string | null;
     uniref100_id?: string | null;
@@ -138,6 +140,8 @@ export interface PaginatedJobResponse {
     pagination: PaginationInfo;
     filter: SequenceFilter;
     filtered_count: number;
+    /** True if the caller owns the job; false = read-only share link. Absent on older backends (treat as owner). */
+    is_owner?: boolean;
 }
 
 // Legacy type for backward compatibility

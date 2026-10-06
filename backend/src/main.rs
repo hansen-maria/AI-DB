@@ -9,7 +9,7 @@
 //! - `services` - Business logic (FASTA parsing, annotation)
 //! - `export` - Export formats (TSV, JSON, FASTA, GFF3)
 //! - `state` - Application state and database connection
-//! - `auth` - Cookie-based authentication
+//! - `auth` - Owner authentication (cookie or API token) and read-only sharing
 //! - `storage` - Logic to persist jobs for 30 days using SQLite
 
 pub mod auth;
@@ -28,7 +28,8 @@ use axum::{
 use std::net::SocketAddr;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
-use utoipa::OpenApi;
+use utoipa::openapi::security::{ApiKey, ApiKeyValue, HttpAuthScheme, HttpBuilder, SecurityScheme};
+use utoipa::{Modify, OpenApi};
 use utoipa_swagger_ui::SwaggerUi;
 
 use crate::handlers::{
@@ -50,6 +51,7 @@ use crate::state::AppState;
 /// OpenAPI documentation
 #[derive(OpenApi)]
 #[openapi(
+    modifiers(&SecurityAddon),
     info(
         title = "AI-DB REST API",
         version = "1.0.0",
@@ -60,12 +62,20 @@ use crate::state::AppState;
             - **Privacy**: Sequence data processed as MD5 hashes\n\
             - **Fast**: Hash-based annotations in seconds instead of hours\n\
             - **Comprehensive**: Access to Bakta UniRef protein annotations (~350M sequences)\n\
-            - **Fallback**: LookUp in the AI-DB database",
+            - **Fallback**: LookUp in the AI-DB database\n\n\
+            ## Authentication\n\n\
+            Jobs belong to a random identifier (UUIDv4). Browsers receive it automatically \
+            as an HTTP-only cookie. Scripts and pipelines generate their own UUIDv4 \
+            (e.g. `uuidgen`) and send it with **every** request as \
+            `Authorization: Bearer <token>` or `X-API-Key: <token>` (no cookies needed). \
+            Keep the token secret: it is the key to your jobs.\n\n\
+            Anyone who knows a job ID can **view** that job (read-only). Downloading, \
+            renaming, deleting, retrying, and Psos/Bakta analysis state require the owner.",
         license(name = "MIT", url = "https://opensource.org/licenses/MIT"),
         contact(name = "AI-DB Team", url = "https://github.com/hansen-maria/AI-DB-Web")
     ),
     tags(
-        (name = "Jobs", description = "Annotation job management - create and query jobs"),
+        (name = "Jobs", description = "Annotation job management - create and query jobs (viewing by job ID, changes owner-only)"),
         (name = "psos", description = "Psos analysis results storage"),
         (name = "bakta", description = "Bakta job state persistence"),
         (name = "admin", description = "Admin-only endpoints (shared-secret protected)"),
@@ -91,6 +101,8 @@ use crate::state::AppState;
         handlers::bakta::delete_bakta_job,
         handlers::bakta::ingest_bakta_results,
         handlers::kpi::get_kpi_overview,
+        handlers::kpi::list_admin_annotations,
+        handlers::kpi::review_admin_annotation,
         handlers::health::health_check,
         handlers::health::db_info
     ),
@@ -107,6 +119,7 @@ use crate::state::AppState;
         PaginatedJobsResponse,
         JobSummary,
         PaginatedJobResponse,
+        crate::handlers::jobs::JobViewResponse,
         FunctionalStats,
         PsosResult,
         PsosResultsResponse,
@@ -121,9 +134,49 @@ use crate::state::AppState;
         IngestCustomAnnotationsResponse,
         crate::handlers::kpi::KpiMonthEntry,
         crate::handlers::kpi::KpiOverviewResponse,
+        crate::handlers::kpi::AdminAnnotationEntry,
+        crate::handlers::kpi::AdminAnnotationsResponse,
+        crate::handlers::kpi::ReviewAnnotationRequest,
+        crate::handlers::kpi::ReviewAnnotationResponse,
     ))
 )]
 struct ApiDoc;
+
+/// Registers the owner-token schemes (`bearer_token`, `api_key`) referenced by
+/// the `security(...)` attributes of the owner-only endpoints.
+struct SecurityAddon;
+
+impl Modify for SecurityAddon {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        let components = openapi.components.get_or_insert_with(Default::default);
+        components.add_security_scheme(
+            "bearer_token",
+            SecurityScheme::Http(
+                HttpBuilder::new()
+                    .scheme(HttpAuthScheme::Bearer)
+                    .bearer_format("UUIDv4")
+                    .description(Some(
+                        "Self-generated random UUIDv4 identifying the job owner",
+                    ))
+                    .build(),
+            ),
+        );
+        components.add_security_scheme(
+            "api_key",
+            SecurityScheme::ApiKey(ApiKey::Header(ApiKeyValue::with_description(
+                "X-API-Key",
+                "Alternative to the bearer token: the same UUIDv4 in an X-API-Key header",
+            ))),
+        );
+        components.add_security_scheme(
+            "admin_secret",
+            SecurityScheme::ApiKey(ApiKey::Header(ApiKeyValue::with_description(
+                "X-Admin-Secret",
+                "Shared admin secret (ADMIN_KPI_SECRET) for KPI and curation review routes",
+            ))),
+        );
+    }
+}
 
 #[tokio::main]
 async fn main() {
@@ -150,6 +203,7 @@ async fn main() {
             axum::http::header::CONTENT_TYPE,
             axum::http::header::ACCEPT,
             axum::http::header::AUTHORIZATION,
+            axum::http::HeaderName::from_static("x-api-key"),
         ])
         .allow_credentials(true);
 
@@ -188,6 +242,15 @@ async fn main() {
         .route("/api/jobs/", get(list_jobs).delete(bulk_delete_jobs))
         // Admin KPI overview (shared-secret protected, see handlers::kpi)
         .route("/api/admin/kpis", get(get_kpi_overview))
+        // Admin review of community-curated annotations (same shared secret)
+        .route(
+            "/api/admin/annotations",
+            get(crate::handlers::kpi::list_admin_annotations),
+        )
+        .route(
+            "/api/admin/annotations/{md5}/review",
+            post(crate::handlers::kpi::review_admin_annotation),
+        )
         // Swagger UI
         .merge(SwaggerUi::new("/api/docs/").url("/api/openapi.json", ApiDoc::openapi()))
         // Middleware

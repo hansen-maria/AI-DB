@@ -1,12 +1,18 @@
 //! ============================================================================
 //! Psos results handlers
+//!
+//! Reading (GET) is public for anyone who knows the job ID (share link);
+//! save / delete require the job owner (cookie or API token).
 //! ============================================================================
 
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     Json,
 };
+use axum_extra::extract::CookieJar;
+
+use crate::auth::authorize_owner;
 
 use crate::models::{
     ErrorResponse, PsosResultsResponse, SavePsosResultsRequest, SavePsosResultsResponse,
@@ -26,23 +32,22 @@ use crate::state::AppState;
     request_body = SavePsosResultsRequest,
     responses(
         (status = 200, description = "Results saved successfully", body = SavePsosResultsResponse),
+        (status = 403, description = "Not the job owner", body = ErrorResponse),
         (status = 404, description = "Job not found", body = ErrorResponse),
         (status = 500, description = "Internal server error", body = ErrorResponse)
     ),
+    security(("bearer_token" = []), ("api_key" = [])),
     tag = "psos"
 )]
 pub async fn save_psos_results(
     State(state): State<AppState>,
+    jar: CookieJar,
+    headers: HeaderMap,
     Path(job_id): Path<String>,
     Json(request): Json<SavePsosResultsRequest>,
 ) -> Result<Json<SavePsosResultsResponse>, (StatusCode, Json<ErrorResponse>)> {
-    // Verify job exists
-    if !state.jobs().contains_key(&job_id) {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse::new(format!("Job not found: {}", job_id))),
-        ));
-    }
+    // Owner only (404 if the job does not exist, 403 for non-owners)
+    authorize_owner(&state, &job_id, &jar, &headers)?;
 
     // Save results
     let total_count = state
@@ -125,21 +130,20 @@ pub async fn get_psos_results(
     ),
     responses(
         (status = 200, description = "Results deleted"),
+        (status = 403, description = "Not the job owner", body = ErrorResponse),
         (status = 404, description = "Job not found", body = ErrorResponse)
     ),
+    security(("bearer_token" = []), ("api_key" = [])),
     tag = "psos"
 )]
 pub async fn delete_psos_results(
     State(state): State<AppState>,
+    jar: CookieJar,
+    headers: HeaderMap,
     Path(job_id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
-    // Verify job exists
-    if !state.jobs().contains_key(&job_id) {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse::new(format!("Job not found: {}", job_id))),
-        ));
-    }
+    // Owner only (404 if the job does not exist, 403 for non-owners)
+    authorize_owner(&state, &job_id, &jar, &headers)?;
 
     // Delete results
     if let Some(conn) = state.open_jobs_db() {

@@ -37,7 +37,7 @@ frontend/
     │   └── sequences.ts       # Shared filter options, COG/EC vocabularies,
     │                          # color palettes, and DB link helpers
     ├── composables/
-    │   ├── useJobPolling.ts       # Job fetching, background polling, stats
+    │   ├── useJobPolling.ts       # Job fetching, background polling, stats, on-demand sequence text
     │   ├── useSequenceFilters.ts  # Client-side filtering, pagination, download
     │   ├── usePsosAnalysis.ts     # Psos state, API calls, result persistence
     │   └── useBaktaAnalysis.ts    # Bakta state, API calls, annotation ingest
@@ -115,6 +115,8 @@ Orchestrates four composables and renders three tabs:
 - Job metadata (ID, filename, timestamps)
 - Processing statistics (total sequences, hash matches)
 - Action cards — navigate to Sequences, Functional Analysis, or start Bakta annotation
+- Shared jobs are **read-only**: if the viewer is not the owner (`is_owner === false`), download, rename, delete,
+  retry and all analysis/ingest actions are hidden or disabled
 - Download section with multiple export formats
 
 #### Sequences Tab
@@ -140,11 +142,17 @@ Orchestrates four composables and renders three tabs:
 **Sequence Table:**
 - Paginated results (20 per page)
 - Clickable database links (UniRef100, UniParc, NCBI)
+- Source chip per match: `Bakta · release` or `AI-DB · date`; AI-DB matches show `✓` when confirmed and
+  `(unconfirmed)` otherwise (tooltip explains candidate / conflicted)
 - Sticky header for scrolling
 
 **Analyse Unmatched Sequences:**
 - **Psos panel** — submits unmatched sequences to the Psos API one by one, polls for completion, and displays a results table with signal peptide, TM domain, and best-hit data. Results are persisted to the backend and restored on page reload.
-- **Bakta panel** — runs Bakta genome or protein annotation on unmatched sequences, shows live progress, and lets users ingest the resulting annotations into the local AI-DB annotations database for future hash lookups.
+- **Bakta panel** — runs Bakta genome or protein annotation on unmatched sequences, shows live progress, and stores the resulting annotations in the AI-DB annotations database (by default automatically, opt-out) as
+  unreviewed community entries. Nothing is sent to Bakta until the owner clicks the button. The owner can
+  additionally tick **"Also re-check N unconfirmed community entries"**: these sequences are sent to Bakta too, and an
+  independent result counts as a vote towards `confirmed` (or `conflicted`). Only hashes and annotation fields are stored,
+  never sequences. The result shows new entries, votes added and newly confirmed entries.
 
 #### Functional Analysis Tab
 
@@ -189,7 +197,8 @@ interface FunctionalStats {
 
 ```typescript
 // Get job with pagination and filtering
-getJob(jobId, page?, perPage?, filter?): Promise<PaginatedJobResponse>
+getJob(jobId, page?, perPage?, filter?, advancedFilters?, includeSequences?): Promise<PaginatedJobResponse>
+// response includes `is_owner`; sequences include `annotation_source`, `annotation_release`, `annotation_status`
 
 // Get functional statistics
 getJobStats(jobId): Promise<FunctionalStats>
@@ -202,6 +211,13 @@ deleteJob(jobId): Promise<void>
 // Download full results
 downloadJobResults(jobId, format): Promise<void>
 ```
+
+## Authentication
+
+The browser needs no token handling: the backend sets an HTTP-only owner cookie on the first job submission and
+the client sends it automatically (credentials included). Scripts using the REST API send their own UUIDv4 as
+`Authorization: Bearer <token>` or `X-API-Key`. The server stores only a digest of this secret. See the backend README and
+`/api/docs` for details.
 
 ## Routing
 

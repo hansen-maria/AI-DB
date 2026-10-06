@@ -31,6 +31,8 @@ function loadAutoIngestPreference(): boolean {
 export function useBaktaAnalysis(
   jobId: Ref<string>,
   unmatchedSequences: ComputedRef<any[]>,
+  /** False for read-only share-link viewers: they must not run/save/ingest. */
+  isOwner: ComputedRef<boolean>,
 ) {
   // ── State ──────────────────────────────────────────────────────────────────
 
@@ -104,7 +106,7 @@ export function useBaktaAnalysis(
         .then(summary => {
           baktaResult.value = summary
           console.log('[Bakta] Restored completed result with fresh URLs')
-          if (autoIngestAnnotations.value && !baktaIngestResult.value) {
+          if (isOwner.value && autoIngestAnnotations.value && !baktaIngestResult.value) {
             ingestBaktaAnnotations()
           }
         })
@@ -125,6 +127,14 @@ export function useBaktaAnalysis(
       return
     }
 
+    // Still running. Resuming persists progress (owner-only), so viewers of a
+    // shared job only see the last known state.
+    if (!isOwner.value) {
+      baktaProgressPercent.value = persisted.progress_percent
+      baktaProgressLabel.value   = persisted.progress_label + ' (running – owner view only)'
+      return
+    }
+
     // Still running – resume polling in background
     baktaProgressPercent.value = persisted.progress_percent
     baktaProgressLabel.value   = persisted.progress_label + ' (resuming…)'
@@ -142,7 +152,7 @@ export function useBaktaAnalysis(
     )
       .then(summary => {
         baktaResult.value = summary
-        if (autoIngestAnnotations.value && !baktaIngestResult.value) {
+        if (isOwner.value && autoIngestAnnotations.value && !baktaIngestResult.value) {
           ingestBaktaAnnotations()
         }
       })
@@ -160,6 +170,10 @@ export function useBaktaAnalysis(
   // ── Run annotation ─────────────────────────────────────────────────────────
 
   async function analyzeWithBakta() {
+    if (!isOwner.value) {
+      baktaError.value = 'Only the owner of this job can run annotations (shared jobs are read-only).'
+      return
+    }
     const sequences = unmatchedSequences.value.filter(s => s.sequence)
     if (!sequences.length) return
 
@@ -200,6 +214,10 @@ export function useBaktaAnalysis(
 
   async function ingestBaktaAnnotations() {
     if (!baktaResult.value || baktaIngesting.value) return
+    if (!isOwner.value) {
+      baktaIngestError.value = 'Only the owner of this job can save annotations (shared jobs are read-only).'
+      return
+    }
 
     baktaIngesting.value    = true
     baktaIngestError.value  = ''
@@ -227,7 +245,9 @@ export function useBaktaAnalysis(
       }
 
       if (!features.length)       { baktaIngestError.value = 'No features available to ingest.'; return }
-      const entries = buildIngestEntries(features)
+      const entries = buildIngestEntries(features, {
+        workflowMode: baktaResult.value.workflowMode ?? baktaWorkflowMode.value,
+      })
       if (!entries.length)        { baktaIngestError.value = 'No CDS features with aa_hexdigest found.'; return }
 
       baktaIngestResult.value = await ingestBaktaResults(jobId.value, entries)
@@ -240,6 +260,7 @@ export function useBaktaAnalysis(
   }
 
   function resetBakta() {
+    if (!isOwner.value) return
     deleteBaktaState(jobId.value)
     baktaResult.value      = null
     baktaError.value       = ''

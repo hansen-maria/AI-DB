@@ -4,7 +4,15 @@
 
 use parking_lot::RwLock;
 use rusqlite::{Connection, OpenFlags};
-use std::{collections::HashMap, env, path::PathBuf, sync::Arc};
+use std::{
+    collections::HashMap,
+    env,
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
 
 use crate::models::JobResponse;
 use crate::storage;
@@ -34,6 +42,8 @@ pub struct AppState {
     kpi_db_path: PathBuf,
     /// Path to AI-DB annotations DB (read-write, same schema as Bakta DB)
     custom_annotations_db_path: PathBuf,
+    /// Set once the provenance/status schema was ensured on the annotations DB
+    custom_schema_ready: Arc<AtomicBool>,
 }
 
 impl AppState {
@@ -105,6 +115,11 @@ impl AppState {
         let jobs_db =
             storage::init_database(&jobs_db_path).expect("Failed to initialize jobs database");
 
+        // Replace raw owner secrets (cookie values / API tokens) by digests
+        if let Err(e) = storage::migrate_owner_ids_to_digest(&jobs_db) {
+            tracing::error!("Failed to migrate job owner ids to digests: {}", e);
+        }
+
         // Initialize psos_results table
         if let Err(e) = storage::init_psos_table(&jobs_db) {
             tracing::warn!("Failed to initialize psos_results table: {}", e);
@@ -123,6 +138,9 @@ impl AppState {
                     tracing::warn!("Failed to initialize KPI tables: {}", e);
                 } else {
                     tracing::info!("KPI database ready at {:?}", kpi_db_path);
+                    if let Err(e) = storage::migrate_kpi_owner_ids_to_digest(&kpi_conn) {
+                        tracing::error!("Failed to migrate KPI owner ids to digests: {}", e);
+                    }
                 }
             }
             Err(e) => {
@@ -176,13 +194,19 @@ impl AppState {
 
         tracing::info!("Loaded {} existing jobs from database", job_count);
 
-        Self {
+        let state = Self {
             jobs: Arc::new(RwLock::new(jobs_map)),
             bakta_db_path,
             jobs_db_path,
             kpi_db_path,
             custom_annotations_db_path,
-        }
+            custom_schema_ready: Arc::new(AtomicBool::new(false)),
+        };
+
+        // Additive migration of the annotations DB (status / provenance), if it exists
+        let _ = state.open_custom_annotations_db();
+
+        state
     }
 
     /// Load all jobs from database
@@ -295,24 +319,73 @@ impl AppState {
             // Logged at startup already; no need to repeat on every call
             return None;
         }
-        Connection::open(&self.custom_annotations_db_path)
+        let conn = Connection::open(&self.custom_annotations_db_path)
             .map_err(|e| {
                 tracing::error!("Failed to open AI-DB annotations DB: {}", e);
                 e
             })
-            .ok()
+            .ok()?;
+
+        // One-time, idempotent, additive migration: curation status + provenance.
+        // Existing data is kept; pre-existing entries are marked 'legacy'.
+        if !self.custom_schema_ready.load(Ordering::Acquire) {
+            match storage::ensure_provenance_schema(&conn) {
+                Ok(()) => self.custom_schema_ready.store(true, Ordering::Release),
+                Err(e) => {
+                    tracing::error!("Failed to migrate AI-DB annotations DB schema: {}", e);
+                    return None;
+                }
+            }
+        }
+        Some(conn)
     }
 
-    /// Ingest custom annotation entries into the AI-DB annotations DB.
+    /// Ingest verified annotation entries as contributions of `contributor`
+    /// (pseudonymous id) from job `job_id`. Never overwrites existing entries;
+    /// see `storage::ingest_custom_annotations`.
     pub fn ingest_custom_annotations(
         &self,
         entries: &[crate::models::CustomAnnotationEntry],
-    ) -> Result<(usize, usize), String> {
+        contributor: &str,
+        job_id: &str,
+    ) -> Result<storage::IngestStats, String> {
         let conn = self
             .open_custom_annotations_db()
             .ok_or_else(|| "Failed to open AI-DB annotations DB".to_string())?;
-        storage::ingest_custom_annotations(&conn, entries)
+        storage::ingest_custom_annotations(&conn, entries, contributor, job_id)
             .map_err(|e| format!("Ingest failed: {e}"))
+    }
+
+    /// Admin: lists annotation entries with the given status.
+    pub fn list_custom_annotations(
+        &self,
+        status: &str,
+        limit: usize,
+    ) -> Result<Vec<storage::AdminAnnotationRow>, String> {
+        let conn = self
+            .open_custom_annotations_db()
+            .ok_or_else(|| "Failed to open AI-DB annotations DB".to_string())?;
+        storage::list_annotations_by_status(&conn, status, limit)
+            .map_err(|e| format!("Listing failed: {e}"))
+    }
+
+    /// Admin: sets the review status of an entry. Returns false if it does not exist
+    /// or the status is not allowed.
+    pub fn review_custom_annotation(&self, md5_hex: &str, status: &str) -> Result<bool, String> {
+        let conn = self
+            .open_custom_annotations_db()
+            .ok_or_else(|| "Failed to open AI-DB annotations DB".to_string())?;
+        storage::review_annotation(&conn, md5_hex, status)
+            .map_err(|e| format!("Review failed: {e}"))
+    }
+
+    /// Number of contributions `contributor` made in the last 24 hours (rate limit).
+    pub fn recent_custom_contributions(&self, contributor: &str) -> Result<usize, String> {
+        let conn = self
+            .open_custom_annotations_db()
+            .ok_or_else(|| "Failed to open AI-DB annotations DB".to_string())?;
+        storage::count_recent_contributions(&conn, contributor, 24)
+            .map_err(|e| format!("Rate-limit lookup failed: {e}"))
     }
 
     /// Returns the Bakta database path if configured

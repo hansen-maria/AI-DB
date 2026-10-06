@@ -10,14 +10,18 @@
 //!
 //! If ADMIN_KPI_SECRET is not set, the endpoint is disabled entirely (503)
 //! rather than silently allowing unauthenticated access.
+//!
+//! The same secret protects the community-curation review routes:
+//!   GET  /api/admin/annotations?status=candidate|confirmed|conflicted|legacy|rejected
+//!   POST /api/admin/annotations/{md5}/review   {"status": "confirmed|rejected|candidate"}
 //! ============================================================================
 
 use axum::{
-    extract::State,
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     Json,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::env;
 use utoipa::ToSchema;
 
@@ -149,4 +153,152 @@ pub async fn get_kpi_overview(
         .collect();
 
     Ok(Json(KpiOverviewResponse { months }))
+}
+// ─────────────────────────────────────────────────────────────────────────────
+// Community-curation review (admin)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct AdminAnnotationsQuery {
+    /// candidate | confirmed | conflicted | legacy | rejected (default: conflicted)
+    pub status: Option<String>,
+    /// Maximum number of rows (default 100, max 1000)
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AdminAnnotationEntry {
+    /// MD5 of the protein sequence (hex)
+    pub md5_hash: String,
+    pub status: String,
+    /// Number of independent contributors that submitted the stored annotation
+    pub confirmations: i64,
+    pub length: i64,
+    pub product: Option<String>,
+    pub uniref100_id: Option<String>,
+    /// Number of distinct contributors that submitted anything for this hash
+    pub contributors: i64,
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AdminAnnotationsResponse {
+    pub status: String,
+    pub entries: Vec<AdminAnnotationEntry>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ReviewAnnotationRequest {
+    /// confirmed | rejected | candidate
+    pub status: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ReviewAnnotationResponse {
+    pub md5_hash: String,
+    pub status: String,
+}
+
+const LISTABLE: [&str; 5] = ["candidate", "confirmed", "conflicted", "legacy", "rejected"];
+const REVIEWABLE: [&str; 3] = ["confirmed", "rejected", "candidate"];
+
+fn bad_request(msg: String) -> (StatusCode, Json<ErrorResponse>) {
+    (StatusCode::BAD_REQUEST, Json(ErrorResponse::new(msg)))
+}
+
+/// Lists curation entries of one status for review.
+///
+/// Protected by the same `X-Admin-Secret` as the KPI overview.
+#[utoipa::path(
+    get,
+    path = "/api/admin/annotations",
+    tag = "admin",
+    params(
+        ("status" = Option<String>, Query, description = "candidate | confirmed | conflicted | legacy | rejected (default conflicted)"),
+        ("limit" = Option<usize>, Query, description = "Maximum rows, default 100, max 1000"),
+    ),
+    responses(
+        (status = 200, description = "Entries with the requested status", body = AdminAnnotationsResponse),
+        (status = 400, description = "Unknown status", body = ErrorResponse),
+        (status = 401, description = "Missing or invalid admin secret", body = ErrorResponse),
+        (status = 503, description = "Endpoint not configured", body = ErrorResponse),
+    )
+)]
+pub async fn list_admin_annotations(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<AdminAnnotationsQuery>,
+) -> Result<Json<AdminAnnotationsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    check_admin_secret(&headers)?;
+    let status = q.status.unwrap_or_else(|| "conflicted".to_string());
+    if !LISTABLE.contains(&status.as_str()) {
+        return Err(bad_request(format!(
+            "Unknown status '{status}' (expected one of {})",
+            LISTABLE.join(", ")
+        )));
+    }
+    let limit = q.limit.unwrap_or(100).clamp(1, 1000);
+    let rows = state
+        .list_custom_annotations(&status, limit)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse::new(e))))?;
+    let entries = rows
+        .into_iter()
+        .map(|r| AdminAnnotationEntry {
+            md5_hash: r.md5_hash,
+            status: r.status,
+            confirmations: r.confirmations,
+            length: r.length,
+            product: r.product,
+            uniref100_id: r.uniref100_id,
+            contributors: r.contributors,
+            updated_at: r.updated_at,
+        })
+        .collect();
+    Ok(Json(AdminAnnotationsResponse { status, entries }))
+}
+
+/// Sets the review status of one entry. `confirmed` and `rejected` lock the
+/// entry against further consensus changes; `candidate` releases it again.
+#[utoipa::path(
+    post,
+    path = "/api/admin/annotations/{md5}/review",
+    tag = "admin",
+    params(("md5" = String, Path, description = "MD5 of the sequence (32 hex characters)")),
+    request_body = ReviewAnnotationRequest,
+    responses(
+        (status = 200, description = "Status updated", body = ReviewAnnotationResponse),
+        (status = 400, description = "Invalid hash or status", body = ErrorResponse),
+        (status = 401, description = "Missing or invalid admin secret", body = ErrorResponse),
+        (status = 404, description = "Entry not found", body = ErrorResponse),
+        (status = 503, description = "Endpoint not configured", body = ErrorResponse),
+    )
+)]
+pub async fn review_admin_annotation(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(md5): Path<String>,
+    Json(body): Json<ReviewAnnotationRequest>,
+) -> Result<Json<ReviewAnnotationResponse>, (StatusCode, Json<ErrorResponse>)> {
+    check_admin_secret(&headers)?;
+    let md5 = md5.to_ascii_lowercase();
+    if md5.len() != 32 || !md5.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(bad_request("md5 must be 32 hexadecimal characters".into()));
+    }
+    if !REVIEWABLE.contains(&body.status.as_str()) {
+        return Err(bad_request(format!(
+            "status must be one of {}",
+            REVIEWABLE.join(", ")
+        )));
+    }
+    match state.review_custom_annotation(&md5, &body.status) {
+        Ok(true) => Ok(Json(ReviewAnnotationResponse {
+            md5_hash: md5,
+            status: body.status,
+        })),
+        Ok(false) => Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse::new("No entry with this hash")),
+        )),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse::new(e)))),
+    }
 }

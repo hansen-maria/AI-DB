@@ -31,6 +31,12 @@ pub struct SequenceInfo {
     /// - `aidb_db` matches: ISO-8601 timestamp of when the entry was (re-)annotated
     #[serde(skip_serializing_if = "Option::is_none")]
     pub annotation_release: Option<String>,
+    /// Curation status of `aidb_db` matches: `confirmed` (reproduced by several
+    /// independent contributors or reviewed by an admin), `candidate` (single
+    /// contribution, unreviewed), `conflicted` (competing annotations) or
+    /// `legacy` (added before curation tracking). Absent for Bakta DB matches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotation_status: Option<String>,
     /// UniParc ID (if found)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uniparc_id: Option<String>,
@@ -78,6 +84,8 @@ pub struct HashLookupResult {
     /// Release/version of the source database, or ingestion timestamp for AI-DB matches.
     /// See `SequenceInfo::annotation_release` for details.
     pub annotation_release: Option<String>,
+    /// Curation status (AI-DB annotations DB matches only)
+    pub annotation_status: Option<String>,
 }
 
 impl Default for HashLookupResult {
@@ -94,6 +102,7 @@ impl Default for HashLookupResult {
             ec_ids: None,
             go_ids: None,
             annotation_release: None,
+            annotation_status: None,
         }
     }
 }

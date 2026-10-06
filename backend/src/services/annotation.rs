@@ -68,6 +68,7 @@ fn lookup_in_db(conn: &Connection, hash_bytes: &[u8], seq_length: usize) -> Hash
             ec_ids: None,
             go_ids: None,
             annotation_release: None,
+            annotation_status: None,
         })
     }) {
         Ok(mut result) => {
@@ -108,8 +109,10 @@ fn lookup_in_db(conn: &Connection, hash_bytes: &[u8], seq_length: usize) -> Hash
 fn lookup_in_aidb(conn: &Connection, hash_bytes: &[u8], seq_length: usize) -> HashLookupResult {
     // `updated_at` reflects when this entry was last (re-)annotated via a Bakta ingest –
     // used as the per-row "release" timestamp shown to the user for AI-DB matches.
-    let query = "SELECT length, uniparc_id, ncbi_nrp_id, uniref100_id, product, updated_at \
-                 FROM ups WHERE hash = ?";
+    // Entries an admin rejected are hidden; everything else is returned together
+    // with its curation status (candidate / confirmed / conflicted / legacy).
+    let query = "SELECT length, uniparc_id, ncbi_nrp_id, uniref100_id, product, updated_at, status \
+                 FROM ups WHERE hash = ? AND COALESCE(status, 'legacy') <> 'rejected'";
 
     match conn.query_row(query, [hash_bytes], |row| {
         Ok(HashLookupResult {
@@ -124,6 +127,7 @@ fn lookup_in_aidb(conn: &Connection, hash_bytes: &[u8], seq_length: usize) -> Ha
             ec_ids: None,
             go_ids: None,
             annotation_release: row.get(5).ok(),
+            annotation_status: row.get(6).ok(),
         })
     }) {
         Ok(mut result) => {
@@ -451,25 +455,28 @@ pub fn process_job_from_file(state: &AppState, job_id: &str, file_path: &Path, i
             seq_length,
         );
 
-        let (annotation, annotation_source, annotation_release) = match lookup_source {
-            "bakta_db" => {
-                bakta_db_matches += 1;
-                (
-                    format_annotation(&lookup_result),
-                    Some("bakta_db".to_string()),
-                    bakta_release.clone(),
-                )
-            }
-            "aidb_db" => {
-                aidb_db_matches += 1;
-                (
-                    format_annotation(&lookup_result),
-                    Some("aidb_db".to_string()),
-                    lookup_result.annotation_release.clone(),
-                )
-            }
-            _ => (None, None, None),
-        };
+        let (annotation, annotation_source, annotation_release, annotation_status) =
+            match lookup_source {
+                "bakta_db" => {
+                    bakta_db_matches += 1;
+                    (
+                        format_annotation(&lookup_result),
+                        Some("bakta_db".to_string()),
+                        bakta_release.clone(),
+                        None,
+                    )
+                }
+                "aidb_db" => {
+                    aidb_db_matches += 1;
+                    (
+                        format_annotation(&lookup_result),
+                        Some("aidb_db".to_string()),
+                        lookup_result.annotation_release.clone(),
+                        lookup_result.annotation_status.clone(),
+                    )
+                }
+                _ => (None, None, None, None),
+            };
 
         // Only store results if we haven't hit the limit
         if sequence_infos.len() < MAX_RESULTS {
@@ -481,6 +488,7 @@ pub fn process_job_from_file(state: &AppState, job_id: &str, file_path: &Path, i
                 annotation,
                 annotation_source,
                 annotation_release,
+                annotation_status,
                 uniparc_id: lookup_result.uniparc_id,
                 ncbi_nrp_id: lookup_result.ncbi_nrp_id,
                 uniref100_id: lookup_result.uniref100_id,
@@ -662,6 +670,11 @@ pub fn reannotate_sequences(state: &AppState, job_id: &str, sequences: Vec<Seque
                         Some(source.to_string())
                     },
                     annotation_release,
+                    annotation_status: if source == "aidb_db" {
+                        result.annotation_status.clone()
+                    } else {
+                        None
+                    },
                     uniparc_id: result.uniparc_id,
                     ncbi_nrp_id: result.ncbi_nrp_id,
                     uniref100_id: result.uniref100_id,
@@ -677,6 +690,7 @@ pub fn reannotate_sequences(state: &AppState, job_id: &str, sequences: Vec<Seque
                     annotation: None,
                     annotation_source: None,
                     annotation_release: None,
+                    annotation_status: None,
                     uniparc_id: None,
                     ncbi_nrp_id: None,
                     uniref100_id: None,

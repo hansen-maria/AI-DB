@@ -4,7 +4,7 @@
 
 use axum::{
     extract::{Multipart, Path, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
     Json,
 };
@@ -14,7 +14,7 @@ use std::{env, io::Write, path::PathBuf};
 use tempfile::Builder as TempFileBuilder;
 use uuid::Uuid;
 
-use crate::auth::{get_or_create_owner, OWNER_COOKIE_NAME};
+use crate::auth::{get_or_create_owner, owner_from_request, validate_owner};
 use crate::models::{
     AdvancedSequenceFilter, BulkDeleteRequest, BulkDeleteResponse, ErrorResponse, GetJobQuery,
     JobCreateResponse, JobResponse, JobStatus, JobSummary, PaginatedJobResponse,
@@ -25,7 +25,8 @@ use crate::services::process_job_from_file;
 use crate::services::reannotate_sequences;
 use crate::state::AppState;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 /// Maximum upload size (100 MB)
 const MAX_UPLOAD_SIZE: usize = 100 * 1024 * 1024;
@@ -44,6 +45,17 @@ pub struct IncludeSequencesQuery {
     /// sequences" workflows need it, and they request it explicitly via a
     /// separate, `filter=none`-scoped call (see useJobPolling.ts).
     pub include_sequences: Option<bool>,
+}
+
+/// `GET /api/job/{job_id}` response: the paginated job plus whether the caller
+/// owns it. Non-owners (anyone who only has the job ID) get a read-only view;
+/// the frontend uses `is_owner` to hide controls that would be rejected.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct JobViewResponse {
+    #[serde(flatten)]
+    pub job: PaginatedJobResponse,
+    /// True if the request carried the owner's cookie or API token
+    pub is_owner: bool,
 }
 
 /// Get temp directory from environment or use default
@@ -73,12 +85,14 @@ fn get_temp_dir() -> PathBuf {
         ("include_sequences" = Option<bool>, Query, description = "Include the raw sequence text field (default: false – it's the largest field per entry and unused by the table UI; only needed for Bakta/Psos 'unmatched sequences' workflows)")
     ),
     responses(
-        (status = 200, description = "Job found", body = PaginatedJobResponse),
+        (status = 200, description = "Job found (read-only for non-owners; see `is_owner`)", body = JobViewResponse),
         (status = 404, description = "Job not found", body = ErrorResponse)
     )
 )]
 pub async fn get_job(
     State(state): State<AppState>,
+    jar: CookieJar,
+    headers: HeaderMap,
     Path(job_id): Path<String>,
     Query(query): Query<GetJobQuery>,
     Query(include_seq): Query<IncludeSequencesQuery>,
@@ -106,6 +120,9 @@ pub async fn get_job(
     };
 
     let filter_str = advanced_filter.basic.as_str().to_string();
+
+    // Viewing is public; the owner flag only drives the UI (no data differs)
+    let requester = owner_from_request(&jar, &headers);
 
     let jobs = state.jobs();
 
@@ -148,7 +165,9 @@ pub async fn get_job(
                 }
             };
 
-            let response = PaginatedJobResponse {
+            let is_owner = validate_owner(job.owner_id.as_ref(), requester.as_ref());
+
+            let paginated = PaginatedJobResponse {
                 job_id: job.job_id.clone(),
                 status: job.status.clone(),
                 created_at: job.created_at,
@@ -163,6 +182,11 @@ pub async fn get_job(
                 pagination,
                 filter: filter_str,
                 filtered_count,
+            };
+
+            let response = JobViewResponse {
+                job: paginated,
+                is_owner,
             };
 
             (StatusCode::OK, Json(response)).into_response()
@@ -182,6 +206,7 @@ pub async fn get_job(
 #[utoipa::path(
     post,
     path = "/api/job/",
+    security(("bearer_token" = []), ("api_key" = [])),
     tag = "Jobs",
     request_body(
         content_type = "multipart/form-data",
@@ -195,10 +220,25 @@ pub async fn get_job(
 pub async fn create_job(
     State(state): State<AppState>,
     jar: CookieJar,
+    headers: HeaderMap,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
-    // Get or create owner ID from cookie
-    let (owner_id, jar) = get_or_create_owner(jar);
+    // Owner identity: API token (Authorization: Bearer / X-API-Key) or cookie.
+    // Browsers without a cookie get a new owner + cookie; a malformed token is
+    // rejected instead of silently creating a different owner.
+    let (owner_id, jar) = match get_or_create_owner(jar, &headers) {
+        Ok(v) => v,
+        Err(_) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(ErrorResponse::new(
+                    "Invalid API token. Send a random UUIDv4 as \
+                     'Authorization: Bearer <token>' or 'X-API-Key: <token>'.",
+                )),
+            )
+                .into_response();
+        }
+    };
 
     let mut temp_file = None;
     let mut filename: Option<String> = None;
@@ -424,6 +464,7 @@ pub struct ListJobsParams {
 #[utoipa::path(
     get,
     path = "/api/jobs/",
+    security(("bearer_token" = []), ("api_key" = [])),
     tag = "Jobs",
     params(
         ("page"     = Option<usize>,  Query, description = "Page (1-indexed, default: 1)"),
@@ -438,6 +479,7 @@ pub struct ListJobsParams {
 pub async fn list_jobs(
     State(state): State<AppState>,
     jar: CookieJar,
+    headers: HeaderMap,
     Query(query): Query<ListJobsParams>,
 ) -> impl IntoResponse {
     let page = query.page.unwrap_or(1).max(1);
@@ -446,8 +488,8 @@ pub async fn list_jobs(
         .unwrap_or(DEFAULT_PER_PAGE)
         .clamp(1, MAX_PER_PAGE);
 
-    // Get owner ID from cookie
-    let owner_id = jar.get(OWNER_COOKIE_NAME).map(|c| c.value().to_string());
+    // Get owner ID from API token or cookie
+    let owner_id = owner_from_request(&jar, &headers);
 
     let status_filter = query.status.as_deref().map(|s| s.to_lowercase());
     let search_filter = query.search.as_deref().map(|s| s.to_lowercase());
@@ -516,6 +558,7 @@ pub async fn list_jobs(
 #[utoipa::path(
     delete,
     path = "/api/job/{job_id}",
+    security(("bearer_token" = []), ("api_key" = [])),
     tag = "Jobs",
     params(
         ("job_id" = String, Path, description = "Unique job ID (UUID)")
@@ -529,24 +572,22 @@ pub async fn list_jobs(
 pub async fn delete_job(
     State(state): State<AppState>,
     jar: CookieJar,
+    headers: HeaderMap,
     Path(job_id): Path<String>,
 ) -> impl IntoResponse {
-    let owner_id = jar.get(OWNER_COOKIE_NAME).map(|c| c.value().to_string());
+    let owner_id = owner_from_request(&jar, &headers);
 
     // Check existence first (read lock)
     {
         let jobs = state.jobs();
         if let Some(job) = jobs.get(&job_id) {
-            // Only block if BOTH sides have an owner_id AND they differ.
-            // If the cookie is missing (None), allow deletion – same policy as get_job.
-            if let (Some(job_owner), Some(cookie_owner)) = (&job.owner_id, &owner_id) {
-                if job_owner != cookie_owner {
-                    return (
-                        StatusCode::FORBIDDEN,
-                        Json(ErrorResponse::new("Not authorized to delete this job")),
-                    )
-                        .into_response();
-                }
+            // Viewing is public (job ID = share link), deleting is owner-only.
+            if !validate_owner(job.owner_id.as_ref(), owner_id.as_ref()) {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(ErrorResponse::new("Not authorized to delete this job")),
+                )
+                    .into_response();
             }
         } else {
             return (
@@ -581,6 +622,7 @@ pub async fn delete_job(
 #[utoipa::path(
     patch,
     path = "/api/job/{job_id}",
+    security(("bearer_token" = []), ("api_key" = [])),
     tag = "Jobs",
     params(
         ("job_id" = String, Path, description = "Unique job ID (UUID)")
@@ -596,10 +638,11 @@ pub async fn delete_job(
 pub async fn rename_job(
     State(state): State<AppState>,
     jar: CookieJar,
+    headers: HeaderMap,
     Path(job_id): Path<String>,
     Json(body): Json<RenameJobRequest>,
 ) -> impl IntoResponse {
-    let owner_id = jar.get(OWNER_COOKIE_NAME).map(|c| c.value().to_string());
+    let owner_id = owner_from_request(&jar, &headers);
 
     let new_filename = body.filename.trim().to_string();
     if new_filename.is_empty() {
@@ -615,14 +658,12 @@ pub async fn rename_job(
         let jobs = state.jobs();
         match jobs.get(&job_id) {
             Some(job) => {
-                if let (Some(job_owner), Some(cookie_owner)) = (&job.owner_id, &owner_id) {
-                    if job_owner != cookie_owner {
-                        return (
-                            StatusCode::FORBIDDEN,
-                            Json(ErrorResponse::new("Not authorized to rename this job")),
-                        )
-                            .into_response();
-                    }
+                if !validate_owner(job.owner_id.as_ref(), owner_id.as_ref()) {
+                    return (
+                        StatusCode::FORBIDDEN,
+                        Json(ErrorResponse::new("Not authorized to rename this job")),
+                    )
+                        .into_response();
                 }
                 let mut updated = job.clone();
                 updated.filename = Some(new_filename);
@@ -655,18 +696,20 @@ pub async fn rename_job(
 #[utoipa::path(
     delete,
     path = "/api/jobs/",
+    security(("bearer_token" = []), ("api_key" = [])),
     tag = "Jobs",
     request_body = BulkDeleteRequest,
     responses(
-        (status = 200, description = "Bulk delete result", body = BulkDeleteResponse)
+        (status = 200, description = "Bulk delete result (jobs not owned by the caller are reported as 'forbidden')", body = BulkDeleteResponse)
     )
 )]
 pub async fn bulk_delete_jobs(
     State(state): State<AppState>,
     jar: CookieJar,
+    headers: HeaderMap,
     Json(body): Json<BulkDeleteRequest>,
 ) -> impl IntoResponse {
-    let owner_id = jar.get(OWNER_COOKIE_NAME).map(|c| c.value().to_string());
+    let owner_id = owner_from_request(&jar, &headers);
 
     let mut deleted = Vec::new();
     let mut not_found = Vec::new();
@@ -677,12 +720,13 @@ pub async fn bulk_delete_jobs(
         let auth_result = {
             let jobs = state.jobs();
             match jobs.get(job_id.as_str()) {
-                Some(job) => match (&job.owner_id, &owner_id) {
-                    (Some(job_owner), Some(cookie_owner)) if job_owner != cookie_owner => {
+                Some(job) => {
+                    if validate_owner(job.owner_id.as_ref(), owner_id.as_ref()) {
+                        Ok(())
+                    } else {
                         Err("forbidden")
                     }
-                    _ => Ok(()),
-                },
+                }
                 None => Err("not_found"),
             }
         };
@@ -777,6 +821,7 @@ pub async fn get_sequence(
 #[utoipa::path(
     post,
     path = "/api/job/{job_id}/retry",
+    security(("bearer_token" = []), ("api_key" = [])),
     tag = "Jobs",
     params(
         ("job_id" = String, Path, description = "Unique job ID (UUID)")
@@ -792,9 +837,10 @@ pub async fn get_sequence(
 pub async fn retry_job(
     State(state): State<AppState>,
     jar: CookieJar,
+    headers: HeaderMap,
     Path(job_id): Path<String>,
 ) -> impl IntoResponse {
-    let owner_id = jar.get(OWNER_COOKIE_NAME).map(|c| c.value().to_string());
+    let owner_id = owner_from_request(&jar, &headers);
 
     // ── Validate ──────────────────────────────────────────────────────────────
     let sequences = {
@@ -802,14 +848,12 @@ pub async fn retry_job(
         match jobs.get(&job_id) {
             Some(job) => {
                 // Ownership
-                if let (Some(job_owner), Some(cookie_owner)) = (&job.owner_id, &owner_id) {
-                    if job_owner != cookie_owner {
-                        return (
-                            StatusCode::FORBIDDEN,
-                            Json(ErrorResponse::new("Not authorized to retry this job")),
-                        )
-                            .into_response();
-                    }
+                if !validate_owner(job.owner_id.as_ref(), owner_id.as_ref()) {
+                    return (
+                        StatusCode::FORBIDDEN,
+                        Json(ErrorResponse::new("Not authorized to retry this job")),
+                    )
+                        .into_response();
                 }
                 // Must be failed
                 if job.status != JobStatus::Failed {

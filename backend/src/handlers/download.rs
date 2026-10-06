@@ -4,14 +4,14 @@
 
 use axum::{
     extract::{Path, Query, State},
-    http::{header, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::IntoResponse,
     Json,
 };
 use axum_extra::extract::CookieJar;
 use serde::Deserialize;
 
-use crate::auth::OWNER_COOKIE_NAME;
+use crate::auth::owner_from_request;
 use crate::export::{generate_content, DownloadFormat};
 use crate::models::{AdvancedSequenceFilter, ErrorResponse, JobStatus, SequenceFilter};
 use crate::state::AppState;
@@ -39,6 +39,7 @@ pub struct DownloadFilterQuery {
 #[utoipa::path(
     get,
     path = "/api/job/{job_id}/download/{format}",
+    security(("bearer_token" = []), ("api_key" = [])),
     tag = "Jobs",
     params(
         ("job_id"      = String,         Path,  description = "Job ID (UUID)"),
@@ -55,13 +56,14 @@ pub struct DownloadFilterQuery {
     responses(
         (status = 200, description = "File download", content_type = "application/octet-stream"),
         (status = 400, description = "Invalid format or job not completed"),
-        (status = 403, description = "Not authorized"),
+        (status = 403, description = "Not authorized (owner cookie or API token missing or not matching the job owner)"),
         (status = 404, description = "Job not found")
     )
 )]
 pub async fn download_job(
     State(state): State<AppState>,
     jar: CookieJar,
+    headers: HeaderMap,
     Path((job_id, format_str)): Path<(String, String)>,
     Query(filter_query): Query<DownloadFilterQuery>,
 ) -> impl IntoResponse {
@@ -96,7 +98,8 @@ pub async fn download_job(
         has_product: filter_query.has_product,
     };
 
-    let owner_id = jar.get(OWNER_COOKIE_NAME).map(|c| c.value().to_string());
+    // Owner identity: API token (Authorization: Bearer / X-API-Key) or cookie
+    let owner_id = owner_from_request(&jar, &headers);
     let jobs = state.jobs();
 
     match jobs.get(&job_id) {

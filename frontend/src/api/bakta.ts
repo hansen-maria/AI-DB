@@ -2117,17 +2117,32 @@ export interface CustomAnnotationEntry {
   ec_ids?: string | null
   go_ids?: string | null
   cog_category?: string | null
+  // Provenance (the server additionally stamps contributor, job and time)
+  source?: string | null
+  tool_version?: string | null
+  workflow_mode?: string | null
+  psc_identity?: number | null
+  psc_evalue?: number | null
 }
 
 export interface IngestResponse {
+  /** New sequences added as unreviewed candidates */
   ingested: number
+  /** Existing entries that received an additional contribution (never overwritten) */
   updated: number
+  unchanged?: number
+  /** Entries that became 'confirmed' through this contribution */
+  newly_confirmed?: number
+  /** Entries rejected by server-side verification */
+  rejected?: number
   total: number
 }
 
 /**
  * POST /api/job/{aidbJobId}/bakta/ingest
- * Sends annotation entries to the backend for insertion into the AI-DB annotations DB.
+ * Contributes annotation entries to the community-curated AI-DB annotations DB.
+ * The server verifies them against the job (only unmatched / unreviewed hashes are
+ * accepted), stores them as unreviewed candidates and never overwrites existing entries.
  */
 export async function ingestBaktaResults(
   aidbJobId: string,
@@ -2136,6 +2151,7 @@ export async function ingestBaktaResults(
   const resp = await fetch(`${API_BASE}/job/${aidbJobId}/bakta/ingest`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
     body: JSON.stringify({ entries }),
   })
   if (!resp.ok) {
@@ -2167,6 +2183,7 @@ export async function ingestBaktaResults(
  */
 export function buildIngestEntries(
   features: BaktaProteinFeature[],
+  provenance: { workflowMode?: BaktaWorkflowMode; toolVersion?: string } = {},
 ): CustomAnnotationEntry[] {
   const entries: CustomAnnotationEntry[] = []
   let annotated = 0
@@ -2226,6 +2243,11 @@ export function buildIngestEntries(
       ec_ids,
       go_ids,
       cog_category,
+      source:        'bakta-web',
+      tool_version:  provenance.toolVersion ?? null,
+      workflow_mode: provenance.workflowMode ?? null,
+      psc_identity:  psc?.identity ?? null,
+      psc_evalue:    psc?.evalue ?? null,
     })
   }
 

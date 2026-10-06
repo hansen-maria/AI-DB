@@ -14,6 +14,8 @@ export function usePsosAnalysis(
   jobId: Ref<string>,
   unmatchedSequences: ComputedRef<any[]>,
   jobFilename: ComputedRef<string | undefined>,
+  /** False for read-only share-link viewers: they must not run/save analyses. */
+  isOwner: ComputedRef<boolean>,
 ) {
   const selectedPsosProfile = ref<PsosProfile>('bacteria-gram-')
   const showPsosPanel       = ref(false)
@@ -43,6 +45,10 @@ export function usePsosAnalysis(
 
   async function analyzeWithPsos() {
     if (!unmatchedSequences.value.length) return
+    if (!isOwner.value) {
+      psosError.value = 'Only the owner of this job can run analyses (shared jobs are read-only).'
+      return
+    }
 
     psosAnalyzing.value = true
     psosError.value     = ''

@@ -3,6 +3,8 @@ import type { BaktaAnnotationSummary, IngestResponse, SequenceType, BaktaWorkflo
 
 defineProps<{
   unmatchedCount:        number
+  recheckCount:          number
+  includeRecheck:        boolean
   sequenceType:          SequenceType
   show:                  boolean
   analyzing:             boolean
@@ -31,6 +33,7 @@ const emit = defineEmits<{
   'update:autoIngestEnabled': [value: boolean]
   'analyze':                  []
   'ingest':                   []
+  'update:includeRecheck':    [v: boolean]
   'reset':                    []
 }>()
 </script>
@@ -46,7 +49,7 @@ const emit = defineEmits<{
           <path d="M7 8h4"/><path d="M13 16h4"/>
           <path d="M7.5 12H10"/><path d="M14 12h2.5"/>
         </svg>
-        <span>Analyze {{ unmatchedCount }} unmatched sequences with Bakta</span>
+        <span>Analyze {{ unmatchedCount }} {{ includeRecheck ? 'sequences' : 'unmatched sequences' }} with Bakta</span>
         <span v-if="workflowMode === 'baktfold' && !result && !analyzing" class="bakta-badge bakta-badge--baktfold">+ Baktfold</span>
         <span v-if="result"    class="bakta-badge bakta-badge--done">✓ Done{{ result.workflowMode === 'baktfold' ? ' (+ Baktfold)' : '' }}</span>
         <span v-else-if="analyzing" class="bakta-badge bakta-badge--running">Running{{ workflowMode === 'baktfold' ? ' (+ Baktfold)' : '' }}…</span>
@@ -138,6 +141,21 @@ const emit = defineEmits<{
           The {{ workflowMode === 'baktfold' ? 'bakta_proteins + baktfold' : 'bakta_proteins' }}
           workflow requires no additional configuration.
         </p>
+
+        <!-- Re-check unconfirmed community entries (enables consensus) -->
+        <div v-if="recheckCount > 0" class="bakta-autoingest-toggle">
+          <label class="bakta-checkbox-label">
+            <input :checked="includeRecheck" type="checkbox"
+                   @change="emit('update:includeRecheck', ($event.target as HTMLInputElement).checked)" />
+            Also re-check {{ recheckCount }} unconfirmed community {{ recheckCount === 1 ? 'entry' : 'entries' }}
+          </label>
+          <p class="bakta-note" style="margin:0.35rem 0 0">
+            These sequences already have a community annotation that has not been confirmed.
+            An independent Bakta result is stored as a vote: if it matches, the entry moves
+            towards <em>confirmed</em>; if it differs, it is flagged for review. Only the
+            hash and annotation are stored.
+          </p>
+        </div>
 
         <!-- Opt-out: save annotations to the AI-DB annotations DB automatically -->
         <div class="bakta-autoingest-toggle">
@@ -286,7 +304,8 @@ const emit = defineEmits<{
               sequences via hash lookup without re-running Bakta.
             </span>
             Only the MD5 hash of each sequence and the resolved annotation are stored,
-            <strong>never the sequence itself</strong>. Annotated proteins populate
+            <strong>never the sequence itself</strong>. New entries start as
+            <em>unreviewed</em> and become <em>confirmed</em> once independent submissions agree. Annotated proteins populate
             <code>ups</code>, <code>ips</code> and <code>psc</code>; hypothetical proteins are
             stored in <code>ups</code> only.
           </p>
@@ -297,8 +316,9 @@ const emit = defineEmits<{
               <polyline points="20 6 9 17 4 12"/>
             </svg>
             <span>
-              <strong>{{ ingestResult.ingested }}</strong> new sequences added,
-              <strong>{{ ingestResult.updated }}</strong> existing entries updated
+              <strong>{{ ingestResult.ingested }}</strong> new entries (unreviewed),
+              <strong>{{ ingestResult.updated }}</strong> votes added to existing entries<template v-if="ingestResult.newly_confirmed">
+              (<strong>{{ ingestResult.newly_confirmed }}</strong> newly confirmed)</template>
               ({{ ingestResult.total }} total)<span v-if="autoIngestEnabled"> — saved automatically</span>
             </span>
           </div>

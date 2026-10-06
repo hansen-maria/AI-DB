@@ -23,6 +23,15 @@ function formatAnnotationRelease(seq: any): string {
   return seq.annotation_release
 }
 
+function statusLabel(seq: any): string {
+  switch (seq.annotation_status) {
+    case 'confirmed':  return 'confirmed by independent contributors or review'
+    case 'conflicted': return 'conflicting submissions, unreviewed'
+    case 'candidate':  return 'community candidate, not yet confirmed'
+    default:           return 'unreviewed community entry'
+  }
+}
+
 function sourceBadgeTitle(seq: any): string {
   if (seq.annotation_source === 'bakta_db') {
     return seq.annotation_release
@@ -30,9 +39,10 @@ function sourceBadgeTitle(seq: any): string {
         : 'Bakta DB'
   }
   if (seq.annotation_source === 'aidb_db') {
-    return seq.annotation_release
+    const base = seq.annotation_release
         ? `AI-DB annotations DB · annotated ${formatAnnotationRelease(seq)}`
         : 'AI-DB annotations DB'
+    return `${base} · ${statusLabel(seq)}`
   }
   return ''
 }
@@ -44,6 +54,8 @@ const props = defineProps<{
   filteredSequences:    any[]
   paginatedSequences:   any[]
   unmatchedSequences:   any[]
+  recheckCount:         number
+  includeRecheck:       boolean
   detectedSequenceType: SequenceType
 
   // Filter state
@@ -119,6 +131,7 @@ const emit = defineEmits<{
 
   // Bakta
   'update:baktaShow':       [v: boolean]
+  'update:includeRecheck':  [v: boolean]
   'update:baktaGenus':      [v: string]
   'update:baktaSpecies':    [v: string]
   'update:baktaCompleteGenome': [v: boolean]
@@ -327,6 +340,8 @@ watch(() => props.paginatedSequences, (seqs) => { validateVisibleLinks(seqs) }, 
                         class="db-link aidb-source has-tooltip"
                         :data-tooltip="sourceBadgeTitle(seq)" :aria-label="sourceBadgeTitle(seq)">
                       AI-DB<template v-if="seq.annotation_release"> · {{ formatAnnotationRelease(seq) }}</template>
+                      <template v-if="seq.annotation_status === 'confirmed'"> ✓</template>
+                      <template v-else> (unconfirmed)</template>
                     </span>
                 </div>
               </template>
@@ -368,7 +383,9 @@ watch(() => props.paginatedSequences, (seqs) => { validateVisibleLinks(seqs) }, 
     />
 
     <BaktaPanel
-      :unmatchedCount="unmatchedSequences.length"
+      :unmatchedCount="unmatchedSequences.length + (includeRecheck ? recheckCount : 0)"
+      :recheckCount="recheckCount"
+      :includeRecheck="includeRecheck"
       :sequenceType="detectedSequenceType"
       :show="baktaShow"
       :analyzing="baktaAnalyzing"
@@ -386,6 +403,7 @@ watch(() => props.paginatedSequences, (seqs) => { validateVisibleLinks(seqs) }, 
       :ingestResult="baktaIngestResult"
       :ingestError="baktaIngestError"
       :groupFeaturesByType="groupFeaturesByType"
+      @update:includeRecheck="emit('update:includeRecheck', $event)"
       @update:show="emit('update:baktaShow', $event)"
       @update:genus="emit('update:baktaGenus', $event)"
       @update:species="emit('update:baktaSpecies', $event)"
