@@ -37,13 +37,13 @@ const detectedSequenceType = computed(() => {
   return seqs.length === 0 ? 'protein' : detectSequenceType(seqs.map(s => ({ sequence: s.sequence })))
 })
 
-// Community entries that are not yet confirmed can be re-checked with Bakta:
+// Community entries that are not confirmed (candidate, conflicted, legacy or
+// without status in older jobs) can be re-checked with Bakta:
 // an independent result is what lets them reach consensus (server-side the
 // ingest only accepts such hashes if they belong to this job).
 const recheckCandidates = computed(() =>
-  allSequences.value.filter(s =>
-    s.annotation_source === 'aidb_db' &&
-    (s.annotation_status === 'candidate' || s.annotation_status === 'conflicted')))
+    allSequences.value.filter(s =>
+        s.annotation_source === 'aidb_db' && s.annotation_status !== 'confirmed'))
 const includeRecheck = ref(false)
 const recheckLoading = ref(false)
 watch(includeRecheck, async (on) => {
