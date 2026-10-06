@@ -154,6 +154,9 @@ export interface V2UploadLink {
   upload_kind: string
   required: boolean
   url: string
+  /** Headers that must be sent unchanged with the presigned PUT request
+   *  (part of the signature). Added to the V2 API; absent in older responses. */
+  headers?: Record<string, string>
 }
 
 export interface V2InitResponse {
@@ -436,11 +439,26 @@ export function detectSequenceType(
 // Shared upload helper
 // ═══════════════════════════════════════════════════════════════════════════
 
-/** PUT FASTA content to a presigned S3 URL (used by both V1 and V2). */
-export async function uploadFastaToS3(uploadUrl: string, fastaContent: string): Promise<void> {
+/**
+ * PUT text content to a presigned S3 URL (used by both V1 and V2).
+ * V2 upload links carry `headers` that must be sent unchanged with the PUT
+ * (they are part of the presigned signature); pass them via `headers`.
+ * V1 links are plain URLs without headers.
+ */
+export async function uploadFastaToS3(
+    uploadUrl: string,
+    fastaContent: string,
+    headers?: Record<string, string>,
+): Promise<void> {
+  const hasHeaders = !!headers && Object.keys(headers).length > 0
   const resp = await fetch(uploadUrl, {
     method: 'PUT',
-    body: new Blob([fastaContent], { type: 'text/plain' }),
+    // No Content-Type is sent (a Blob without type adds none, a string body
+    // would add text/plain), exactly like Bakta Web's own uploads, which the
+    // storage accepts.
+    // Headers handed out with the presigned link are sent unchanged.
+    ...(hasHeaders ? { headers } : {}),
+    body: new Blob([fastaContent]),
   })
   if (!resp.ok) {
     throw new Error(`S3 upload failed (${resp.status}): ${resp.statusText}`)
@@ -854,7 +872,7 @@ async function runNucleotideBaktfoldAnnotation(
 
   onProgress('Uploading nucleotide sequences…', 10)
   if (signal?.aborted) throw new Error('Aborted')
-  await uploadFastaToS3(genomeUpload.url, fastaContent)
+  await uploadFastaToS3(genomeUpload.url, fastaContent, genomeUpload.headers)
   console.log('[Bakta V2] Genome FASTA uploaded | Size:', fastaContent.length, 'chars')
 
   // 3 – Start
@@ -993,7 +1011,7 @@ async function runProteinAnnotation(
 
   onProgress('Uploading protein sequences…', 15)
   if (signal?.aborted) throw new Error('Aborted')
-  await uploadFastaToS3(proteinUpload.url, fastaContent)
+  await uploadFastaToS3(proteinUpload.url, fastaContent, proteinUpload.headers)
   console.log('[Bakta V2] Protein FASTA uploaded | Size:', fastaContent.length, 'chars')
 
   // 3 – Start
@@ -1132,7 +1150,7 @@ async function runBaktfoldStageFromJson(
   const uploadPct = startPct + 6
   onProgress('Stage 2/2: Uploading Bakta result for Baktfold…', uploadPct)
   if (signal?.aborted) throw new Error('Aborted')
-  await uploadFastaToS3(jsonUpload.url, proteinsJsonText)
+  await uploadFastaToS3(jsonUpload.url, proteinsJsonText, jsonUpload.headers)
   console.log('[Bakta V2] Bakta JSON uploaded to Baktfold job | Size:', proteinsJsonText.length, 'chars')
 
   const startJobPct = startPct + 10
@@ -1260,7 +1278,7 @@ async function runProteinBaktfoldAnnotation(
 
   onProgress('Stage 1/2: Uploading protein sequences…', 8)
   if (signal?.aborted) throw new Error('Aborted')
-  await uploadFastaToS3(proteinUpload.url, fastaContent)
+  await uploadFastaToS3(proteinUpload.url, fastaContent, proteinUpload.headers)
   console.log('[Bakta V2] Stage 1 protein FASTA uploaded | Size:', fastaContent.length, 'chars')
 
   onProgress('Stage 1/2: Starting protein annotation…', 12)
