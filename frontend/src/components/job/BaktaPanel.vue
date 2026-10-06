@@ -39,7 +39,7 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <div v-if="unmatchedCount > 0" class="bakta-panel">
+  <div v-if="unmatchedCount > 0 || recheckCount > 0" class="bakta-panel">
     <!-- Collapsible header -->
     <div class="bakta-header" @click="emit('update:show', !show)">
       <div class="bakta-title">

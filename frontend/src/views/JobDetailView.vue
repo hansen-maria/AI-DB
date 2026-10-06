@@ -45,12 +45,19 @@ const recheckCandidates = computed(() =>
     s.annotation_source === 'aidb_db' &&
     (s.annotation_status === 'candidate' || s.annotation_status === 'conflicted')))
 const includeRecheck = ref(false)
+const recheckLoading = ref(false)
 watch(includeRecheck, async (on) => {
-  if (on) await loadSequenceText(recheckCandidates.value.filter(s => !s.sequence).map(s => s.id))
+  if (!on) return
+  recheckLoading.value = true
+  try {
+    await loadSequenceText(recheckCandidates.value.filter(s => !s.sequence).map(s => s.id))
+  } finally {
+    recheckLoading.value = false
+  }
 })
 // Sequences sent to Bakta: unmatched ones, plus re-check candidates if opted in
 const baktaTargets = computed(() =>
-  includeRecheck.value ? [...unmatchedSequences.value, ...recheckCandidates.value] : unmatchedSequences.value)
+    includeRecheck.value ? [...unmatchedSequences.value, ...recheckCandidates.value] : unmatchedSequences.value)
 
 // Community entries (aidb_db matches) by curation status
 const communityStats = computed(() => {
@@ -352,7 +359,7 @@ function openBaktaConfig() {
 
               <!-- Annotate card -->
               <div class="action-card action-card--annotate"
-                   :class="{ 'action-card--disabled': unmatchedSequences.length === 0, 'action-card--analyzing': bakta.baktaAnalyzing.value, 'action-card--done': !!bakta.baktaResult.value && !bakta.baktaAnalyzing.value }">
+                   :class="{ 'action-card--disabled': unmatchedSequences.length === 0 && recheckCandidates.length === 0, 'action-card--analyzing': bakta.baktaAnalyzing.value, 'action-card--done': !!bakta.baktaResult.value && !bakta.baktaAnalyzing.value }">
                 <div class="action-card__icon">
                   <svg v-if="!bakta.baktaAnalyzing.value && !bakta.baktaResult.value" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 3c9 0 9 18 18 18"/><path d="M21 3C12 3 12 21 3 21"/><path d="M7 8h4"/><path d="M13 16h4"/><path d="M7.5 12H10"/><path d="M14 12h2.5"/></svg>
                   <svg v-else-if="bakta.baktaAnalyzing.value" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="spin-icon"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
@@ -360,13 +367,18 @@ function openBaktaConfig() {
                 </div>
                 <div class="action-card__body">
                   <template v-if="!bakta.baktaAnalyzing.value && !bakta.baktaResult.value">
-                    <span class="action-card__title">Annotate Unmatched</span>
-                    <span class="action-card__desc" v-if="unmatchedSequences.length > 0 && !isOwner">Only the job owner can annotate the {{ unmatchedSequences.length.toLocaleString() }} unmatched sequences.</span>
+                    <span class="action-card__title">{{ unmatchedSequences.length > 0 ? 'Annotate Unmatched' : 'Re-check Community Entries' }}</span>
+                    <span class="action-card__desc" v-if="(unmatchedSequences.length > 0 || recheckCandidates.length > 0) && !isOwner">Only the job owner can annotate sequences or re-check community entries.</span>
                     <span class="action-card__desc" v-else-if="unmatchedSequences.length > 0">Run Bakta on {{ unmatchedSequences.length.toLocaleString() }} sequences with no database match.</span>
+                    <span class="action-card__desc" v-else-if="recheckCandidates.length > 0">All sequences have a match, but {{ recheckCandidates.length.toLocaleString() }} community {{ recheckCandidates.length === 1 ? 'entry is' : 'entries are' }} unconfirmed. An independent Bakta run can confirm or contest them.</span>
                     <span class="action-card__desc" v-else>All sequences are annotated.</span>
+                    <label v-if="isOwner && recheckCandidates.length > 0" class="annotate-card-recheck" @click.stop>
+                      <input type="checkbox" v-model="includeRecheck" />
+                      {{ unmatchedSequences.length > 0 ? 'Also re-check' : 'Include' }} {{ recheckCandidates.length.toLocaleString() }} unconfirmed community {{ recheckCandidates.length === 1 ? 'entry' : 'entries' }}
+                    </label>
                     <div v-if="bakta.baktaError.value" class="annotate-card-error">{{ bakta.baktaError.value }}</div>
-                    <div v-if="unmatchedSequences.length > 0 && isOwner" class="annotate-card-actions">
-                      <button class="annotate-card-btn" :disabled="bakta.baktaAnalyzing.value" @click.stop="startAnnotateFromOverview">
+                    <div v-if="isOwner && baktaTargets.length > 0" class="annotate-card-actions">
+                      <button class="annotate-card-btn" :disabled="bakta.baktaAnalyzing.value || recheckLoading" @click.stop="startAnnotateFromOverview">
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
                         Start with defaults
                       </button>
@@ -392,6 +404,7 @@ function openBaktaConfig() {
                 </div>
                 <div v-if="!bakta.baktaAnalyzing.value && !bakta.baktaResult.value" class="action-card__meta">
                   <span class="action-card__badge" :class="unmatchedSequences.length > 0 ? 'action-card__badge--amber' : 'action-card__badge--muted'">{{ unmatchedSequences.length.toLocaleString() }} unmatched</span>
+                  <span v-if="recheckCandidates.length > 0" class="action-card__badge action-card__badge--muted">{{ recheckCandidates.length.toLocaleString() }} unconfirmed</span>
                 </div>
                 <div v-else-if="bakta.baktaAnalyzing.value" class="action-card__meta">
                   <span class="action-card__badge action-card__badge--amber">{{ Math.round(bakta.baktaProgressPercent.value) }}%</span>
@@ -680,4 +693,5 @@ function openBaktaConfig() {
 @media (max-width:860px) { .action-cards { grid-template-columns:1fr; } .action-card__desc { display:none; } }
 @media (max-width:1100px) and (min-width:861px) { .action-cards { grid-template-columns:1fr 1fr; } }
 @media (max-width:600px) { .job-header { flex-direction:column; gap:1rem; } .info-grid { grid-template-columns:1fr; } .results-stats { grid-template-columns:1fr; } .tab-btn { flex:1; padding:0.6rem 0.5rem; font-size:0.85rem; } }
+.annotate-card-recheck { display: flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; margin-top: 0.4rem; cursor: pointer; }
 </style>
