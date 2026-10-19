@@ -15,6 +15,19 @@ const BAKTA_API_BASE = 'https://api.bakta.computational.bio/api'
 const BAKTA_V1 = `${BAKTA_API_BASE}/v1`
 const BAKTA_V2 = `${BAKTA_API_BASE}/v2`
 
+/**
+ * Baktfold for protein input is not supported by the Bakta Web API: its
+ * 'baktfold' workflow only accepts a genome Bakta JSON (`baktfold run`), not a
+ * bakta_proteins result (`baktfold proteins` is not implemented server-side).
+ * The two-step protein chain below is kept for when that changes
+ */
+export const PROTEIN_BAKTFOLD_SUPPORTED = false
+
+export const PROTEIN_BAKTFOLD_UNSUPPORTED_MESSAGE =
+    'Bakta + Baktfold is currently only available for nucleotide sequences. ' +
+    'The Bakta Web API does not support Baktfold for protein input yet – ' +
+    'please use plain Bakta for protein sequences.'
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Shared types
 // ═══════════════════════════════════════════════════════════════════════════
@@ -427,14 +440,14 @@ export function buildV2Config(options: BaktaJobOptions = {}): BaktaV2Config {
  * Definitively protein-only letters: E, F, I, L, P, Q
  */
 export function detectSequenceType(
-  sequences: Array<{ sequence: string }>,
+    sequences: Array<{ sequence: string }>,
 ): SequenceType {
   const PROTEIN_ONLY = /[EFILPQefilpq]/
   // Sample up to the first 10 sequences, 200 chars each
   const sample = sequences
-    .slice(0, 10)
-    .map(s => s.sequence.slice(0, 200))
-    .join('')
+      .slice(0, 10)
+      .map(s => s.sequence.slice(0, 200))
+      .join('')
   return PROTEIN_ONLY.test(sample) ? 'protein' : 'nucleotide'
 }
 
@@ -449,9 +462,9 @@ export function detectSequenceType(
  * V1 links are plain URLs without headers.
  */
 export async function uploadFastaToS3(
-  uploadUrl: string,
-  fastaContent: string,
-  headers?: Record<string, string>,
+    uploadUrl: string,
+    fastaContent: string,
+    headers?: Record<string, string>,
 ): Promise<void> {
   const hasHeaders = !!headers && Object.keys(headers).length > 0
   const resp = await fetch(uploadUrl, {
@@ -485,8 +498,8 @@ export async function fetchBaktaJsonResult(jsonUrl: string): Promise<BaktaJsonRe
 
 /** POST /api/v1/job/init */
 export async function initBaktaJob(
-  name: string,
-  repliconTableType: RepliconTableType = 'TSV',
+    name: string,
+    repliconTableType: RepliconTableType = 'TSV',
 ): Promise<BaktaInitResponse> {
   const resp = await fetch(`${BAKTA_V1}/job/init`, {
     method: 'POST',
@@ -502,8 +515,8 @@ export async function initBaktaJob(
 
 /** POST /api/v1/job/start */
 export async function startBaktaJob(
-  job: BaktaJobRef,
-  config: BaktaJobConfig,
+    job: BaktaJobRef,
+    config: BaktaJobConfig,
 ): Promise<void> {
   const resp = await fetch(`${BAKTA_V1}/job/start`, {
     method: 'POST',
@@ -576,8 +589,8 @@ export async function getBaktaVersion() {
 
 /** POST /api/v2/job/init */
 export async function initV2Job(
-  name: string,
-  workflowKind: string = 'bakta_proteins',
+    name: string,
+    workflowKind: string = 'bakta_proteins',
 ): Promise<V2InitResponse> {
   const resp = await fetch(`${BAKTA_V2}/job/init`, {
     method: 'POST',
@@ -597,9 +610,9 @@ export async function initV2Job(
  * a BaktaV2Config for 'bakta_baktfold' (see buildV2Config()).
  */
 export async function startV2Job(
-  job: JobReference,
-  workflowKind: string = 'bakta_proteins',
-  config: BaktaV2Config | Record<string, never> = {},
+    job: JobReference,
+    workflowKind: string = 'bakta_proteins',
+    config: BaktaV2Config | Record<string, never> = {},
 ): Promise<void> {
   const resp = await fetch(`${BAKTA_V2}/job/start`, {
     method: 'POST',
@@ -652,8 +665,8 @@ export async function getV2Logs(job: JobReference): Promise<string> {
   if (!resp.ok) throw new Error(`Bakta V2 logs failed (${resp.status}): ${resp.statusText}`)
   const data: V2LogsResponse = await resp.json()
   return data.stages
-    .map(s => `[${s.stage} – ${s.status}]\n${s.content}`)
-    .join('\n\n')
+      .map(s => `[${s.stage} – ${s.status}]\n${s.content}`)
+      .join('\n\n')
 }
 
 /** DELETE /api/v2/job/delete?job_id=&secret= */
@@ -700,11 +713,11 @@ async function fetchTextOrNull(url: string): Promise<string | null> {
  * init → S3 upload → start → poll → result → parse JSON
  */
 async function runNucleotideAnnotation(
-  sequences: Array<{ id: string; sequence: string }>,
-  options: BaktaJobOptions,
-  onProgress: BaktaProgressCallback,
-  signal?: AbortSignal,
-  aidbJobId?: string,
+    sequences: Array<{ id: string; sequence: string }>,
+    options: BaktaJobOptions,
+    onProgress: BaktaProgressCallback,
+    signal?: AbortSignal,
+    aidbJobId?: string,
 ): Promise<BaktaAnnotationSummary> {
   const fastaContent = sequences.map(s => `>${s.id}\n${s.sequence}`).join('\n')
   const jobName = `aidb-nucleotide-${Date.now()}`
@@ -980,10 +993,10 @@ async function runNucleotideBaktfoldAnnotation(
  * init → find protein_fasta upload slot → S3 upload → start → poll → result → parse JSON
  */
 async function runProteinAnnotation(
-  sequences: Array<{ id: string; sequence: string }>,
-  onProgress: BaktaProgressCallback,
-  signal?: AbortSignal,
-  aidbJobId?: string,
+    sequences: Array<{ id: string; sequence: string }>,
+    onProgress: BaktaProgressCallback,
+    signal?: AbortSignal,
+    aidbJobId?: string,
 ): Promise<BaktaAnnotationSummary> {
   const fastaContent = sequences.map(s => `>${s.id}\n${s.sequence}`).join('\n')
   const jobName = `aidb-proteins-${Date.now()}`
@@ -1375,6 +1388,9 @@ export async function runBaktaAnnotation(
   console.log('[Bakta] Detected sequence type:', seqType, '| Workflow mode:', workflowMode)
 
   if (seqType === 'protein') {
+    if (workflowMode === 'baktfold' && !PROTEIN_BAKTFOLD_SUPPORTED) {
+      throw new Error(PROTEIN_BAKTFOLD_UNSUPPORTED_MESSAGE)
+    }
     return workflowMode === 'baktfold'
         ? runProteinBaktfoldAnnotation(sequences, onProgress, signal, aidbJobId)
         : runProteinAnnotation(sequences, onProgress, signal, aidbJobId)
@@ -1430,8 +1446,8 @@ export interface BaktaPersistedState {
  * Silently swallows errors – persistence is best-effort, the workflow continues either way.
  */
 export async function saveBaktaState(
-  aidbJobId: string,
-  state: BaktaPersistedState,
+    aidbJobId: string,
+    state: BaktaPersistedState,
 ): Promise<void> {
   try {
     const resp = await fetch(`${API_BASE}/job/${aidbJobId}/bakta`, {
@@ -1454,7 +1470,7 @@ export async function saveBaktaState(
  * Returns null when no Bakta job has been started for this AI-DB job.
  */
 export async function loadBaktaState(
-  aidbJobId: string,
+    aidbJobId: string,
 ): Promise<BaktaPersistedState | null> {
   try {
     const resp = await fetch(`${API_BASE}/job/${aidbJobId}/bakta`)
@@ -1491,10 +1507,10 @@ export async function deleteBaktaState(aidbJobId: string): Promise<void> {
  * running on the Bakta server. Handles both V1 nucleotide and V2 protein.
  */
 async function resumePlainBaktaAnnotation(
-  aidbJobId: string,
-  persisted: BaktaPersistedState,
-  onProgress: BaktaProgressCallback,
-  signal?: AbortSignal,
+    aidbJobId: string,
+    persisted: BaktaPersistedState,
+    onProgress: BaktaProgressCallback,
+    signal?: AbortSignal,
 ): Promise<BaktaAnnotationSummary> {
   const jobRef = { jobID: persisted.bakta_job_id, secret: persisted.bakta_secret }
   const v2Ref  = { job_id: persisted.bakta_job_id, secret: persisted.bakta_secret }
@@ -1513,8 +1529,8 @@ async function resumePlainBaktaAnnotation(
     try {
       // Get fresh presigned URLs from Bakta
       const freshFiles = isProtein
-        ? (await getV2Result(v2Ref)).result.files
-        : (await getBaktaResult(jobRef)).ResultFiles
+          ? (await getV2Result(v2Ref)).result.files
+          : (await getBaktaResult(jobRef)).ResultFiles
 
       console.log('[Bakta] Fresh URLs obtained | Files:', Object.keys(freshFiles).join(', '))
 
@@ -1537,8 +1553,8 @@ async function resumePlainBaktaAnnotation(
           sequenceType: persisted.sequence_type,
           webViewerUrl,
           ...(isProtein
-            ? { resultFilesProtein: freshFiles as BaktaProteinsResultFiles }
-            : { resultFilesNucleotide: freshFiles as BaktaResultFiles }),
+              ? { resultFilesProtein: freshFiles as BaktaProteinsResultFiles }
+              : { resultFilesNucleotide: freshFiles as BaktaResultFiles }),
         }
       }
 
@@ -1575,8 +1591,8 @@ async function resumePlainBaktaAnnotation(
           sequenceType: persisted.sequence_type,
           webViewerUrl,
           ...(isProtein
-            ? { resultFilesProtein: cachedFiles as BaktaProteinsResultFiles }
-            : { resultFilesNucleotide: cachedFiles as BaktaResultFiles }),
+              ? { resultFilesProtein: cachedFiles as BaktaProteinsResultFiles }
+              : { resultFilesNucleotide: cachedFiles as BaktaResultFiles }),
         }
       }
       console.groupEnd()
@@ -1604,19 +1620,19 @@ async function resumePlainBaktaAnnotation(
     elapsed += POLL_INTERVAL_MS
 
     const entry = isProtein
-      ? await listV2Job(v2Ref)
-      : await listBaktaJob(jobRef)
+        ? await listV2Job(v2Ref)
+        : await listBaktaJob(jobRef)
 
     if (!entry) continue
 
     // Normalise V2 lowercase status
     jobStatus = (isProtein
-      ? (entry as V2JobStatus).status.toUpperCase()
-      : (entry as BaktaV1JobStatus).jobStatus) as BaktaJobStatusEnum
+        ? (entry as V2JobStatus).status.toUpperCase()
+        : (entry as BaktaV1JobStatus).jobStatus) as BaktaJobStatusEnum
 
     const updatedAt = isProtein
-      ? (entry as V2JobStatus).updated
-      : (entry as BaktaV1JobStatus).updated
+        ? (entry as V2JobStatus).updated
+        : (entry as BaktaV1JobStatus).updated
 
     // Scale remaining progress (startPct → 85 %)
     const remaining = Math.max(0, 85 - startPct)
@@ -1738,10 +1754,10 @@ async function resumePlainBaktaAnnotation(
  * wider Baktfold time budget.
  */
 async function resumeNucleotideBaktfoldAnnotation(
-  aidbJobId: string,
-  persisted: BaktaPersistedState,
-  onProgress: BaktaProgressCallback,
-  signal?: AbortSignal,
+    aidbJobId: string,
+    persisted: BaktaPersistedState,
+    onProgress: BaktaProgressCallback,
+    signal?: AbortSignal,
 ): Promise<BaktaAnnotationSummary> {
   const jobRef = { job_id: persisted.bakta_job_id, secret: persisted.bakta_secret }
   const webViewerUrl = `https://bakta.computational.bio/ui/result?jobID=${persisted.bakta_job_id}&secret=${persisted.bakta_secret}`
@@ -1862,10 +1878,10 @@ async function resumeNucleotideBaktfoldAnnotation(
  *     this is one continuous resume, just with an extra stage-1 wait first.
  */
 async function resumeProteinBaktfoldAnnotation(
-  aidbJobId: string,
-  persisted: BaktaPersistedState,
-  onProgress: BaktaProgressCallback,
-  signal?: AbortSignal,
+    aidbJobId: string,
+    persisted: BaktaPersistedState,
+    onProgress: BaktaProgressCallback,
+    signal?: AbortSignal,
 ): Promise<BaktaAnnotationSummary> {
   const stage = persisted.workflow_stage ?? 'baktfold'
 
@@ -2166,8 +2182,8 @@ export interface IngestResponse {
  * accepted), stores them as unreviewed candidates and never overwrites existing entries.
  */
 export async function ingestBaktaResults(
-  aidbJobId: string,
-  entries: CustomAnnotationEntry[],
+    aidbJobId: string,
+    entries: CustomAnnotationEntry[],
 ): Promise<IngestResponse> {
   const resp = await fetch(`${API_BASE}/job/${aidbJobId}/bakta/ingest`, {
     method: 'POST',
@@ -2203,8 +2219,8 @@ export async function ingestBaktaResults(
  *   UniRef90 ID     → psc.uniref90_id
  */
 export function buildIngestEntries(
-  features: BaktaProteinFeature[],
-  provenance: { workflowMode?: BaktaWorkflowMode; toolVersion?: string } = {},
+    features: BaktaProteinFeature[],
+    provenance: { workflowMode?: BaktaWorkflowMode; toolVersion?: string } = {},
 ): CustomAnnotationEntry[] {
   const entries: CustomAnnotationEntry[] = []
   let annotated = 0
@@ -2259,8 +2275,8 @@ export function buildIngestEntries(
       gene:         feature.hypothetical ? null : (feature.gene ?? null),
       // "hypothetical protein" is stored in ups.product (not ips) for hypotheticals
       product:      feature.hypothetical
-        ? 'hypothetical protein'
-        : (feature.product ?? null),
+          ? 'hypothetical protein'
+          : (feature.product ?? null),
       ec_ids,
       go_ids,
       cog_category,
@@ -2273,9 +2289,9 @@ export function buildIngestEntries(
   }
 
   console.log(
-    `[AI-DB Ingest] ${entries.length} entries built:`,
-    `${annotated} annotated (ups+ips+psc),`,
-    `${hypothetical} hypothetical (ups only)`,
+      `[AI-DB Ingest] ${entries.length} entries built:`,
+      `${annotated} annotated (ups+ips+psc),`,
+      `${hypothetical} hypothetical (ups only)`,
   )
 
   return entries

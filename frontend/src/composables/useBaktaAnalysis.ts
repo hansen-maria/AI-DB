@@ -1,10 +1,11 @@
-import { ref, type Ref, type ComputedRef } from 'vue'
+import { ref, computed, type Ref, type ComputedRef } from 'vue'
 import {
   runBaktaAnnotation, resumeBaktaAnnotation,
   loadBaktaState, deleteBaktaState, groupFeaturesByType,
   ingestBaktaResults, buildIngestEntries,
   type BaktaJobOptions, type BaktaAnnotationSummary,
   type IngestResponse, type BaktaProteinFeature, type BaktaWorkflowMode,
+  detectSequenceType, PROTEIN_BAKTFOLD_SUPPORTED, PROTEIN_BAKTFOLD_UNSUPPORTED_MESSAGE,
 } from '../api/bakta.ts'
 
 /**
@@ -29,10 +30,10 @@ function loadAutoIngestPreference(): boolean {
 }
 
 export function useBaktaAnalysis(
-  jobId: Ref<string>,
-  unmatchedSequences: ComputedRef<any[]>,
-  /** False for read-only share-link viewers: they must not run/save/ingest. */
-  isOwner: ComputedRef<boolean>,
+    jobId: Ref<string>,
+    unmatchedSequences: ComputedRef<any[]>,
+    /** False for read-only share-link viewers: they must not run/save/ingest. */
+    isOwner: ComputedRef<boolean>,
 ) {
   // ── State ──────────────────────────────────────────────────────────────────
 
@@ -73,7 +74,27 @@ export function useBaktaAnalysis(
     try { localStorage.setItem(AUTO_INGEST_STORAGE_KEY, String(value)) } catch { /* ignore */ }
   }
 
+  /**
+   * Baktfold is not available for protein input (the Bakta Web API only runs
+   * Baktfold on genome JSON). The panel can bind `baktfoldAvailable` to disable
+   * the toggle and show `baktfoldUnavailableReason` as a hint.
+   */
+  const isProteinInput = computed(() => {
+    const seqs = unmatchedSequences.value.filter(s => s.sequence)
+    return seqs.length > 0 && detectSequenceType(seqs) === 'protein'
+  })
+  const baktfoldAvailable = computed(() => PROTEIN_BAKTFOLD_SUPPORTED || !isProteinInput.value)
+  const baktfoldUnavailableReason = computed(() =>
+      baktfoldAvailable.value ? '' : PROTEIN_BAKTFOLD_UNSUPPORTED_MESSAGE,
+  )
+
   function setBaktaWorkflowMode(value: BaktaWorkflowMode) {
+    if (value === 'baktfold' && !baktfoldAvailable.value) {
+      baktaWorkflowMode.value = 'bakta'
+      baktaError.value = PROTEIN_BAKTFOLD_UNSUPPORTED_MESSAGE
+      return
+    }
+    if (baktaError.value === PROTEIN_BAKTFOLD_UNSUPPORTED_MESSAGE) baktaError.value = ''
     baktaWorkflowMode.value = value
   }
 
@@ -103,25 +124,30 @@ export function useBaktaAnalysis(
       baktaAbortController.value = new AbortController()
 
       resumeBaktaAnnotation(jobId.value, persisted, () => {}, baktaAbortController.value.signal)
-        .then(summary => {
-          baktaResult.value = summary
-          console.log('[Bakta] Restored completed result with fresh URLs')
-          if (isOwner.value && autoIngestAnnotations.value && !baktaIngestResult.value) {
-            ingestBaktaAnnotations()
-          }
-        })
-        .catch(e => {
-          baktaError.value = e instanceof Error ? e.message : 'Failed to restore Bakta results.'
-        })
-        .finally(() => {
-          baktaAnalyzing.value       = false
-          baktaAbortController.value = null
-        })
+          .then(summary => {
+            baktaResult.value = summary
+            console.log('[Bakta] Restored completed result with fresh URLs')
+            if (isOwner.value && autoIngestAnnotations.value && !baktaIngestResult.value) {
+              ingestBaktaAnnotations()
+            }
+          })
+          .catch(e => {
+            baktaError.value = e instanceof Error ? e.message : 'Failed to restore Bakta results.'
+          })
+          .finally(() => {
+            baktaAnalyzing.value       = false
+            baktaAbortController.value = null
+          })
       return
     }
 
     if (persisted.status === 'ERROR') {
-      baktaError.value           = 'Bakta job previously ended with status: ERROR'
+      const unsupportedBaktfold = persisted.sequence_type === 'protein'
+          && persisted.workflow_mode === 'baktfold' && !PROTEIN_BAKTFOLD_SUPPORTED
+      baktaError.value = unsupportedBaktfold
+          ? `Bakta job previously ended with status: ERROR. ${PROTEIN_BAKTFOLD_UNSUPPORTED_MESSAGE}`
+          : 'Bakta job previously ended with status: ERROR'
+      if (unsupportedBaktfold) baktaWorkflowMode.value = 'bakta'
       baktaProgressPercent.value = persisted.progress_percent
       baktaProgressLabel.value   = persisted.progress_label
       return
@@ -145,26 +171,26 @@ export function useBaktaAnalysis(
     console.log('[Bakta] Resuming background polling…')
 
     resumeBaktaAnnotation(
-      jobId.value,
-      persisted,
-      (stage, pct) => { baktaProgressLabel.value = stage; baktaProgressPercent.value = pct },
-      baktaAbortController.value.signal,
+        jobId.value,
+        persisted,
+        (stage, pct) => { baktaProgressLabel.value = stage; baktaProgressPercent.value = pct },
+        baktaAbortController.value.signal,
     )
-      .then(summary => {
-        baktaResult.value = summary
-        if (isOwner.value && autoIngestAnnotations.value && !baktaIngestResult.value) {
-          ingestBaktaAnnotations()
-        }
-      })
-      .catch(e => {
-        baktaError.value = e instanceof Error && e.message === 'Aborted'
-          ? 'Analysis cancelled.'
-          : (e instanceof Error ? e.message : 'Bakta analysis failed.')
-      })
-      .finally(() => {
-        baktaAnalyzing.value       = false
-        baktaAbortController.value = null
-      })
+        .then(summary => {
+          baktaResult.value = summary
+          if (isOwner.value && autoIngestAnnotations.value && !baktaIngestResult.value) {
+            ingestBaktaAnnotations()
+          }
+        })
+        .catch(e => {
+          baktaError.value = e instanceof Error && e.message === 'Aborted'
+              ? 'Analysis cancelled.'
+              : (e instanceof Error ? e.message : 'Bakta analysis failed.')
+        })
+        .finally(() => {
+          baktaAnalyzing.value       = false
+          baktaAbortController.value = null
+        })
   }
 
   // ── Run annotation ─────────────────────────────────────────────────────────
@@ -176,6 +202,12 @@ export function useBaktaAnalysis(
     }
     const sequences = unmatchedSequences.value.filter(s => s.sequence)
     if (!sequences.length) return
+
+    if (baktaWorkflowMode.value === 'baktfold' && !baktfoldAvailable.value) {
+      baktaWorkflowMode.value = 'bakta'
+      baktaError.value = PROTEIN_BAKTFOLD_UNSUPPORTED_MESSAGE
+      return
+    }
 
     baktaAnalyzing.value       = true
     baktaError.value           = ''
@@ -190,20 +222,20 @@ export function useBaktaAnalysis(
 
     try {
       baktaResult.value = await runBaktaAnnotation(
-        sequences.map(s => ({ id: s.id, sequence: s.sequence })),
-        config,
-        (stage, pct) => { baktaProgressLabel.value = stage; baktaProgressPercent.value = pct },
-        baktaAbortController.value.signal,
-        jobId.value,
-        baktaWorkflowMode.value,
+          sequences.map(s => ({ id: s.id, sequence: s.sequence })),
+          config,
+          (stage, pct) => { baktaProgressLabel.value = stage; baktaProgressPercent.value = pct },
+          baktaAbortController.value.signal,
+          jobId.value,
+          baktaWorkflowMode.value,
       )
       if (autoIngestAnnotations.value) {
         await ingestBaktaAnnotations()
       }
     } catch (e) {
       baktaError.value = e instanceof Error && e.message === 'Aborted'
-        ? 'Analysis cancelled.'
-        : (e instanceof Error ? e.message : 'Bakta analysis failed.')
+          ? 'Analysis cancelled.'
+          : (e instanceof Error ? e.message : 'Bakta analysis failed.')
     } finally {
       baktaAnalyzing.value       = false
       baktaAbortController.value = null
@@ -273,6 +305,7 @@ export function useBaktaAnalysis(
     baktaError, baktaResult, baktaAbortController,
     baktaGenus, baktaSpecies, baktaCompleteGenome,
     baktaWorkflowMode,
+    baktfoldAvailable, baktfoldUnavailableReason,
     autoIngestAnnotations,
     baktaIngesting, baktaIngestResult, baktaIngestError,
     // Re-exported helpers needed by the template
