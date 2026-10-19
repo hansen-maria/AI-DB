@@ -147,6 +147,13 @@ onMounted(() => {
     <!-- Footer -->
     <footer class="global-footer">
       <p>&copy; 2026 AI-DB Project. Built for the genomics research community.</p>
+      <nav class="footer-links" aria-label="Legal">
+        <RouterLink to="/imprint" :class="{ active: route.name === 'imprint' }">Imprint &amp; Privacy</RouterLink>
+        <span class="footer-sep" aria-hidden="true">·</span>
+        <RouterLink to="/terms" :class="{ active: route.name === 'terms' }">Terms of Service</RouterLink>
+        <span class="footer-sep" aria-hidden="true">·</span>
+        <a href="https://github.com/hansen-maria/AI-DB" target="_blank" rel="noopener">GitHub</a>
+      </nav>
     </footer>
   </div>
 </template>
@@ -392,6 +399,30 @@ html.dark .alert-banner--error {
 
 .global-footer p {
   margin: 0;
+}
+
+.footer-links {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.footer-links a {
+  color: var(--color-text);
+  text-decoration: none;
+  transition: color 0.2s;
+}
+
+.footer-links a:hover,
+.footer-links a.active {
+  color: hsla(160, 100%, 37%, 1);
+}
+
+.footer-sep {
+  opacity: 0.6;
 }
 
 /* Responsive */

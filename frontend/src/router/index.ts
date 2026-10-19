@@ -45,6 +45,22 @@ const router = createRouter({
             }
         },
         {
+            path: '/imprint',
+            name: 'imprint',
+            component: () => import('@/views/ImprintView.vue'),
+            meta: {
+                title: 'Imprint & Privacy Policy - AI-DB'
+            }
+        },
+        {
+            path: '/terms',
+            name: 'terms',
+            component: () => import('@/views/TermsView.vue'),
+            meta: {
+                title: 'Terms of Service - AI-DB'
+            }
+        },
+        {
             path: '/docs',
             name: 'api-docs',
             beforeEnter() {
@@ -57,7 +73,8 @@ const router = createRouter({
         if (savedPosition) {
             return savedPosition
         } else if (to.hash) {
-            return { el: to.hash, behavior: 'smooth' }
+            // Offset for the sticky global header so anchors are not hidden beneath it
+            return { el: to.hash, top: 90, behavior: 'smooth' }
         } else {
             return { top: 0 }
         }
