@@ -9,8 +9,11 @@
  * Auto-detection via detectSequenceType().
  */
 
-const BAKTA_V1 = 'https://api.staging.bakta.computational.bio/api/v1'
-const BAKTA_V2 = 'https://api.staging.bakta.computational.bio/api/v2'
+/** Stable (production) Bakta API – serves V1 and the V2 workflows
+ *  bakta, bakta_proteins, bakta_baktfold and baktfold. */
+const BAKTA_API_BASE = 'https://api.bakta.computational.bio/api'
+const BAKTA_V1 = `${BAKTA_API_BASE}/v1`
+const BAKTA_V2 = `${BAKTA_API_BASE}/v2`
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Shared types
@@ -446,9 +449,9 @@ export function detectSequenceType(
  * V1 links are plain URLs without headers.
  */
 export async function uploadFastaToS3(
-    uploadUrl: string,
-    fastaContent: string,
-    headers?: Record<string, string>,
+  uploadUrl: string,
+  fastaContent: string,
+  headers?: Record<string, string>,
 ): Promise<void> {
   const hasHeaders = !!headers && Object.keys(headers).length > 0
   const resp = await fetch(uploadUrl, {
@@ -573,8 +576,8 @@ export async function getBaktaVersion() {
 
 /** POST /api/v2/job/init */
 export async function initV2Job(
-    name: string,
-    workflowKind: string = 'bakta_proteins',
+  name: string,
+  workflowKind: string = 'bakta_proteins',
 ): Promise<V2InitResponse> {
   const resp = await fetch(`${BAKTA_V2}/job/init`, {
     method: 'POST',
@@ -594,9 +597,9 @@ export async function initV2Job(
  * a BaktaV2Config for 'bakta_baktfold' (see buildV2Config()).
  */
 export async function startV2Job(
-    job: JobReference,
-    workflowKind: string = 'bakta_proteins',
-    config: BaktaV2Config | Record<string, never> = {},
+  job: JobReference,
+  workflowKind: string = 'bakta_proteins',
+  config: BaktaV2Config | Record<string, never> = {},
 ): Promise<void> {
   const resp = await fetch(`${BAKTA_V2}/job/start`, {
     method: 'POST',
@@ -1735,10 +1738,10 @@ async function resumePlainBaktaAnnotation(
  * wider Baktfold time budget.
  */
 async function resumeNucleotideBaktfoldAnnotation(
-    aidbJobId: string,
-    persisted: BaktaPersistedState,
-    onProgress: BaktaProgressCallback,
-    signal?: AbortSignal,
+  aidbJobId: string,
+  persisted: BaktaPersistedState,
+  onProgress: BaktaProgressCallback,
+  signal?: AbortSignal,
 ): Promise<BaktaAnnotationSummary> {
   const jobRef = { job_id: persisted.bakta_job_id, secret: persisted.bakta_secret }
   const webViewerUrl = `https://bakta.computational.bio/ui/result?jobID=${persisted.bakta_job_id}&secret=${persisted.bakta_secret}`
@@ -1859,10 +1862,10 @@ async function resumeNucleotideBaktfoldAnnotation(
  *     this is one continuous resume, just with an extra stage-1 wait first.
  */
 async function resumeProteinBaktfoldAnnotation(
-    aidbJobId: string,
-    persisted: BaktaPersistedState,
-    onProgress: BaktaProgressCallback,
-    signal?: AbortSignal,
+  aidbJobId: string,
+  persisted: BaktaPersistedState,
+  onProgress: BaktaProgressCallback,
+  signal?: AbortSignal,
 ): Promise<BaktaAnnotationSummary> {
   const stage = persisted.workflow_stage ?? 'baktfold'
 
