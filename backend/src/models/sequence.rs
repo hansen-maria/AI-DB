@@ -107,11 +107,24 @@ impl Default for HashLookupResult {
     }
 }
 
-/// Filter type for sequences
+/// `annotation_source` value of matches from the official Bakta DB
+pub const SOURCE_BAKTA_DB: &str = "bakta_db";
+/// `annotation_source` value of matches from the AI-DB annotations DB
+pub const SOURCE_AIDB_DB: &str = "aidb_db";
+
+/// Filter type for sequences (match status / annotation source)
+///
+/// Query values: `all` (default), `bakta_db`, `aidb_db`, `hash_match`
+/// (either DB), `alignment`, `none` (unmatched). Unknown values fall back to `all`.
 #[derive(Default, Debug, Clone, PartialEq, ToSchema)]
 pub enum SequenceFilter {
     #[default]
     All,
+    /// Hash match in the official Bakta DB
+    BaktaDb,
+    /// Hash match in the AI-DB annotations DB
+    AidbDb,
+    /// Hash match in either DB (`bakta_db` or `aidb_db`)
     HashMatch,
     Alignment,
     NoMatch,
@@ -120,6 +133,8 @@ pub enum SequenceFilter {
 impl SequenceFilter {
     pub fn from_str(s: &str) -> Self {
         match s.to_lowercase().as_str() {
+            "bakta_db" | "bakta" => SequenceFilter::BaktaDb,
+            "aidb_db" | "aidb" => SequenceFilter::AidbDb,
             "hash_match" | "hash" => SequenceFilter::HashMatch,
             "alignment" => SequenceFilter::Alignment,
             "none" | "no_match" => SequenceFilter::NoMatch,
@@ -128,17 +143,26 @@ impl SequenceFilter {
     }
 
     pub fn matches(&self, seq: &SequenceInfo) -> bool {
+        let source = seq.annotation_source.as_deref();
         match self {
             SequenceFilter::All => true,
-            SequenceFilter::HashMatch => seq.annotation_source.as_deref() == Some("hash_match"),
-            SequenceFilter::Alignment => seq.annotation_source.as_deref() == Some("alignment"),
-            SequenceFilter::NoMatch => seq.annotation_source.is_none(),
+            SequenceFilter::BaktaDb => source == Some(SOURCE_BAKTA_DB),
+            SequenceFilter::AidbDb => source == Some(SOURCE_AIDB_DB),
+            // "hash_match" is accepted as legacy source value of older jobs
+            SequenceFilter::HashMatch => matches!(
+                source,
+                Some(SOURCE_BAKTA_DB) | Some(SOURCE_AIDB_DB) | Some("hash_match")
+            ),
+            SequenceFilter::Alignment => source == Some("alignment"),
+            SequenceFilter::NoMatch => source.is_none(),
         }
     }
 
     pub fn as_str(&self) -> &'static str {
         match self {
             SequenceFilter::All => "all",
+            SequenceFilter::BaktaDb => SOURCE_BAKTA_DB,
+            SequenceFilter::AidbDb => SOURCE_AIDB_DB,
             SequenceFilter::HashMatch => "hash_match",
             SequenceFilter::Alignment => "alignment",
             SequenceFilter::NoMatch => "none",
@@ -258,5 +282,58 @@ impl AdvancedSequenceFilter {
             || self.ec_class.is_some()
             || self.has_gene == Some(true)
             || self.has_product == Some(true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn seq(source: Option<&str>) -> SequenceInfo {
+        SequenceInfo {
+            id: "s1".into(),
+            md5_hash: None,
+            length: 10,
+            sequence: None,
+            annotation: None,
+            annotation_source: source.map(str::to_string),
+            annotation_release: None,
+            annotation_status: None,
+            uniparc_id: None,
+            ncbi_nrp_id: None,
+            uniref100_id: None,
+            product: None,
+            gene: None,
+            cog_category: None,
+            ec_ids: None,
+            go_ids: None,
+        }
+    }
+
+    #[test]
+    fn source_filters_match_their_db() {
+        let bakta = seq(Some(SOURCE_BAKTA_DB));
+        let aidb = seq(Some(SOURCE_AIDB_DB));
+        let none = seq(None);
+
+        let f = SequenceFilter::from_str("bakta_db");
+        assert!(f.matches(&bakta) && !f.matches(&aidb) && !f.matches(&none));
+
+        let f = SequenceFilter::from_str("aidb_db");
+        assert!(f.matches(&aidb) && !f.matches(&bakta) && !f.matches(&none));
+
+        let f = SequenceFilter::from_str("hash_match");
+        assert!(f.matches(&bakta) && f.matches(&aidb) && !f.matches(&none));
+
+        let f = SequenceFilter::from_str("none");
+        assert!(f.matches(&none) && !f.matches(&bakta));
+    }
+
+    #[test]
+    fn as_str_round_trips() {
+        for v in ["all", "bakta_db", "aidb_db", "hash_match", "alignment", "none"] {
+            assert_eq!(SequenceFilter::from_str(v).as_str(), v);
+        }
+        assert_eq!(SequenceFilter::from_str("unknown"), SequenceFilter::All);
     }
 }

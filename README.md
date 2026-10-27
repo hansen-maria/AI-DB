@@ -3,17 +3,18 @@
 Hash-Based Annotation Service for Microbial Sequencing Data
 
 AI-DB accelerates the analysis of microbial sequencing data through cryptographic hash-based annotations
-using the [Bakta](https://github.com/oschwengers/bakta) database (~350 million protein sequences) alongside a custom, 
+using the [Bakta](https://github.com/oschwengers/bakta) database (~350 million protein sequences) alongside a custom,
 user-expandable AI-DB Annotations Database.
 
 ## Features
 
 - **Fast**: Hash-based annotations in seconds instead of hours
-- **Privacy**: Sequence data is processed locally as MD5 hashes
+- **Privacy**: Sequence data is processed locally as MD5 hashes; sequences are sent to external services (Psos, Bakta)
+  only when the job owner starts such an analysis
 - **Comprehensive**: Access to UniRef100, UniParc, and NCBI protein annotations
-- **Extensible Knowledge Base**: Further analyze unmatched sequences using Psos and Bakta. 
-    You can ingest new Bakta results directly into the custom AI-DB annotations database 
-    to continuously build and grow the knowledge base.
+- **Extensible Knowledge Base**: Further analyze unmatched sequences using Psos and Bakta.
+  You can ingest new Bakta results directly into the custom AI-DB annotations database
+  to continuously build and grow the knowledge base.
 - **Functional Analysis**: Interactive visualizations of COG categories, EC classes, and top genes/products
 - **Advanced Search**: Real-time client-side filtering by sequence ID, gene name, product, length, and functional categories
 - **Persistent**: Jobs are stored for 30 days
@@ -22,7 +23,7 @@ user-expandable AI-DB Annotations Database.
 - **Pipeline-ready**: Full REST API with OpenAPI spec; no cookie handling needed
 - **Export**: Download results in TSV, JSON, FASTA, or GFF3 format
 - **Pagination**: Efficient browsing of large result sets
-- **Filtering**: Filter sequences by annotation source (hash match, no match)
+- **Filtering**: Filter sequences by annotation source (Bakta DB, AI-DB, any hash match, no match)
 
 ## Project Structure
 
@@ -91,6 +92,7 @@ ai-db/
         │   ├── psos.rs                 # Psos analysis endpoints
         │   ├── stats.rs                # Functional analysis endpoint
         │   ├── download.rs             # Export handler
+        │   ├── kpi.rs                  # Admin: KPIs & curation review
         │   └── health.rs               # Health check & DB info
         ├── services/                   # Business Logic
         │   ├── fasta.rs                # FASTA parsing & MD5 computation
@@ -160,9 +162,11 @@ User uploads FASTA
        ▼
 Backend hashes each sequence (MD5)
        │
-       ├─── Hash found ──► Return annotation from AI-DB
+       ├─── Hash in Bakta DB ──► Annotation (annotation_source = bakta_db)
        │
-       └─── No match   ──► Mark as unmatched
+       ├─── Hash in AI-DB    ──► Annotation (annotation_source = aidb_db, + annotation_status)
+       │
+       └─── No match         ──► Mark as unmatched
                                │
                                ├─ Psos API  (signal peptide, TM domains)
                                └─ Bakta API (full genome / protein annotation)
@@ -201,15 +205,17 @@ curl -H "Authorization: Bearer $TOKEN" -F "file=@proteins.faa" https://ai-db.com
 curl -H "Authorization: Bearer $TOKEN" -OJ https://ai-db.computational.bio/api/job/<id>/download/tsv
 ```
 
-| Operation                                                              | Who                                                                        |
-|------------------------------------------------------------------------|----------------------------------------------------------------------------|
-| View job, sequences, stats, saved Psos/Bakta results                   | Anyone with the Job-ID (read-only; `GET /api/job/{id}` returns `is_owner`) |
-| List jobs                                                              | Owner (only own jobs)                                                      |
-| Download (TSV/JSON/FASTA/GFF3)                                         | Owner                                                                      |
-| Delete, bulk delete, rename, retry                                     | Owner                                                                      |
-| Save/delete Psos and Bakta state, ingest into the AI-DB annotations DB | Owner                                                                      |
+| Operation                                                                   | Who                                                                        |
+|-----------------------------------------------------------------------------|----------------------------------------------------------------------------|
+| View job, sequences, stats, saved Psos/Bakta results                        | Anyone with the Job-ID (read-only; `GET /api/job/{id}` returns `is_owner`) |
+| List jobs                                                                   | Owner (only own jobs)                                                      |
+| Download (TSV/JSON/FASTA/GFF3), stats CSV export                            | Owner                                                                      |
+| Delete, bulk delete, rename, retry                                          | Owner                                                                      |
+| Start/save/delete Psos and Bakta runs, ingest into the AI-DB annotations DB | Owner                                                                      |
+| KPIs, curation review (`/api/admin/*`)                                      | Admin only (`X-Admin-Secret`; owner tokens are not accepted there)         |
 
-Shared jobs are therefore **read-only** for everyone but the owner. Jobs created before token/ownership
+Shared jobs are therefore **read-only** for everyone but the owner; this is enforced centrally by a
+middleware before any handler runs. The admin secret grants no rights on jobs. Jobs created before token/ownership
 enforcement may have no owner and can then no longer be modified (they expire after 30 days).
 
 ### Community curation of the AI-DB annotations DB
@@ -240,12 +246,13 @@ identity-proof; and the status stored in a job is the status at lookup time (ret
 ### API Documentation
 
 Full OpenAPI/Swagger documentation is available at:
-- **Swagger UI**: `https://ai-db.computational.bio/api/docs/`
+- **Swagger UI**: `https://ai-db.computational.bio/api/docs/` (use *Authorize*: `bearer_token` or `api_key`
+  for job routes, `admin_secret` for admin routes)
 - **OpenAPI JSON**: `https://ai-db.computational.bio/api/openapi.json`
 
 ### Job Persistence
 
-Jobs are stored in a SQLite database and **persist for 30 days**. 
+Jobs are stored in a SQLite database and **persist for 30 days**.
 The database survives container restarts and redeployments.
 
 ## Deployment
@@ -262,7 +269,8 @@ Update `nginx.conf` to set your domain and backend address before deploying.
 
 - HTTPS with Let's Encrypt
 - HTTP-Only cookies with SameSite=Lax; API tokens are random UUIDv4 values (UUIDv4 only); only a one-way digest of the secret is stored
-- State-changing endpoints are owner-only; shared Job-IDs are read-only
+- State-changing endpoints, downloads and exports are owner-only; shared Job-IDs are read-only
+- Admin routes accept only the shared admin secret (constant-time comparison); disabled if unset
 - Security headers (HSTS, X-Frame-Options)
 - CORS mirrors the request origin with credentials; cookies are SameSite=Lax (not sent on cross-site requests) and API tokens are never sent automatically by browsers
 - Non-root container user
@@ -276,7 +284,7 @@ This project is licensed under either of
 - Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
 - MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
 
-at your option. Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this Service by you, 
+at your option. Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this Service by you,
 as defined in the Apache-2.0 license, shall be dually licensed as above, without any additional terms or conditions.
 
 ## Links

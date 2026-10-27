@@ -7,7 +7,7 @@ Rust/Axum backend for the AI-DB Hash-Based Annotation Service.
 ```
 backend/src/
 ├── main.rs              # Entry point, router setup 
-├── auth.rs              # Owner identification (cookie / API token), owner digest, sharing rules
+├── auth.rs              # Owner identification (cookie / API token), owner digest, owner & admin guards
 ├── state.rs             # AppState, DB connection, job management
 ├── storage.rs           # SQLite persistence (30-day retention)
 │
@@ -29,9 +29,9 @@ backend/src/
 │   ├── download.rs      # download_job
 │   ├── health.rs        # health_check, db_info
 │   ├── jobs.rs          # get_job, create_job, list_jobs, delete_job, rename/retry/bulk delete
-│   ├── kpi.rs           # Admin: KPI overview, curation review (shared secret)
+│   ├── kpi.rs           # Admin: KPI overview, curation review (X-Admin-Secret)
 │   ├── psos.rs          # save_psos_results, get_psos_results, delete_psos_results
-│   └── stats.rs         # get_job_stats (functional analysis)
+│   └── stats.rs         # get_job_stats, export_job_stats (functional analysis, CSV)
 │
 ├── services/            # Business logic 
 │   ├── mod.rs           
@@ -52,7 +52,7 @@ backend/src/
 | Module         | Purpose                                              |
 |----------------|------------------------------------------------------|
 | **main.rs**    | Application entry point, router configuration        |
-| **auth.rs**    | Owner identification (cookie / token), digest, auth  |
+| **auth.rs**    | Owner identification, digest, owner/admin middleware |
 | **state.rs**   | Shared state, database connection, job cache         |
 | **storage.rs** | SQLite persistence, 30-day retention, cleanup        |
 | **models/**    | All data structures and types                        |
@@ -75,9 +75,21 @@ the contributor id (`auth::contributor_id`, a second digest) used for community 
 `storage::migrate_owner_ids_to_digest` / `migrate_kpi_owner_ids_to_digest` convert rows that still hold a raw
 UUID (idempotent, in a transaction).
 
-Anyone who knows a job ID can **view** it read-only (`GET /api/job/{id}` returns `is_owner`).
-Download, rename, delete, retry, listing, Psos/Bakta state and ingest require the owner
-(`auth::validate_owner`, `auth::authorize_owner`).
+Anyone who knows a job ID can **view** it read-only: job, sequences, stats and stored Psos/Bakta
+results (`GET /api/job/{id}` returns `is_owner`). Owner-only are every state-changing request on a job
+(`POST`/`PATCH`/`DELETE`: rename, delete, retry, saving/deleting Psos and Bakta state, ingest), the
+result download and the stats CSV export. Listing (`GET /api/jobs/`) and bulk delete only ever act on
+the caller's own jobs.
+
+Enforcement is central: `auth::owner_guarded_job_id` defines which job routes are owner-only, and the
+`auth::require_owner_for_writes` middleware rejects non-owners (`403`, unknown job `404`) before any
+handler runs. The handlers check again (`auth::authorize_owner` / `auth::validate_owner`). The same
+rule drives the OpenAPI security requirements, so Swagger UI sends the token exactly where it applies.
+
+**Admin routes** (`/api/admin/*`) are a separate realm guarded by `auth::require_admin_secret`: only the
+shared secret in `X-Admin-Secret` (`ADMIN_KPI_SECRET`) authorizes there (`401` otherwise, `503` if the
+secret is not configured). Owner tokens and cookies are ignored on admin routes, and the admin secret
+grants no owner rights on jobs.
 
 ## Job Persistence
 
@@ -114,46 +126,51 @@ CREATE TABLE IF NOT EXISTS jobs (
 
 ## API Endpoints
 
-| Method   | Endpoint                              | Handler                                  |
-|----------|---------------------------------------|------------------------------------------|
-| `JOBS`   |                                       |                                          |
-| `POST`   | `/api/job/`                           | `handlers::jobs::create_job`             |
-| `GET`    | `/api/job/{id}`                       | `handlers::jobs::get_job`                |
-| `DELETE` | `/api/job/{id}`                       | `handlers::jobs::delete_job`             |
-| `GET`    | `/api/job/{id}/download/{format}`     | `handlers::download::download_job`       |
-| `GET`    | `/api/job/{id}/stats`                 | `handlers::stats::get_job_stats`         |
-| `PATCH`  | `/api/job/{id}`                       | `handlers::jobs::rename_job`             |
-| `POST`   | `/api/job/{id}/retry`                 | `handlers::jobs::retry_job`              |
-| `GET`    | `/api/job/{id}/sequence/{seq_id}`     | `handlers::jobs::get_sequence`           |
-| `GET`    | `/api/job/{id}/stats/export`          | `handlers::stats::export_job_stats`      |
-| `GET`    | `/api/jobs/`                          | `handlers::jobs::list_jobs`              |
-| `DELETE` | `/api/jobs/`                          | `handlers::jobs::bulk_delete_jobs`       |
-| `PSOS`   |                                       |                                          |
-| `GET`    | `/api/job/{id}/psos`                  | `handlers::psos::get_psos_results`       |
-| `POST`   | `/api/job/{id}/psos`                  | `handlers::psos::save_psos_results`      |
-| `DELETE` | `/api/job/{id}/psos`                  | `handlers::psos::delete_psos_results`    |
-| `BAKTA`  |                                       |                                          |
-| `GET`    | `/api/job/{id}/bakta`                 | `handlers::bakta::get_bakta_job`         |
-| `POST`   | `/api/job/{id}/bakta`                 | `handlers::bakta::save_bakta_job`        |
-| `DELETE` | `/api/job/{id}/bakta`                 | `handlers::bakta::delete_bakta_job`      |
-| `POST`   | `/api/job/{id}/bakta/ingest`          | `handlers::bakta::ingest_bakta_results`  |
-| `ADMIN`  | header `X-Admin-Secret`               |                                          |
-| `GET`    | `/api/admin/kpis`                     | `handlers::kpi::get_kpi_overview`        |
-| `GET`    | `/api/admin/annotations`              | `handlers::kpi::list_admin_annotations`  |
-| `POST`   | `/api/admin/annotations/{md5}/review` | `handlers::kpi::review_admin_annotation` |
-| `HEALTH` |                                       |                                          |
-| `GET`    | `/api/health`                         | `handlers::health::health_check`         |
-| `GET`    | `/api/db/info`                        | `handlers::health::db_info`              |
+Access: **public** = no credentials; **anyone** = anyone with the job ID (owner token optional);
+**owner** = owner cookie or API token; **admin** = `X-Admin-Secret` only.
+
+| Method   | Endpoint                              | Handler                                  | Access                                |
+|----------|---------------------------------------|------------------------------------------|---------------------------------------|
+| `JOBS`   |                                       |                                          |                                       |
+| `POST`   | `/api/job/`                           | `handlers::jobs::create_job`             | anyone (creates owner cookie if none) |
+| `GET`    | `/api/job/{id}`                       | `handlers::jobs::get_job`                | anyone                                |
+| `PATCH`  | `/api/job/{id}`                       | `handlers::jobs::rename_job`             | owner                                 |
+| `DELETE` | `/api/job/{id}`                       | `handlers::jobs::delete_job`             | owner                                 |
+| `GET`    | `/api/job/{id}/download/{format}`     | `handlers::download::download_job`       | owner                                 |
+| `GET`    | `/api/job/{id}/stats`                 | `handlers::stats::get_job_stats`         | anyone                                |
+| `GET`    | `/api/job/{id}/stats/export`          | `handlers::stats::export_job_stats`      | owner                                 |
+| `POST`   | `/api/job/{id}/retry`                 | `handlers::jobs::retry_job`              | owner                                 |
+| `GET`    | `/api/job/{id}/sequence/{seq_id}`     | `handlers::jobs::get_sequence`           | anyone                                |
+| `GET`    | `/api/jobs/`                          | `handlers::jobs::list_jobs`              | own jobs only                         |
+| `DELETE` | `/api/jobs/`                          | `handlers::jobs::bulk_delete_jobs`       | own jobs only (`207` if partial)      |
+| `PSOS`   |                                       |                                          |                                       |
+| `GET`    | `/api/job/{id}/psos`                  | `handlers::psos::get_psos_results`       | anyone                                |
+| `POST`   | `/api/job/{id}/psos`                  | `handlers::psos::save_psos_results`      | owner                                 |
+| `DELETE` | `/api/job/{id}/psos`                  | `handlers::psos::delete_psos_results`    | owner                                 |
+| `BAKTA`  |                                       |                                          |                                       |
+| `GET`    | `/api/job/{id}/bakta`                 | `handlers::bakta::get_bakta_job`         | anyone                                |
+| `POST`   | `/api/job/{id}/bakta`                 | `handlers::bakta::save_bakta_job`        | owner                                 |
+| `DELETE` | `/api/job/{id}/bakta`                 | `handlers::bakta::delete_bakta_job`      | owner                                 |
+| `POST`   | `/api/job/{id}/bakta/ingest`          | `handlers::bakta::ingest_bakta_results`  | owner                                 |
+| `ADMIN`  |                                       |                                          |                                       |
+| `GET`    | `/api/admin/kpis`                     | `handlers::kpi::get_kpi_overview`        | admin                                 |
+| `GET`    | `/api/admin/annotations`              | `handlers::kpi::list_admin_annotations`  | admin                                 |
+| `POST`   | `/api/admin/annotations/{md5}/review` | `handlers::kpi::review_admin_annotation` | admin                                 |
+| `HEALTH` |                                       |                                          |                                       |
+| `GET`    | `/api/health`                         | `handlers::health::health_check`         | public                                |
+| `GET`    | `/api/db/info`                        | `handlers::health::db_info`              | public                                |
 
 ## Functional Analysis
 
-The `/api/job/{id}/stats` endpoint queries the Bakta database for:
+The `/api/job/{id}/stats` endpoint computes statistics from the job's stored annotations
+(no additional database query); `/api/job/{id}/stats/export` returns the same as CSV (owner only):
 
 - **Top Genes**: Most frequent gene names
 - **Top Products**: Most frequent product descriptions
 - **COG Categories**: Clusters of Orthologous Groups distribution
 - **EC Classes**: Enzyme Commission classification
-- **GO Terms**: Gene Ontology molecular functions
+- **GO Terms**: Gene Ontology terms (the ontology namespace is not stored, so all terms are
+  reported under `molecular_function`)
 
 ### Database Lookup Chain
 
@@ -180,7 +197,7 @@ TSV and GFF3 exports include the status (`annotation_status` column / attribute)
 3. **Consensus**: new entries are `candidate`; `AI_DB_CONFIRMATIONS` (default 2) identical submissions from
    different contributors make them `confirmed`; differing ones make them `conflicted`; a different annotation
    reaching the threshold on its own replaces a first-come one. Pre-curation entries are `legacy`.
-4. **Rate limit**: `AI_DB_INGEST_DAILY_LIMIT` contributions per contributor and 24 h (default 200000).
+4. **Rate limit**: `AI_DB_INGEST_DAILY_LIMIT` contributions per contributor and 24 h (default 1000000).
 5. **Admin review**: `confirmed`/`rejected` lock an entry against consensus changes; `candidate` releases it.
 
 ```bash
@@ -195,17 +212,18 @@ the authority for sensitive entries. The schema is created or extended lazily
 
 ## Advanced Filtering
 
-The `AdvancedSequenceFilter` supports:
+The `AdvancedSequenceFilter` supports (query parameters of `GET /api/job/{id}` and the download):
 
-| Filter        | Type      | Description                                |
-|---------------|-----------|--------------------------------------------|
-| `search`      | String    | Case-insensitive search in ID/gene/product |
-| `min_length`  | usize     | Minimum sequence length                    |
-| `max_length`  | usize     | Maximum sequence length                    |
-| `cog`         | String    | COG category letter (A-Z)                  |
-| `ec_class`    | String    | EC class prefix (1-7)                      |
-| `has_gene`    | bool      | Only sequences with gene annotation        |
-| `has_product` | bool      | Only sequences with product annotation     |
+| Filter        | Type   | Description                                                                                         |
+|---------------|--------|-----------------------------------------------------------------------------------------------------|
+| `filter`      | String | Match status: `all` (default), `bakta_db`, `aidb_db`, `hash_match` (either DB), `alignment`, `none` |
+| `search`      | String | Case-insensitive search in ID/gene/product                                                          |
+| `min_length`  | usize  | Minimum sequence length                                                                             |
+| `max_length`  | usize  | Maximum sequence length                                                                             |
+| `cog`         | String | COG category letter (A-Z)                                                                           |
+| `ec_class`    | String | EC class prefix (1-7)                                                                               |
+| `has_gene`    | bool   | Only sequences with gene annotation                                                                 |
+| `has_product` | bool   | Only sequences with product annotation                                                              |
 
 ## Environment Variables
 
@@ -215,12 +233,10 @@ The `AdvancedSequenceFilter` supports:
 | `BAKTA_DB`                      | Path to Bakta database directory                                      | `/bakta-db`                        |
 | `AI_DB_TEMP_DIR`                | Directory for temporary upload files                                  | `/tmp`                             |
 | `AI_DB_JOBS_PATH`               | Path to SQLite jobs database                                          | `/data/jobs.db`                    |
-| `AI_DB_PORT`                    | HTTP server port                                                      | `8000`                             |
-| `AI_DB_HOST`                    | HTTP server bind address                                              | `0.0.0.0`                          |
 | `AI_DB_CUSTOM_ANNOTATIONS_PATH` | Path to custom AI-DB database                                         | `/custom-db/custom_annotations.db` |
 | `AI_DB_CONFIRMATIONS`           | Independent submissions needed to confirm                             | `2`                                |
-| `AI_DB_INGEST_DAILY_LIMIT`      | Max contributions per contributor per 24 h                            | `200000`                           |
-| `ADMIN_KPI_SECRET`              | Secret for `X-Admin-Secret` (admin routes disabled with 503 if unset) | unset                              |
+| `AI_DB_INGEST_DAILY_LIMIT`      | Max contributions per contributor per 24 h                            | `1000000`                          |
+| `ADMIN_KPI_SECRET`              | Secret for `X-Admin-Secret` (admin routes return 503 if unset/empty)  | unset                              |
 
 ## Usage
 
@@ -228,7 +244,7 @@ The `AdvancedSequenceFilter` supports:
 # Build
 cargo build --release
 
-# Run
+# Run (listens on 0.0.0.0:8000)
 cargo run
 
 # Run with logging
@@ -265,10 +281,11 @@ volumes:
 cargo test
 
 # Run tests for specific module
-cargo test --lib services::fasta
-cargo test --lib export::gff3
-cargo test --lib storage
-cargo test --lib auth
+cargo test services::fasta
+cargo test export::gff3
+cargo test storage
+cargo test auth
+cargo test models::sequence
 ```
 
 ## License

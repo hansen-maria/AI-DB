@@ -50,7 +50,6 @@ use crate::state::AppState;
         (status = 404, description = "Job not found",  body = ErrorResponse),
         (status = 500, description = "Database error", body = ErrorResponse),
     ),
-    security(("bearer_token" = []), ("api_key" = [])),
     tag = "bakta"
 )]
 pub async fn save_bakta_job(
@@ -134,7 +133,6 @@ pub async fn get_bakta_job(
         (status = 404, description = "Job not found", body = ErrorResponse),
         (status = 500, description = "Database error", body = ErrorResponse),
     ),
-    security(("bearer_token" = []), ("api_key" = [])),
     tag = "bakta"
 )]
 pub async fn delete_bakta_job(
@@ -184,7 +182,6 @@ pub async fn delete_bakta_job(
         (status = 429, description = "Contribution rate limit exceeded", body = ErrorResponse),
         (status = 500, description = "Database error",     body = ErrorResponse),
     ),
-    security(("bearer_token" = []), ("api_key" = [])),
     tag = "bakta"
 )]
 pub async fn ingest_bakta_results(

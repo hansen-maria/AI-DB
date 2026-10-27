@@ -81,7 +81,7 @@ pub struct PaginatedJobResponse {
     pub sequences: Vec<SequenceInfo>,
     /// Pagination information for sequences
     pub pagination: PaginationInfo,
-    /// Current filter applied ("all", "hash_match", "alignment", "none")
+    /// Current filter applied ("all", "bakta_db", "aidb_db", "hash_match", "alignment", "none")
     pub filter: String,
     /// Number of sequences matching the current filter
     pub filtered_count: usize,
@@ -101,9 +101,9 @@ pub struct ListJobsQuery {
 pub struct GetJobQuery {
     /// Page number for sequences (1-indexed, default: 1)
     pub page: Option<usize>,
-    /// Sequences per page (default: 20, max: 100)
+    /// Sequences per page (default: 20, max: 10000)
     pub per_page: Option<usize>,
-    /// Filter by annotation source: "all", "hash_match", "alignment", "none" (default: "all")
+    /// Match-status filter: "all" (default), "bakta_db", "aidb_db", "hash_match" (either DB), "alignment", "none"
     pub filter: Option<String>,
     /// Search text (searches in ID, gene, product)
     pub search: Option<String>,

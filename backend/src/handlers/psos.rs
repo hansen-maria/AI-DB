@@ -36,7 +36,6 @@ use crate::state::AppState;
         (status = 404, description = "Job not found", body = ErrorResponse),
         (status = 500, description = "Internal server error", body = ErrorResponse)
     ),
-    security(("bearer_token" = []), ("api_key" = [])),
     tag = "psos"
 )]
 pub async fn save_psos_results(
@@ -133,7 +132,6 @@ pub async fn get_psos_results(
         (status = 403, description = "Not the job owner", body = ErrorResponse),
         (status = 404, description = "Job not found", body = ErrorResponse)
     ),
-    security(("bearer_token" = []), ("api_key" = [])),
     tag = "psos"
 )]
 pub async fn delete_psos_results(

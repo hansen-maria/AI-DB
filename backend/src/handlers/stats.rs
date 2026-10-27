@@ -4,13 +4,15 @@
 
 use axum::{
     extract::{Path, State},
-    http::{header, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::IntoResponse,
     Json,
 };
+use axum_extra::extract::CookieJar;
 use chrono::Utc;
 use std::collections::HashMap;
 
+use crate::auth::authorize_owner;
 use crate::models::{
     cog_category_name, ec_class_name, CogCategory, CountItem, ErrorResponse, FunctionalStats,
     GoTermStats, JobStatus, SequenceInfo,
@@ -225,7 +227,10 @@ pub async fn get_job_stats(
     }
 }
 
-/// Export functional statistics as a CSV file
+/// Export functional statistics as a CSV file (owner only)
+///
+/// Like the result downloads, the export is restricted to the job owner;
+/// non-owners with the job ID can still view the stats via `GET .../stats`.
 #[utoipa::path(
     get,
     path = "/api/job/{job_id}/stats/export",
@@ -235,15 +240,22 @@ pub async fn get_job_stats(
     ),
     responses(
         (status = 200, description = "CSV file download", content_type = "text/csv"),
-        (status = 400, description = "Job not completed", body = ErrorResponse),
-        (status = 403, description = "Not authorized",    body = ErrorResponse),
+        (status = 400, description = "Job not completed or no sequence data", body = ErrorResponse),
+        (status = 403, description = "Not the job owner", body = ErrorResponse),
         (status = 404, description = "Job not found",     body = ErrorResponse)
     )
 )]
 pub async fn export_job_stats(
     State(state): State<AppState>,
+    jar: CookieJar,
+    headers: HeaderMap,
     Path(job_id): Path<String>,
 ) -> impl IntoResponse {
+    // Owner only (also enforced by the `require_owner_for_writes` middleware)
+    if let Err(rejection) = authorize_owner(&state, &job_id, &jar, &headers) {
+        return rejection.into_response();
+    }
+
     let jobs = state.jobs();
 
     match jobs.get(&job_id) {

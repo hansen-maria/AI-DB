@@ -20,12 +20,23 @@
 //! not expose credentials. Existing rows are migrated at startup.
 //!
 //! Sharing model: anyone who knows a job ID may *view* the job (read-only).
-//! Every state-changing operation (delete, rename, retry, Psos/Bakta state,
-//! ingest) and downloads require the owner identity (`authorize_owner`).
+//! Every state-changing operation (delete, rename, retry, saving Psos/Bakta
+//! state or starting a run, ingest), downloads and the stats CSV export require
+//! the owner identity.
+//! This is enforced centrally by the `require_owner_for_writes` middleware
+//! (see `owner_guarded_job_id`) in addition to the handlers.
+//!
+//! Admin routes (`/api/admin/*`) are a separate realm: they are authorized
+//! *only* by the shared secret in `X-Admin-Secret` (`require_admin_secret`).
+//! Owner tokens/cookies never grant admin access, and the admin secret never
+//! grants owner access (it is not read by any owner function).
 //! ============================================================================
 
 use axum::{
-    http::{header::AUTHORIZATION, HeaderMap, StatusCode},
+    extract::{Request, State},
+    http::{header::AUTHORIZATION, HeaderMap, Method, StatusCode},
+    middleware::Next,
+    response::{IntoResponse, Response},
     Json,
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
@@ -39,6 +50,12 @@ const COOKIE_MAX_AGE_DAYS: i64 = 365; // 1 year
 
 /// Alternative header for clients that cannot send `Authorization: Bearer`.
 pub const API_KEY_HEADER: &str = "x-api-key";
+
+/// Header carrying the shared admin secret (admin routes only).
+pub const ADMIN_SECRET_HEADER: &str = "x-admin-secret";
+
+/// Environment variable holding the shared admin secret.
+pub const ADMIN_SECRET_ENV: &str = "ADMIN_KPI_SECRET";
 
 /// Returned when an API token was supplied but is not a valid UUIDv4.
 #[derive(Debug, PartialEq, Eq)]
@@ -139,8 +156,8 @@ pub fn validate_owner(job_owner: Option<&String>, cookie_owner: Option<&String>)
 /// * unknown job            → 404
 /// * no / foreign identity  → 403 (also for legacy jobs without an owner)
 ///
-/// Read-only endpoints (viewing a job, sequences, stats, Psos/Bakta state) do
-/// not call this, so a shared job ID gives view access only.
+/// Read-only endpoints (viewing a job, sequences, stats, reading Psos/Bakta
+/// state) do not call this, so a shared job ID gives view access only.
 pub fn authorize_owner(
     state: &AppState,
     job_id: &str,
@@ -164,6 +181,101 @@ pub fn authorize_owner(
             )),
         )),
     }
+}
+
+/// Single source of truth for which job requests are owner-only.
+///
+/// Returns the job ID if `method` + `path` on `/api/job/{job_id}/...` requires
+/// the owner, `None` otherwise. Owner-only are:
+///
+/// * every state-changing method (POST/PUT/PATCH/DELETE) on a job and its
+///   sub-resources – delete, rename, retry, saving/deleting Psos and Bakta
+///   state (i.e. starting a run for the job), Bakta ingest;
+/// * downloads (`GET .../download/{format}`) and the stats CSV export
+///   (`GET .../stats/export`).
+///
+/// Job creation (`POST /api/job/`) has no job ID and is not guarded. Works on
+/// concrete paths and on OpenAPI path templates (`{job_id}`), so the OpenAPI
+/// security requirements are derived from the same rules.
+pub fn owner_guarded_job_id<'a>(method: &Method, path: &'a str) -> Option<&'a str> {
+    let rest = path.strip_prefix("/api/job/")?;
+    let (job_id, sub) = rest.split_once('/').unwrap_or((rest, ""));
+    if job_id.is_empty() {
+        return None;
+    }
+    let guarded = match *method {
+        Method::GET | Method::HEAD => {
+            sub == "download" || sub.starts_with("download/") || sub == "stats/export"
+        }
+        Method::POST | Method::PUT | Method::PATCH | Method::DELETE => true,
+        _ => false,
+    };
+    guarded.then_some(job_id)
+}
+
+/// Middleware: rejects non-owners on every owner-only job route
+/// (see `owner_guarded_job_id`) before the handler runs, so shared jobs are
+/// strictly read-only even if a handler forgets its own check.
+pub async fn require_owner_for_writes(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    req: Request,
+    next: Next,
+) -> Response {
+    if let Some(job_id) = owner_guarded_job_id(req.method(), req.uri().path()) {
+        if let Err(rejection) = authorize_owner(&state, job_id, &jar, req.headers()) {
+            return rejection.into_response();
+        }
+    }
+    next.run(req).await
+}
+
+/// Middleware for `/api/admin/*`: only the shared secret in `X-Admin-Secret`
+/// authorizes. Owner tokens (`Authorization`, `X-API-Key`) and cookies are
+/// ignored here, so they can never grant admin access.
+///
+/// * secret not configured → 503 (admin routes disabled)
+/// * missing / wrong secret → 401
+pub async fn require_admin_secret(req: Request, next: Next) -> Response {
+    let Some(expected) = std::env::var(ADMIN_SECRET_ENV)
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+    else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse::new(format!(
+                "Admin routes are disabled ({ADMIN_SECRET_ENV} not configured)"
+            ))),
+        )
+            .into_response();
+    };
+
+    if !admin_secret_matches(req.headers(), expected.trim()) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(ErrorResponse::new("Missing or invalid X-Admin-Secret")),
+        )
+            .into_response();
+    }
+    next.run(req).await
+}
+
+/// Checks the `X-Admin-Secret` header (and only that header) against the
+/// expected secret in constant time.
+fn admin_secret_matches(headers: &HeaderMap, expected: &str) -> bool {
+    headers
+        .get(ADMIN_SECRET_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(|provided| constant_time_eq(provided.trim().as_bytes(), expected.as_bytes()))
+        .unwrap_or(false)
+}
+
+/// Constant-time comparison (only the length may leak).
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 /// Pseudonymous, stable identifier of a contributor for the shared annotations
@@ -241,6 +353,12 @@ mod tests {
     }
 
     #[test]
+    fn admin_secret_does_not_grant_owner_identity() {
+        let h = headers("x-admin-secret", TOKEN);
+        assert_eq!(owner_from_request(&CookieJar::new(), &h), None);
+    }
+
+    #[test]
     fn token_flow_does_not_set_a_cookie() {
         let h = headers("x-api-key", TOKEN);
         let (owner, jar) = get_or_create_owner(CookieJar::new(), &h).unwrap();
@@ -279,5 +397,61 @@ mod tests {
     fn invalid_token_on_create_is_an_error() {
         let h = headers("authorization", "Bearer admin");
         assert!(get_or_create_owner(CookieJar::new(), &h).is_err());
+    }
+
+    #[test]
+    fn writes_and_runs_on_jobs_are_owner_only() {
+        for (method, path) in [
+            (Method::DELETE, "/api/job/abc"),
+            (Method::PATCH, "/api/job/abc"),
+            (Method::POST, "/api/job/abc/retry"),
+            (Method::POST, "/api/job/abc/psos"),
+            (Method::DELETE, "/api/job/abc/psos"),
+            (Method::POST, "/api/job/abc/bakta"),
+            (Method::DELETE, "/api/job/abc/bakta"),
+            (Method::POST, "/api/job/abc/bakta/ingest"),
+            (Method::GET, "/api/job/abc/download/tsv"),
+            (Method::GET, "/api/job/abc/stats/export"),
+        ] {
+            assert_eq!(owner_guarded_job_id(&method, path), Some("abc"), "{method} {path}");
+        }
+    }
+
+    #[test]
+    fn reads_and_creation_are_not_owner_guarded() {
+        for (method, path) in [
+            (Method::POST, "/api/job/"),
+            (Method::GET, "/api/job/abc"),
+            (Method::GET, "/api/job/abc/stats"),
+            (Method::GET, "/api/job/abc/psos"),
+            (Method::GET, "/api/job/abc/bakta"),
+            (Method::GET, "/api/job/abc/sequence/1"),
+            (Method::OPTIONS, "/api/job/abc"),
+            (Method::DELETE, "/api/jobs/"),
+            (Method::GET, "/api/admin/kpis"),
+        ] {
+            assert_eq!(owner_guarded_job_id(&method, path), None, "{method} {path}");
+        }
+    }
+
+    #[test]
+    fn guard_works_on_openapi_templates() {
+        assert_eq!(
+            owner_guarded_job_id(&Method::GET, "/api/job/{job_id}/download/{format}"),
+            Some("{job_id}")
+        );
+    }
+
+    #[test]
+    fn only_admin_header_matches_admin_secret() {
+        let secret = "s3cr3t-admin";
+        assert!(admin_secret_matches(&headers("x-admin-secret", secret), secret));
+        assert!(!admin_secret_matches(&headers("x-admin-secret", "wrong"), secret));
+        assert!(!admin_secret_matches(&headers("x-api-key", secret), secret));
+        assert!(!admin_secret_matches(
+            &headers("authorization", &format!("Bearer {secret}")),
+            secret
+        ));
+        assert!(!admin_secret_matches(&HeaderMap::new(), secret));
     }
 }

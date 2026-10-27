@@ -8,29 +8,32 @@
 //! dashboard. Set the ADMIN_KPI_SECRET environment variable on the server;
 //! requests must send the same value in the X-Admin-Secret header.
 //!
-//! If ADMIN_KPI_SECRET is not set, the endpoint is disabled entirely (503)
+//! The check is done centrally by `auth::require_admin_secret`, which is
+//! applied as a route layer to all `/api/admin/*` routes in `main.rs`. Only
+//! the admin secret authorizes there; owner tokens and cookies are ignored.
+//! If ADMIN_KPI_SECRET is not set, the routes are disabled entirely (503)
 //! rather than silently allowing unauthenticated access.
 //!
 //! The same secret protects the community-curation review routes:
 //!   GET  /api/admin/annotations?status=candidate|confirmed|conflicted|legacy|rejected
 //!   POST /api/admin/annotations/{md5}/review   {"status": "confirmed|rejected|candidate"}
+//!
+//! The handlers below therefore assume an already authorized admin request.
+//! Their security requirement (`admin_secret`) is added to the OpenAPI doc by
+//! the `SecurityAddon` modifier in `main.rs`.
 //! ============================================================================
 
 use axum::{
     extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    http::StatusCode,
     Json,
 };
 use serde::{Deserialize, Serialize};
-use std::env;
 use utoipa::ToSchema;
 
 use crate::models::ErrorResponse;
 use crate::state::AppState;
 use crate::storage::KpiMonthRow;
-
-const ADMIN_SECRET_ENV: &str = "ADMIN_KPI_SECRET";
-const ADMIN_SECRET_HEADER: &str = "x-admin-secret";
 
 /// One month's combined KPI figures (jobs.db counters + AI-DB annotations DB growth).
 #[derive(Debug, Serialize, ToSchema)]
@@ -63,52 +66,11 @@ pub struct KpiOverviewResponse {
     pub months: Vec<KpiMonthEntry>,
 }
 
-/// Checks the X-Admin-Secret header against the ADMIN_KPI_SECRET env var.
-/// Returns Err with the appropriate status/response if the check fails.
-fn check_admin_secret(headers: &HeaderMap) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
-    let configured = env::var(ADMIN_SECRET_ENV).map_err(|_| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(ErrorResponse::new(format!(
-                "Admin KPI endpoint disabled: {ADMIN_SECRET_ENV} is not set on the server"
-            ))),
-        )
-    })?;
-
-    let provided = headers
-        .get(ADMIN_SECRET_HEADER)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-
-    // Constant-time-ish comparison isn't critical here (this is an internal
-    // admin tool, not a public auth boundary), but avoid short-circuiting on
-    // length to make timing side-channels slightly harder regardless.
-    let matches = provided.len() == configured.len()
-        && provided
-        .bytes()
-        .zip(configured.bytes())
-        .fold(0u8, |acc, (a, b)| acc | (a ^ b))
-        == 0
-        && !provided.is_empty();
-
-    if matches {
-        Ok(())
-    } else {
-        Err((
-            StatusCode::UNAUTHORIZED,
-            Json(ErrorResponse::new(format!(
-                "Missing or invalid {ADMIN_SECRET_HEADER} header"
-            ))),
-        ))
-    }
-}
-
 /// Returns monthly KPI figures: job counts, sequence throughput, match-source
 /// breakdown, Bakta/Psos usage, active users, and AI-DB annotations DB growth.
 ///
-/// Protected by a shared secret sent in the `X-Admin-Secret` header (see
-/// ADMIN_KPI_SECRET environment variable). Not a full auth system – intended
-/// for internal/admin use only.
+/// Requires the shared admin secret in the `X-Admin-Secret` header (see
+/// ADMIN_KPI_SECRET environment variable). Owner tokens are not accepted.
 #[utoipa::path(
     get,
     path = "/api/admin/kpis",
@@ -122,10 +84,7 @@ fn check_admin_secret(headers: &HeaderMap) -> Result<(), (StatusCode, Json<Error
 )]
 pub async fn get_kpi_overview(
     State(state): State<AppState>,
-    headers: HeaderMap,
 ) -> Result<Json<KpiOverviewResponse>, (StatusCode, Json<ErrorResponse>)> {
-    check_admin_secret(&headers)?;
-
     let rows: Vec<KpiMonthRow> = state.get_kpi_overview().map_err(|e| {
         tracing::error!("Failed to load KPI overview: {e}");
         (
@@ -208,7 +167,7 @@ fn bad_request(msg: String) -> (StatusCode, Json<ErrorResponse>) {
 
 /// Lists curation entries of one status for review.
 ///
-/// Protected by the same `X-Admin-Secret` as the KPI overview.
+/// Requires the shared admin secret in the `X-Admin-Secret` header.
 #[utoipa::path(
     get,
     path = "/api/admin/annotations",
@@ -226,10 +185,8 @@ fn bad_request(msg: String) -> (StatusCode, Json<ErrorResponse>) {
 )]
 pub async fn list_admin_annotations(
     State(state): State<AppState>,
-    headers: HeaderMap,
     Query(q): Query<AdminAnnotationsQuery>,
 ) -> Result<Json<AdminAnnotationsResponse>, (StatusCode, Json<ErrorResponse>)> {
-    check_admin_secret(&headers)?;
     let status = q.status.unwrap_or_else(|| "conflicted".to_string());
     if !LISTABLE.contains(&status.as_str()) {
         return Err(bad_request(format!(
@@ -259,6 +216,8 @@ pub async fn list_admin_annotations(
 
 /// Sets the review status of one entry. `confirmed` and `rejected` lock the
 /// entry against further consensus changes; `candidate` releases it again.
+///
+/// Requires the shared admin secret in the `X-Admin-Secret` header.
 #[utoipa::path(
     post,
     path = "/api/admin/annotations/{md5}/review",
@@ -275,11 +234,9 @@ pub async fn list_admin_annotations(
 )]
 pub async fn review_admin_annotation(
     State(state): State<AppState>,
-    headers: HeaderMap,
     Path(md5): Path<String>,
     Json(body): Json<ReviewAnnotationRequest>,
 ) -> Result<Json<ReviewAnnotationResponse>, (StatusCode, Json<ErrorResponse>)> {
-    check_admin_secret(&headers)?;
     let md5 = md5.to_ascii_lowercase();
     if md5.len() != 32 || !md5.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(bad_request("md5 must be 32 hexadecimal characters".into()));

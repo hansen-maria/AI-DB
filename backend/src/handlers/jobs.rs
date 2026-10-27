@@ -74,7 +74,7 @@ fn get_temp_dir() -> PathBuf {
         ("job_id" = String, Path, description = "Unique job ID (UUID)"),
         ("page" = Option<usize>, Query, description = "Sequence page (1-indexed, default: 1)"),
         ("per_page" = Option<usize>, Query, description = "Sequences per page (default: 20, max: 10000)"),
-        ("filter" = Option<String>, Query, description = "Filter: all, hash_match, alignment, none"),
+        ("filter" = Option<String>, Query, description = "Match-status filter: all (default), bakta_db, aidb_db, hash_match (either DB), alignment, none"),
         ("search" = Option<String>, Query, description = "Search in ID, gene, product"),
         ("min_length" = Option<usize>, Query, description = "Minimum sequence length"),
         ("max_length" = Option<usize>, Query, description = "Maximum sequence length"),
@@ -206,15 +206,16 @@ pub async fn get_job(
 #[utoipa::path(
     post,
     path = "/api/job/",
-    security(("bearer_token" = []), ("api_key" = [])),
     tag = "Jobs",
     request_body(
         content_type = "multipart/form-data",
         description = "FASTA file or content"
     ),
     responses(
-        (status = 201, description = "Job created", body = JobCreateResponse),
-        (status = 400, description = "Invalid input", body = ErrorResponse)
+        (status = 201, description = "Job created (browsers without owner cookie/token receive a new `ai_db_user` cookie)", body = JobCreateResponse),
+        (status = 400, description = "Invalid input or file too large", body = ErrorResponse),
+        (status = 401, description = "Malformed API token (not a UUIDv4)", body = ErrorResponse),
+        (status = 500, description = "Upload could not be stored", body = ErrorResponse)
     )
 )]
 pub async fn create_job(
@@ -423,7 +424,7 @@ pub async fn create_job(
                 is_gzip_data,
             );
         })
-        .await;
+            .await;
 
         // Clean up temp file
         if let Err(e) = temp_path.close() {
@@ -464,16 +465,15 @@ pub struct ListJobsParams {
 #[utoipa::path(
     get,
     path = "/api/jobs/",
-    security(("bearer_token" = []), ("api_key" = [])),
     tag = "Jobs",
     params(
         ("page"     = Option<usize>,  Query, description = "Page (1-indexed, default: 1)"),
-        ("per_page" = Option<usize>,  Query, description = "Jobs per page (default: 20, max: 100)"),
+        ("per_page" = Option<usize>,  Query, description = "Jobs per page (default: 20, max: 10000)"),
         ("status"   = Option<String>, Query, description = "Filter by status: pending, processing, completed, failed"),
         ("search"   = Option<String>, Query, description = "Search in filename (case-insensitive)")
     ),
     responses(
-        (status = 200, description = "Paginated job list", body = PaginatedJobsResponse)
+        (status = 200, description = "Paginated list of the caller's own jobs (empty without owner cookie/token)", body = PaginatedJobsResponse)
     )
 )]
 pub async fn list_jobs(
@@ -558,7 +558,6 @@ pub async fn list_jobs(
 #[utoipa::path(
     delete,
     path = "/api/job/{job_id}",
-    security(("bearer_token" = []), ("api_key" = [])),
     tag = "Jobs",
     params(
         ("job_id" = String, Path, description = "Unique job ID (UUID)")
@@ -622,7 +621,6 @@ pub async fn delete_job(
 #[utoipa::path(
     patch,
     path = "/api/job/{job_id}",
-    security(("bearer_token" = []), ("api_key" = [])),
     tag = "Jobs",
     params(
         ("job_id" = String, Path, description = "Unique job ID (UUID)")
@@ -696,11 +694,11 @@ pub async fn rename_job(
 #[utoipa::path(
     delete,
     path = "/api/jobs/",
-    security(("bearer_token" = []), ("api_key" = [])),
     tag = "Jobs",
     request_body = BulkDeleteRequest,
     responses(
-        (status = 200, description = "Bulk delete result (jobs not owned by the caller are reported as 'forbidden')", body = BulkDeleteResponse)
+        (status = 200, description = "All requested jobs deleted", body = BulkDeleteResponse),
+        (status = 207, description = "Partially deleted: jobs not owned by the caller are listed in `forbidden`, unknown IDs in `not_found`", body = BulkDeleteResponse)
     )
 )]
 pub async fn bulk_delete_jobs(
@@ -821,7 +819,6 @@ pub async fn get_sequence(
 #[utoipa::path(
     post,
     path = "/api/job/{job_id}/retry",
-    security(("bearer_token" = []), ("api_key" = [])),
     tag = "Jobs",
     params(
         ("job_id" = String, Path, description = "Unique job ID (UUID)")
@@ -927,7 +924,7 @@ pub async fn retry_job(
         let result = tokio::task::spawn_blocking(move || {
             reannotate_sequences(&state_clone, &job_id_clone, sequences);
         })
-        .await;
+            .await;
 
         if let Err(e) = result {
             tracing::error!("Retry task panicked for job {}: {}", job_id, e);

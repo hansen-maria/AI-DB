@@ -21,7 +21,7 @@ use crate::state::AppState;
 /// existing filter state when triggering a filtered export.
 #[derive(Debug, Default, Deserialize)]
 pub struct DownloadFilterQuery {
-    /// Match-status filter: all | hash_match | bakta_db | aidb_db | alignment | none
+    /// Match-status filter: all (default) | bakta_db | aidb_db | hash_match (either DB) | alignment | none
     pub filter: Option<String>,
     /// Case-insensitive text search in ID, gene, product
     pub search: Option<String>,
@@ -39,12 +39,11 @@ pub struct DownloadFilterQuery {
 #[utoipa::path(
     get,
     path = "/api/job/{job_id}/download/{format}",
-    security(("bearer_token" = []), ("api_key" = [])),
     tag = "Jobs",
     params(
         ("job_id"      = String,         Path,  description = "Job ID (UUID)"),
         ("format"      = String,         Path,  description = "Download format: tsv, json, fasta, gff3"),
-        ("filter"      = Option<String>, Query, description = "Match-status filter"),
+        ("filter"      = Option<String>, Query, description = "Match-status filter: all (default), bakta_db, aidb_db, hash_match (either DB), alignment, none"),
         ("search"      = Option<String>, Query, description = "Text search in ID / gene / product"),
         ("min_length"  = Option<usize>,  Query, description = "Minimum sequence length"),
         ("max_length"  = Option<usize>,  Query, description = "Maximum sequence length"),
@@ -55,9 +54,9 @@ pub struct DownloadFilterQuery {
     ),
     responses(
         (status = 200, description = "File download", content_type = "application/octet-stream"),
-        (status = 400, description = "Invalid format or job not completed"),
-        (status = 403, description = "Not authorized (owner cookie or API token missing or not matching the job owner)"),
-        (status = 404, description = "Job not found")
+        (status = 400, description = "Invalid format or job not completed", body = ErrorResponse),
+        (status = 403, description = "Not the job owner (owner cookie or API token missing or not matching)", body = ErrorResponse),
+        (status = 404, description = "Job not found", body = ErrorResponse)
     )
 )]
 pub async fn download_job(

@@ -45,9 +45,9 @@ pub async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
 #[utoipa::path(
     get,
     path = "/api/db/info",
-    tag = "Database",
+    tag = "Health",
     responses(
-        (status = 200, description = "Database information", body = DbInfoResponse)
+        (status = 200, description = "Bakta DB and AI-DB annotations DB information", body = DbInfoResponse)
     )
 )]
 pub async fn db_info(State(state): State<AppState>) -> impl IntoResponse {
