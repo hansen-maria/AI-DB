@@ -221,7 +221,7 @@ pub fn is_same_origin_request(headers: &HeaderMap) -> bool {
     !origin_host.is_empty() && hostname(origin_host).eq_ignore_ascii_case(hostname(host))
 }
 
-/// Host without port ("example.org:8080" -> "example.org", "[::1]:80" -> "[::1]").
+/// Host without port ("example.org:8080" -> "example.org", "\[::1]:80" -> "\[::1]").
 fn hostname(host: &str) -> &str {
     if host.starts_with('[') {
         return host.split_inclusive(']').next().unwrap_or(host);
