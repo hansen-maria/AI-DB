@@ -12,7 +12,6 @@
 //! ============================================================================
 
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
 
 /// Maximum accepted protein length (aa). Titin is ~35 k aa.
 const MAX_LENGTH: usize = 100_000;
@@ -29,7 +28,8 @@ const MAX_LENGTH: usize = 100_000;
 ///   feature.psc.go_ids          → go_ids (comma-separated)
 ///   feature.psc.cog_category    → cog_category  → psc table
 ///   hypothetical features       → md5_hash + length only, no annotation IDs
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CustomAnnotationEntry {
     /// MD5 hash of the protein sequence as hex string (32 chars).
     /// Taken directly from feature.aa_hexdigest in the Bakta JSON.
@@ -238,13 +238,15 @@ impl CustomAnnotationEntry {
 }
 
 /// Request body for POST /api/job/{job_id}/bakta/ingest
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct IngestCustomAnnotationsRequest {
     pub entries: Vec<CustomAnnotationEntry>,
 }
 
 /// Response body for POST /api/job/{job_id}/bakta/ingest
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct IngestCustomAnnotationsResponse {
     /// New sequences added as unreviewed `candidate` entries
     pub ingested: usize,

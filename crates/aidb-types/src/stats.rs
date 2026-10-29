@@ -3,10 +3,10 @@
 //! ============================================================================
 
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
 
 /// Functional statistics response
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct FunctionalStats {
     /// Job ID
     pub job_id: String,
@@ -27,14 +27,16 @@ pub struct FunctionalStats {
 }
 
 /// A counted item (name + count)
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CountItem {
     pub name: String,
     pub count: usize,
 }
 
 /// COG category with description
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CogCategory {
     pub code: String,
     pub name: String,
@@ -42,7 +44,8 @@ pub struct CogCategory {
 }
 
 /// GO terms grouped by ontology
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct GoTermStats {
     /// Biological Process (GO:0008150)
     pub biological_process: Vec<CountItem>,

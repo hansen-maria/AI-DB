@@ -3,7 +3,6 @@
 //! ============================================================================
 
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
 
 use super::job::{JobStatus, JobSummary};
 use super::sequence::SequenceInfo;
@@ -15,7 +14,8 @@ pub const DEFAULT_PER_PAGE: usize = 20;
 pub const MAX_PER_PAGE: usize = 10000;
 
 /// Pagination information
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct PaginationInfo {
     /// Current page (1-indexed)
     pub page: usize,
@@ -46,7 +46,8 @@ impl PaginationInfo {
 }
 
 /// Paginated response for job list
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct PaginatedJobsResponse {
     /// List of jobs (without sequences for performance)
     pub jobs: Vec<JobSummary>,
@@ -55,7 +56,8 @@ pub struct PaginatedJobsResponse {
 }
 
 /// Paginated job details response
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct PaginatedJobResponse {
     /// Job ID
     pub job_id: String,
@@ -88,35 +90,49 @@ pub struct PaginatedJobResponse {
 }
 
 /// Query parameters for job list
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ListJobsQuery {
     /// Page number (1-indexed, default: 1)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub page: Option<usize>,
     /// Items per page (default: 20, max: 100)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub per_page: Option<usize>,
 }
 
 /// Query parameters for job details
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct GetJobQuery {
     /// Page number for sequences (1-indexed, default: 1)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub page: Option<usize>,
     /// Sequences per page (default: 20, max: 10000)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub per_page: Option<usize>,
     /// Match-status filter: "all" (default), "bakta_db", "aidb_db", "hash_match" (either DB), "alignment", "none"
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub filter: Option<String>,
     /// Search text (searches in ID, gene, product)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub search: Option<String>,
     /// Minimum sequence length
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub min_length: Option<usize>,
     /// Maximum sequence length
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_length: Option<usize>,
     /// Filter by COG category (e.g., "J", "K", "L")
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cog: Option<String>,
     /// Filter by EC class (1-7)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ec_class: Option<String>,
     /// Filter: only sequences with gene name
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub has_gene: Option<bool>,
     /// Filter: only sequences with product/function
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub has_product: Option<bool>,
 }

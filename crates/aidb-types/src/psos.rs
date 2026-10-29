@@ -3,10 +3,10 @@
 //! ============================================================================
 
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
 
 /// A single Psos analysis result for a sequence
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct PsosResult {
     /// The sequence ID this result belongs to
@@ -39,7 +39,8 @@ pub struct PsosResult {
 }
 
 /// Request body for saving Psos results
-#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct SavePsosResultsRequest {
     /// List of Psos results to save
@@ -47,7 +48,8 @@ pub struct SavePsosResultsRequest {
 }
 
 /// Response after saving Psos results
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct SavePsosResultsResponse {
     /// Number of results saved
@@ -58,7 +60,8 @@ pub struct SavePsosResultsResponse {
 }
 
 /// Response containing all Psos results for a job
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct PsosResultsResponse {
     /// The job ID

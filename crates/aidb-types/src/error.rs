@@ -3,10 +3,10 @@
 //! ============================================================================
 
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
 
 /// Error response
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ErrorResponse {
     /// Error description
     pub detail: String,

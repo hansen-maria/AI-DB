@@ -7,6 +7,9 @@ authors = ["AI-DB Team"]
 license = "MIT"
 
 [dependencies]
+# Shared API types (with utoipa schemas for the OpenAPI document)
+aidb-types = { path = "../crates/aidb-types", features = ["openapi"] }
+
 # Web framework
 axum = { version = "0.8.8", features = ["multipart"] }
 axum-extra = { version = "0.12.5", features = ["cookie"] }
@@ -43,10 +46,3 @@ time = "0.3"
 # OpenAPI documentation
 utoipa = { version = "5.4.0", features = ["axum_extras", "chrono"] }
 utoipa-swagger-ui = { version = "9.0.2", features = ["axum"] }
-
-[profile.release]
-lto = true
-codegen-units = 1
-opt-level = 3
-panic = "abort"
-strip = true

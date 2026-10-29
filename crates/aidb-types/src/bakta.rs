@@ -3,14 +3,14 @@
 //! ============================================================================
 
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
 
 fn default_workflow_mode() -> String {
     "bakta".to_string()
 }
 
 /// Persisted Bakta job state – one row per AI-DB job.
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct StoredBaktaJob {
     pub job_id: String,
     pub bakta_job_id: String,
@@ -45,7 +45,8 @@ pub struct StoredBaktaJob {
 }
 
 /// Request body for POST /api/job/{job_id}/bakta
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct SaveBaktaJobRequest {
     pub bakta_job_id: String,
     pub bakta_secret: String,
@@ -67,13 +68,15 @@ pub struct SaveBaktaJobRequest {
 }
 
 /// Response body for POST /api/job/{job_id}/bakta
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct SaveBaktaJobResponse {
     pub saved: bool,
 }
 
 /// Response body for GET /api/job/{job_id}/bakta
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct BaktaJobStateResponse {
     pub state: StoredBaktaJob,
 }

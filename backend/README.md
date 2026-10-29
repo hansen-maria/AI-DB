@@ -11,17 +11,9 @@ backend/src/
 ├── state.rs             # AppState, DB connection, job management
 ├── storage.rs           # SQLite persistence (30-day retention)
 │
-├── models/              # Data structures 
-│   ├── mod.rs           
-│   ├── bakta.rs         # Data models for Bakta job persistence
-│   ├── custom_db.rs     # AI-DB annotation ingest models (entries, provenance, status)
-│   ├── error.rs         # ErrorResponse
-│   ├── health.rs        # Health-Check types and responses
-│   ├── job.rs           # JobResponse, JobStatus, JobSummary, JobCreateResponse
-│   ├── pagination.rs    # PaginationInfo, PaginatedJobsResponse, Query types
-│   ├── psos.rs          # Psos analysis result models
-│   ├── sequence.rs      # SequenceInfo, SequenceFilter, AdvancedSequenceFilter
-│   └── stats.rs         # FunctionalStats, CountItem, CogCategory, GoTerms
+├── models/              # Re-exports the wire types from crates/aidb-types
+│   ├── mod.rs
+│   └── sequence.rs      # Server-internal: HashLookupResult, SequenceFilter, AdvancedSequenceFilter
 │
 ├── handlers/            # API endpoints 
 │   ├── mod.rs           

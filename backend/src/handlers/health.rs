@@ -2,7 +2,7 @@
 //! Health check and database info handlers
 //! ============================================================================
 
-use crate::models::{DbInfoResponse, HealthCheckResponse};
+use crate::models::{BaktaDbHealth, DbInfoResponse, HealthCheckResponse, API_VERSION};
 use crate::services::annotation::get_bakta_db_release;
 use crate::state::AppState;
 use axum::{extract::State, response::IntoResponse, Json};
@@ -31,14 +31,16 @@ pub async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
         "not_configured"
     };
 
-    Json(serde_json::json!({
-        "status": "healthy",
-        "service": "ai-db-api",
-        "bakta_db": {
-            "status": db_status,
-            "path": state.bakta_db_path().map(|p| p.display().to_string())
-        }
-    }))
+    Json(HealthCheckResponse {
+        status: "healthy".to_string(),
+        service: "ai-db-api".to_string(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        api_version: API_VERSION,
+        bakta_db: BaktaDbHealth {
+            status: db_status.to_string(),
+            path: state.bakta_db_path().map(|p| p.display().to_string()),
+        },
+    })
 }
 
 /// Database info endpoint - provides details about the Bakta database

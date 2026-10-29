@@ -1,0 +1,6 @@
+# Build context is the repository root (Cargo workspace); keep it small
+target
+**/target
+frontend
+.git
+.vscode

@@ -29,7 +29,12 @@ user-expandable AI-DB Annotations Database.
 
 ```
 ai-db/
+├── Cargo.toml                          # Cargo workspace (backend + crates/)
 ├── docker-compose.yml
+├── crates/
+│   ├── aidb-types/                     # Shared API request/response types
+│   ├── aidb-client/                    # Client library for the REST API
+│   └── aidb-cli/                       # `aidb` command-line client
 ├── frontend/                           # Vue.js Frontend
 │   ├── Dockerfile
 │   ├── nginx.conf
@@ -76,16 +81,8 @@ ai-db/
         ├── auth.rs                     # Owner auth (cookie or API token), read-only sharing
         ├── state.rs                    # AppState, DB connection, job management
         ├── storage.rs                  # SQLite job persistence (30 days)
-        ├── models/                     # Data structures
-        │   ├── bakta.rs                # Models for Bakta analysis
-        │   ├── custom_db.rs            # Models for custom AI-DB annotations
-        │   ├── job.rs                  # JobResponse, JobStatus
-        │   ├── psos.rs                 # Models for Psos analysis
-        │   ├── sequence.rs             # SequenceInfo, SequenceFilter
-        │   ├── pagination.rs           # PaginationInfo, query types
-        │   ├── stats.rs                # FunctionalStats for analysis
-        │   ├── health.rs               # Health check types
-        │   └── error.rs                # ErrorResponse
+        ├── models/                     # Re-exports aidb-types + server-internal types
+        │   └── sequence.rs             # HashLookupResult, SequenceFilter
         ├── handlers/                   # API endpoints
         │   ├── jobs.rs                 # CRUD operations for jobs
         │   ├── bakta.rs                # Bakta analysis & data ingestion endpoints
@@ -118,6 +115,12 @@ ai-db/
 See [`backend/README.md`](backend/README.md) for build instructions, API
 reference, and Docker configuration.
 
+The backend is a member of a Cargo workspace. API request/response types live
+in `crates/aidb-types` and are shared with the client crates (`aidb-client`,
+`aidb-cli`), so an incompatible API change fails to compile on the client side
+too. `GET /api/health` reports the server `version` and the API contract
+version `api_version`.
+
 ### Frontend (`frontend/`)
 
 | Technology         | Role                              |
@@ -144,9 +147,8 @@ The application will be available at `http://localhost:8080`.
 
 ```bash
 # Backend
-cd backend
-cargo build --release
-./target/release/ai-db
+cargo build --release -p ai-db-api
+./target/release/ai-db-api
 
 # Frontend (separate terminal)
 cd frontend

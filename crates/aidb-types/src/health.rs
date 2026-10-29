@@ -2,19 +2,28 @@
 //! Health-Check types and responses
 //! ============================================================================
 
-use serde::Serialize;
-use utoipa::ToSchema;
+use serde::{Deserialize, Serialize};
 
 /// Service Health Check Response
-#[derive(Serialize, ToSchema)]
+#[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct HealthCheckResponse {
     pub status: String,
     pub service: String,
+    /// Server build version (`CARGO_PKG_VERSION` of the backend), e.g. "1.0.0".
+    /// Empty when talking to a server that predates this field.
+    #[serde(default)]
+    pub version: String,
+    /// Version of the HTTP API contract, see [`crate::API_VERSION`].
+    /// `0` when talking to a server that predates this field.
+    #[serde(default)]
+    pub api_version: u32,
     pub bakta_db: BaktaDbHealth,
 }
 
 /// Bakta Database Health Check Response
-#[derive(Serialize, ToSchema)]
+#[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct BaktaDbHealth {
     /// Database connection status
     /// Possible values: connected, error, not_found, not_configured
@@ -28,7 +37,8 @@ pub struct BaktaDbHealth {
 /// Documents the response shape; the handler builds it as JSON. Fields that do
 /// not apply are omitted (`ups_entries`/`version`/`release` when the Bakta DB is
 /// unavailable, `error` when it is available).
-#[derive(Serialize, ToSchema)]
+#[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct DbInfoResponse {
     /// Indicates whether the Bakta database is accessible
     pub available: bool,
@@ -47,7 +57,8 @@ pub struct DbInfoResponse {
 }
 
 /// AI-DB annotations DB status (part of `DbInfoResponse`)
-#[derive(Serialize, ToSchema)]
+#[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct AidbDbInfo {
     /// Indicates whether the AI-DB annotations DB is accessible
     pub available: bool,

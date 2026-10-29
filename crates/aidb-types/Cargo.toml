@@ -1,0 +1,17 @@
+[package]
+name = "aidb-types"
+version = "0.1.0"
+description = "Shared request/response types of the AI-DB REST API"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+# Derive utoipa::ToSchema for the OpenAPI documentation (backend only)
+openapi = ["dep:utoipa"]
+
+[dependencies]
+serde = { workspace = true }
+chrono = { workspace = true }
+utoipa = { workspace = true, optional = true }

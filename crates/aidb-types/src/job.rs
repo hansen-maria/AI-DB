@@ -4,12 +4,12 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
 
 use super::sequence::SequenceInfo;
 
 /// Status of an annotation job
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum JobStatus {
     Pending,
@@ -19,7 +19,8 @@ pub enum JobStatus {
 }
 
 /// Job details and results
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct JobResponse {
     /// Unique job ID (UUID)
     pub job_id: String,
@@ -49,7 +50,8 @@ pub struct JobResponse {
 }
 
 /// Response after job creation
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct JobCreateResponse {
     /// Unique job ID (UUID)
     pub job_id: String,
@@ -62,7 +64,8 @@ pub struct JobCreateResponse {
 }
 
 /// Job summary (without sequences for list view)
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct JobSummary {
     /// Unique job ID
     pub job_id: String,
@@ -103,21 +106,24 @@ impl From<&JobResponse> for JobSummary {
 // ── New request / response types ─────────────────────────────────────────────
 
 /// Request body for renaming a job
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct RenameJobRequest {
     /// New display name for the job
     pub filename: String,
 }
 
 /// Request body for bulk-deleting multiple jobs
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct BulkDeleteRequest {
     /// IDs of jobs to delete
     pub job_ids: Vec<String>,
 }
 
 /// Result of a bulk-delete operation
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct BulkDeleteResponse {
     /// IDs that were successfully deleted
     pub deleted: Vec<String>,

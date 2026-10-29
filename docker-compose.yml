@@ -20,8 +20,10 @@ services:
   # Rust/Axum Backend
   api:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      # Repository root: the backend is a member of the Cargo workspace and
+      # depends on crates/aidb-types
+      context: .
+      dockerfile: backend/Dockerfile
     container_name: ai-db-api
     expose:
       - "8000"

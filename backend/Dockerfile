@@ -10,20 +10,29 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy manifest files first for better caching
+# Build context is the repository root (Cargo workspace).
+# Copy manifests first for better dependency caching
 COPY Cargo.toml Cargo.lock* ./
+COPY backend/Cargo.toml backend/
+COPY crates/aidb-types/Cargo.toml crates/aidb-types/
+COPY crates/aidb-client/Cargo.toml crates/aidb-client/
+COPY crates/aidb-cli/Cargo.toml crates/aidb-cli/
 
-# Create dummy src to build dependencies
-RUN mkdir src && \
-    echo "fn main() {}" > src/main.rs && \
-    cargo build --release && \
-    rm -rf src
+# Dummy sources for every workspace member, then build dependencies only
+RUN mkdir -p backend/src crates/aidb-types/src crates/aidb-client/src crates/aidb-cli/src && \
+    echo "fn main() {}" > backend/src/main.rs && \
+    touch crates/aidb-types/src/lib.rs crates/aidb-client/src/lib.rs && \
+    echo "fn main() {}" > crates/aidb-cli/src/main.rs && \
+    cargo build --release -p ai-db-api && \
+    rm -rf backend/src crates/aidb-types/src crates/aidb-client/src crates/aidb-cli/src
 
 # Copy actual source code
-COPY src ./src
+COPY crates ./crates
+COPY backend/src ./backend/src
 
-# Build the application
-RUN touch src/main.rs && cargo build --release
+# Build the application (touch so cargo rebuilds over the dummy artifacts)
+RUN touch backend/src/main.rs crates/aidb-types/src/lib.rs && \
+    cargo build --release -p ai-db-api
 
 # Runtime stage
 FROM debian:bookworm-slim

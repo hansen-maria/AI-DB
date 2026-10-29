@@ -1,0 +1,12 @@
+[package]
+name = "aidb-client"
+version = "0.1.0"
+description = "Async client library for the AI-DB REST API"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+aidb-types = { workspace = true }
+# HTTP stack (reqwest, tokio, retry middleware) is added with the first
+# endpoint implementation, see the CLI concept (v0.1).
