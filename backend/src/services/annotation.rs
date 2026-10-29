@@ -111,7 +111,8 @@ fn lookup_in_aidb(conn: &Connection, hash_bytes: &[u8], seq_length: usize) -> Ha
     // used as the per-row "release" timestamp shown to the user for AI-DB matches.
     // Entries an admin rejected are hidden; everything else is returned together
     // with its curation status (candidate / confirmed / conflicted / legacy).
-    let query = "SELECT length, uniparc_id, ncbi_nrp_id, uniref100_id, product, updated_at, status \
+    let query =
+        "SELECT length, uniparc_id, ncbi_nrp_id, uniref100_id, product, updated_at, status \
                  FROM ups WHERE hash = ? AND COALESCE(status, 'legacy') <> 'rejected'";
 
     match conn.query_row(query, [hash_bytes], |row| {

@@ -60,6 +60,12 @@ A job belongs to a random secret (UUIDv4), supplied in one of two ways:
 - **API / pipelines**: your own UUIDv4 in `Authorization: Bearer <token>` or `X-API-Key: <token>`
   on every request; no cookie is set. A malformed token gives `401` on job creation and is treated
   as anonymous elsewhere. If token and cookie are both sent, the token wins.
+- **Browser → API**: *Jobs → Access token* in the web interface shows the cookie's secret
+  (`GET /api/auth/token`, or `POST` to create one before the first job). Used as API token it
+  identifies the same owner, so web jobs can be managed from scripts and the AI-DB CLI. The
+  endpoint reads only the cookie (never echoes a Bearer token), answers only same-origin requests
+  (`auth::is_same_origin_request`: CORS mirrors origins and the Lax cookie also reaches sibling
+  subdomains) and sends `Cache-Control: no-store`.
 
 **The secret is never stored.** `auth::owner_digest` computes `md5("aidb-owner:" + secret)`
 (32 hex characters); this digest is the `owner_id` in `jobs.db`, in the KPI counters and the basis of
@@ -151,6 +157,9 @@ Access: **public** = no credentials; **anyone** = anyone with the job ID (owner 
 | `HEALTH` |                                       |                                          |                                       |
 | `GET`    | `/api/health`                         | `handlers::health::health_check`         | public                                |
 | `GET`    | `/api/db/info`                        | `handlers::health::db_info`              | public                                |
+| `AUTH`   |                                       |                                          |                                       |
+| `GET`    | `/api/auth/token`                     | `handlers::token::get_auth_token`        | browser cookie, same-origin only      |
+| `POST`   | `/api/auth/token`                     | `handlers::token::create_auth_token`     | browser cookie, same-origin only      |
 
 ## Functional Analysis
 

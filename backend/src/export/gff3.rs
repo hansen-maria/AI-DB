@@ -125,7 +125,10 @@ pub fn generate_gff3(job: &JobResponse) -> String {
             // curation status of community (aidb_db) matches:
             // confirmed | candidate | conflicted | legacy
             if let Some(ref status) = seq.annotation_status {
-                attributes.push(format!("annotation_status={}", encode_gff3_attribute(status)));
+                attributes.push(format!(
+                    "annotation_status={}",
+                    encode_gff3_attribute(status)
+                ));
             }
 
             // GFF3 columns (tab-separated):

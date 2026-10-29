@@ -239,10 +239,15 @@ pub async fn ingest_bakta_results(
     }
 
     // 3. Rate limit per contributor
-    let recent = state.recent_custom_contributions(&contributor).map_err(|e| {
-        tracing::error!("Ingest rate-limit check failed for job {job_id}: {e}");
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse::new(e)))
-    })?;
+    let recent = state
+        .recent_custom_contributions(&contributor)
+        .map_err(|e| {
+            tracing::error!("Ingest rate-limit check failed for job {job_id}: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse::new(e)),
+            )
+        })?;
     if recent + verified.len() > daily_ingest_limit() {
         return Err((
             StatusCode::TOO_MANY_REQUESTS,

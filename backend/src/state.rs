@@ -566,7 +566,9 @@ impl AppState {
             tracing::warn!("Failed to open KPI database for recording");
             return;
         };
-        if let Err(e) = storage::record_job_retry_completion(&conn, job, bakta_matches, aidb_matches) {
+        if let Err(e) =
+            storage::record_job_retry_completion(&conn, job, bakta_matches, aidb_matches)
+        {
             tracing::warn!("Failed to record job retry KPI for {}: {}", job.job_id, e);
         }
     }

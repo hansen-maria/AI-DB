@@ -2,6 +2,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { RouterLink } from 'vue-router'
 import { listJobs, bulkDeleteJobs, type JobSummary, type JobStatus, type PaginationInfo } from '../api/jobs.ts'
+import AccessTokenDialog from '../components/AccessTokenDialog.vue'
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -15,6 +16,9 @@ const perPage     = 20
 // Filters
 const searchInput  = ref('')
 const statusFilter = ref<JobStatus | ''>('')
+
+// Access token dialog (use web jobs from the CLI / API)
+const tokenDialogOpen = ref(false)
 
 // Selection
 const selectedIds = ref<Set<string>>(new Set())
@@ -182,13 +186,28 @@ onMounted(() => loadJobs())
         <h2>All Jobs</h2>
         <p>View and manage your annotation jobs</p>
       </div>
-      <RouterLink to="/submit" class="btn btn-primary">
-        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-        </svg>
-        New Job
-      </RouterLink>
+      <div class="page-header__actions">
+        <button
+            class="btn btn-secondary"
+            title="Show the access token to manage these jobs from the CLI or API"
+            aria-haspopup="dialog"
+            @click="tokenDialogOpen = true"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="7.5" cy="15.5" r="5.5"/><path d="M21 2l-9.6 9.6"/><path d="M15.5 7.5l3 3L22 7l-3-3"/>
+          </svg>
+          Access token
+        </button>
+        <RouterLink to="/submit" class="btn btn-primary">
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+          </svg>
+          New Job
+        </RouterLink>
+      </div>
     </div>
+
+    <AccessTokenDialog :open="tokenDialogOpen" @close="tokenDialogOpen = false" />
 
     <!-- Filter Bar -->
     <div class="filter-bar">
@@ -476,6 +495,13 @@ onMounted(() => loadJobs())
   align-items: flex-start;
   margin-bottom: 2rem;
   gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.page-header__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
   flex-wrap: wrap;
 }
 

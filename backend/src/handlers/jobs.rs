@@ -424,7 +424,7 @@ pub async fn create_job(
                 is_gzip_data,
             );
         })
-            .await;
+        .await;
 
         // Clean up temp file
         if let Err(e) = temp_path.close() {
@@ -924,7 +924,7 @@ pub async fn retry_job(
         let result = tokio::task::spawn_blocking(move || {
             reannotate_sequences(&state_clone, &job_id_clone, sequences);
         })
-            .await;
+        .await;
 
         if let Err(e) = result {
             tracing::error!("Retry task panicked for job {}: {}", job_id, e);

@@ -195,9 +195,12 @@ pub async fn list_admin_annotations(
         )));
     }
     let limit = q.limit.unwrap_or(100).clamp(1, 1000);
-    let rows = state
-        .list_custom_annotations(&status, limit)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse::new(e))))?;
+    let rows = state.list_custom_annotations(&status, limit).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse::new(e)),
+        )
+    })?;
     let entries = rows
         .into_iter()
         .map(|r| AdminAnnotationEntry {
@@ -256,6 +259,9 @@ pub async fn review_admin_annotation(
             StatusCode::NOT_FOUND,
             Json(ErrorResponse::new("No entry with this hash")),
         )),
-        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse::new(e)))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse::new(e)),
+        )),
     }
 }

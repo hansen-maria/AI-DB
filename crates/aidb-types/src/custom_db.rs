@@ -111,7 +111,11 @@ fn valid_ec(list: &str) -> bool {
                     return false;
                 }
                 // 1.2.3.n4 (preliminary numbers) is allowed in the 4th position
-                let digits = if i == 3 { p.strip_prefix('n').unwrap_or(p) } else { p };
+                let digits = if i == 3 {
+                    p.strip_prefix('n').unwrap_or(p)
+                } else {
+                    p
+                };
                 *p == "-" || (!digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()))
             })
     })
@@ -159,13 +163,19 @@ impl CustomAnnotationEntry {
         if let Some(v) = &e.uniparc_id {
             let ok = v.len() == 13
                 && v.starts_with("UPI")
-                && v[3..].chars().all(|c| c.is_ascii_digit() || ('A'..='F').contains(&c));
+                && v[3..]
+                    .chars()
+                    .all(|c| c.is_ascii_digit() || ('A'..='F').contains(&c));
             if !ok {
                 return Err("invalid uniparc_id");
             }
         }
         if let Some(v) = &e.ncbi_nrp_id {
-            if v.len() > 32 || !v.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.')) {
+            if v.len() > 32
+                || !v
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.'))
+            {
                 return Err("invalid ncbi_nrp_id");
             }
         }

@@ -9,6 +9,7 @@ pub mod jobs;
 pub mod kpi;
 pub mod psos;
 pub mod stats;
+pub mod token;
 
 pub use bakta::{delete_bakta_job, get_bakta_job, ingest_bakta_results, save_bakta_job};
 pub use download::download_job;
@@ -20,3 +21,4 @@ pub use jobs::{
 pub use kpi::get_kpi_overview;
 pub use psos::{delete_psos_results, get_psos_results, save_psos_results};
 pub use stats::{export_job_stats, get_job_stats};
+pub use token::{create_auth_token, get_auth_token};

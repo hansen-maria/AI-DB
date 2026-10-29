@@ -77,8 +77,8 @@ pub fn migrate_owner_ids_to_digest(conn: &Connection) -> Result<usize, rusqlite:
 
 /// Same migration for the KPI database (`kpi_monthly_owners.owner_id`).
 pub fn migrate_kpi_owner_ids_to_digest(conn: &Connection) -> Result<usize, rusqlite::Error> {
-    let mut stmt = conn
-        .prepare("SELECT month, owner_id FROM kpi_monthly_owners WHERE owner_id LIKE '%-%'")?;
+    let mut stmt =
+        conn.prepare("SELECT month, owner_id FROM kpi_monthly_owners WHERE owner_id LIKE '%-%'")?;
     let rows: Vec<(String, String)> = stmt
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
         .filter_map(|r| r.ok())
@@ -462,7 +462,10 @@ pub fn init_bakta_table(conn: &Connection) -> Result<(), rusqlite::Error> {
         [],
     ) {
         if !e.to_string().contains("duplicate column name") {
-            tracing::warn!("Unexpected error during bakta_jobs workflow_mode migration: {}", e);
+            tracing::warn!(
+                "Unexpected error during bakta_jobs workflow_mode migration: {}",
+                e
+            );
         }
     } else {
         tracing::info!("Bakta jobs table: migrated – added workflow_mode column");
@@ -470,7 +473,10 @@ pub fn init_bakta_table(conn: &Connection) -> Result<(), rusqlite::Error> {
 
     if let Err(e) = conn.execute("ALTER TABLE bakta_jobs ADD COLUMN workflow_stage TEXT", []) {
         if !e.to_string().contains("duplicate column name") {
-            tracing::warn!("Unexpected error during bakta_jobs workflow_stage migration: {}", e);
+            tracing::warn!(
+                "Unexpected error during bakta_jobs workflow_stage migration: {}",
+                e
+            );
         }
     } else {
         tracing::info!("Bakta jobs table: migrated – added workflow_stage column");
@@ -818,13 +824,27 @@ fn write_annotation(
     if let Some(ref uniref100) = e.uniref100_id {
         conn.execute(
             ips_sql,
-            params![uniref100, e.uniref90_id, e.gene, e.product, e.ec_ids, e.go_ids],
+            params![
+                uniref100,
+                e.uniref90_id,
+                e.gene,
+                e.product,
+                e.ec_ids,
+                e.go_ids
+            ],
         )?;
     }
     if let Some(ref uniref90) = e.uniref90_id {
         conn.execute(
             psc_sql,
-            params![uniref90, e.gene, e.product, e.cog_category, e.ec_ids, e.go_ids],
+            params![
+                uniref90,
+                e.gene,
+                e.product,
+                e.cog_category,
+                e.ec_ids,
+                e.go_ids
+            ],
         )?;
     }
     Ok(())
@@ -972,7 +992,11 @@ fn ingest_one(
 
     // ── New hash: insert as candidate (or confirmed if threshold is 1) ───────
     let Some((old_status, canonical_key, reviewed_at)) = existing else {
-        let status = if threshold <= 1 { STATUS_CONFIRMED } else { STATUS_CANDIDATE };
+        let status = if threshold <= 1 {
+            STATUS_CONFIRMED
+        } else {
+            STATUS_CANDIDATE
+        };
         write_annotation(conn, &hash_bytes, e, &key, status, 1, &now, false)?;
         upsert_submission(conn, &hash_bytes, e, &key, contributor, job_id, &now)?;
         stats.inserted += 1;
@@ -992,7 +1016,9 @@ fn ingest_one(
 
     // Admin-reviewed and legacy entries (no recorded annotation key) are not
     // changed by votes; the contribution is kept for later review.
-    let Some(canonical_key) = canonical_key else { return Ok(()) };
+    let Some(canonical_key) = canonical_key else {
+        return Ok(());
+    };
     if reviewed_at.is_some() {
         return Ok(());
     }
@@ -1018,7 +1044,11 @@ fn ingest_one(
     let (new_status, confirmations, replace_with): (&str, i64, Option<&str>) = match qualified.len()
     {
         0 => {
-            let s = if counts.len() > 1 { STATUS_CONFLICTED } else { STATUS_CANDIDATE };
+            let s = if counts.len() > 1 {
+                STATUS_CONFLICTED
+            } else {
+                STATUS_CANDIDATE
+            };
             (s, canonical_count, None)
         }
         1 => {
@@ -1037,7 +1067,14 @@ fn ingest_one(
     if let Some(winner_key) = replace_with {
         if let Some(winner) = load_submission_entry(conn, &hash_bytes, winner_key)? {
             write_annotation(
-                conn, &hash_bytes, &winner, winner_key, new_status, confirmations, &now, true,
+                conn,
+                &hash_bytes,
+                &winner,
+                winner_key,
+                new_status,
+                confirmations,
+                &now,
+                true,
             )?;
         }
     } else {
@@ -1226,7 +1263,11 @@ pub fn record_job_completion(
     let month = current_month();
     ensure_month_row(conn, &month)?;
 
-    let failed_increment = if job.status == JobStatus::Failed { 1 } else { 0 };
+    let failed_increment = if job.status == JobStatus::Failed {
+        1
+    } else {
+        0
+    };
 
     conn.execute(
         "UPDATE kpi_monthly SET
@@ -1374,9 +1415,7 @@ pub fn get_kpi_overview(conn: &Connection) -> Result<Vec<KpiMonthRow>, rusqlite:
 /// alongside `annotation_release` – rows ingested before that migration have
 /// `created_at IS NULL` and are excluded here (they still count towards the
 /// all-time total, just not attributable to a specific month).
-pub fn get_aidb_growth_by_month(
-    conn: &Connection,
-) -> Result<Vec<(String, i64)>, rusqlite::Error> {
+pub fn get_aidb_growth_by_month(conn: &Connection) -> Result<Vec<(String, i64)>, rusqlite::Error> {
     let mut stmt = conn.prepare(
         "SELECT strftime('%Y-%m', created_at) AS month, COUNT(*) AS new_sequences
          FROM ups
@@ -1386,7 +1425,9 @@ pub fn get_aidb_growth_by_month(
     )?;
 
     let rows = stmt
-        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))?
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?
         .filter_map(|r| r.ok())
         .collect();
 
@@ -1450,14 +1491,19 @@ mod curation_tests {
 
     fn product_of(conn: &Connection) -> String {
         let hash = hex_to_bytes(H).unwrap();
-        conn.query_row("SELECT product FROM ups WHERE hash = ?1", params![hash], |r| r.get(0))
-            .unwrap()
+        conn.query_row(
+            "SELECT product FROM ups WHERE hash = ?1",
+            params![hash],
+            |r| r.get(0),
+        )
+        .unwrap()
     }
 
     #[test]
     fn first_contribution_is_a_candidate() {
         let conn = db();
-        let s = ingest_custom_annotations(&conn, &[entry(H, "dnaK", "chaperone")], "c1", "j1").unwrap();
+        let s =
+            ingest_custom_annotations(&conn, &[entry(H, "dnaK", "chaperone")], "c1", "j1").unwrap();
         assert_eq!(s.inserted, 1);
         assert_eq!(state_of(&conn), ("candidate".to_string(), 1));
     }
@@ -1507,7 +1553,9 @@ mod curation_tests {
         ingest_custom_annotations(&conn, &[entry(H, "evil", "junk")], "c1", "j1").unwrap();
         ingest_custom_annotations(&conn, &[entry(H, "dnaK", "chaperone")], "c1", "j2").unwrap();
         let votes: i64 = conn
-            .query_row("SELECT COUNT(*) FROM annotation_submissions", [], |r| r.get(0))
+            .query_row("SELECT COUNT(*) FROM annotation_submissions", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(votes, 1);
     }
@@ -1535,13 +1583,34 @@ mod curation_tests {
         let ok = entry(H, "dnaK", "chaperone");
         assert!(ok.normalized().is_ok());
         for bad in [
-            CustomAnnotationEntry { product: Some("=HYPERLINK(\"x\")".into()), ..ok.clone() },
-            CustomAnnotationEntry { product: Some("a\tb".into()), ..ok.clone() },
-            CustomAnnotationEntry { ec_ids: Some("not-an-ec".into()), ..ok.clone() },
-            CustomAnnotationEntry { go_ids: Some("GO:12".into()), ..ok.clone() },
-            CustomAnnotationEntry { md5_hash: "zz".into(), ..ok.clone() },
-            CustomAnnotationEntry { uniref90_id: Some("bad".into()), ..ok.clone() },
-            CustomAnnotationEntry { source: Some("manual".into()), ..ok.clone() },
+            CustomAnnotationEntry {
+                product: Some("=HYPERLINK(\"x\")".into()),
+                ..ok.clone()
+            },
+            CustomAnnotationEntry {
+                product: Some("a\tb".into()),
+                ..ok.clone()
+            },
+            CustomAnnotationEntry {
+                ec_ids: Some("not-an-ec".into()),
+                ..ok.clone()
+            },
+            CustomAnnotationEntry {
+                go_ids: Some("GO:12".into()),
+                ..ok.clone()
+            },
+            CustomAnnotationEntry {
+                md5_hash: "zz".into(),
+                ..ok.clone()
+            },
+            CustomAnnotationEntry {
+                uniref90_id: Some("bad".into()),
+                ..ok.clone()
+            },
+            CustomAnnotationEntry {
+                source: Some("manual".into()),
+                ..ok.clone()
+            },
         ] {
             assert!(bad.normalized().is_err());
         }
@@ -1562,13 +1631,23 @@ mod owner_migration_tests {
         )
         .unwrap();
         let raw = "3f2b8c1e-5d4a-4e7b-9a6c-1d2e3f4a5b6c";
-        conn.execute("INSERT INTO jobs VALUES ('j1', ?1), ('j2', NULL)", params![raw]).unwrap();
-        conn.execute("INSERT INTO kpi_monthly_owners VALUES ('2026-10', ?1)", params![raw]).unwrap();
+        conn.execute(
+            "INSERT INTO jobs VALUES ('j1', ?1), ('j2', NULL)",
+            params![raw],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO kpi_monthly_owners VALUES ('2026-10', ?1)",
+            params![raw],
+        )
+        .unwrap();
 
         assert_eq!(migrate_owner_ids_to_digest(&conn).unwrap(), 1);
         assert_eq!(migrate_kpi_owner_ids_to_digest(&conn).unwrap(), 1);
         let job_owner: String = conn
-            .query_row("SELECT owner_id FROM jobs WHERE job_id = 'j1'", [], |r| r.get(0))
+            .query_row("SELECT owner_id FROM jobs WHERE job_id = 'j1'", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(job_owner, owner_digest(raw));
         let kpi_owner: String = conn

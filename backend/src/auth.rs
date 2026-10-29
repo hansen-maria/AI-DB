@@ -34,7 +34,10 @@
 
 use axum::{
     extract::{Request, State},
-    http::{header::AUTHORIZATION, HeaderMap, Method, StatusCode},
+    http::{
+        header::{AUTHORIZATION, HOST, ORIGIN},
+        HeaderMap, Method, StatusCode,
+    },
     middleware::Next,
     response::{IntoResponse, Response},
     Json,
@@ -69,7 +72,10 @@ pub struct InvalidToken;
 /// characters (never contains '-', unlike a raw UUID, which the one-time
 /// migration relies on to recognise unmigrated rows).
 pub fn owner_digest(secret: &str) -> String {
-    format!("{:x}", md5::compute(format!("aidb-owner:{secret}").as_bytes()))
+    format!(
+        "{:x}",
+        md5::compute(format!("aidb-owner:{secret}").as_bytes())
+    )
 }
 
 /// Extracts the owner token from the request headers.
@@ -130,16 +136,97 @@ pub fn get_or_create_owner(
     if let Some(cookie) = jar.get(OWNER_COOKIE_NAME) {
         Ok((owner_digest(cookie.value()), jar))
     } else {
-        let new_id = Uuid::new_v4().to_string();
-        let cookie = Cookie::build((OWNER_COOKIE_NAME, new_id.clone()))
-            .path("/")
-            .http_only(true)
-            .same_site(SameSite::Lax)
-            .max_age(time::Duration::days(COOKIE_MAX_AGE_DAYS))
-            .build();
         // The cookie carries the secret; only its digest becomes the owner id
-        Ok((owner_digest(&new_id), jar.add(cookie)))
+        let (new_id, jar) = add_new_owner_cookie(jar);
+        Ok((owner_digest(&new_id), jar))
     }
+}
+
+/// Creates a new owner secret (UUIDv4) and adds it to the jar as the
+/// HttpOnly owner cookie. Returns the secret and the updated jar.
+pub fn add_new_owner_cookie(jar: CookieJar) -> (String, CookieJar) {
+    let new_id = Uuid::new_v4().to_string();
+    let cookie = Cookie::build((OWNER_COOKIE_NAME, new_id.clone()))
+        .path("/")
+        .http_only(true)
+        .same_site(SameSite::Lax)
+        .max_age(time::Duration::days(COOKIE_MAX_AGE_DAYS))
+        .build();
+    (new_id, jar.add(cookie))
+}
+
+/// The owner secret stored in the browser cookie, if it can be used as an API
+/// token for the same owner.
+///
+/// The owner digest is computed from the raw cookie value, while API tokens
+/// are normalised to the lowercase, hyphenated UUID form before hashing. The
+/// cookie is therefore only exportable if it already is a UUIDv4 in exactly
+/// that form – which is always the case for cookies created by this server.
+///
+/// * `Ok(Some(token))` – cookie present and usable as an API token
+/// * `Ok(None)`        – no owner cookie in this browser
+/// * `Err(..)`         – cookie present but not a canonical UUIDv4, so as an
+///   API token it would identify a different owner
+pub fn owner_secret_from_cookie(jar: &CookieJar) -> Result<Option<String>, InvalidToken> {
+    let Some(cookie) = jar.get(OWNER_COOKIE_NAME) else {
+        return Ok(None);
+    };
+    let value = cookie.value();
+    match Uuid::parse_str(value) {
+        Ok(uuid) if uuid.get_version_num() == 4 && uuid.to_string() == value => {
+            Ok(Some(value.to_string()))
+        }
+        _ => Err(InvalidToken),
+    }
+}
+
+/// `true` if the browser marks the request as coming from the same origin
+/// (the AI-DB frontend itself), `false` for any cross-origin request.
+///
+/// Endpoints that return the owner secret must only answer same-origin
+/// requests: CORS mirrors any origin with credentials, and the `Lax` cookie is
+/// also sent by pages of the same *site* (other `*.computational.bio`
+/// subdomains), so CORS and SameSite alone would let such a page read it.
+///
+/// * `Sec-Fetch-Site` (all current browsers): only `same-origin`, or `none`
+///   (the user opened the URL directly), is accepted.
+/// * Older browsers without it: a cross-origin request always carries an
+///   `Origin` header, whose host must then match the `Host` header. Without
+///   either header the request is not a cross-origin browser request.
+pub fn is_same_origin_request(headers: &HeaderMap) -> bool {
+    if let Some(site) = headers.get("sec-fetch-site") {
+        return match site.to_str() {
+            Ok(site) => {
+                site.eq_ignore_ascii_case("same-origin") || site.eq_ignore_ascii_case("none")
+            }
+            Err(_) => false,
+        };
+    }
+
+    let Some(origin) = headers.get(ORIGIN) else {
+        return true;
+    };
+    let (Ok(origin), Some(Ok(host))) = (origin.to_str(), headers.get(HOST).map(|h| h.to_str()))
+    else {
+        return false;
+    };
+    // "https://ai-db.example.org:8443" -> "ai-db.example.org"
+    let origin_host = origin
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or("")
+        .split('/')
+        .next()
+        .unwrap_or("");
+    !origin_host.is_empty() && hostname(origin_host).eq_ignore_ascii_case(hostname(host))
+}
+
+/// Host without port ("example.org:8080" -> "example.org", "[::1]:80" -> "[::1]").
+fn hostname(host: &str) -> &str {
+    if host.starts_with('[') {
+        return host.split_inclusive(']').next().unwrap_or(host);
+    }
+    host.split(':').next().unwrap_or(host)
 }
 
 /// Validates if the given owner_id matches the job's owner
@@ -282,7 +369,10 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 /// DB, derived from the (already hashed) owner id with a different domain
 /// separator, so contributions cannot be linked to jobs or owners.
 pub fn contributor_id(owner_id: &str) -> String {
-    format!("{:x}", md5::compute(format!("aidb-contributor:{owner_id}").as_bytes()))
+    format!(
+        "{:x}",
+        md5::compute(format!("aidb-contributor:{owner_id}").as_bytes())
+    )
 }
 
 #[cfg(test)]
@@ -296,6 +386,88 @@ mod tests {
         let mut h = HeaderMap::new();
         h.insert(name, HeaderValue::from_str(value).unwrap());
         h
+    }
+
+    #[test]
+    fn same_origin_by_sec_fetch_site() {
+        assert!(is_same_origin_request(&headers(
+            "sec-fetch-site",
+            "same-origin"
+        )));
+        assert!(is_same_origin_request(&headers("sec-fetch-site", "none")));
+        for value in ["same-site", "cross-site", "garbage"] {
+            assert!(
+                !is_same_origin_request(&headers("sec-fetch-site", value)),
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn sec_fetch_site_wins_over_matching_origin() {
+        let mut h = headers("sec-fetch-site", "same-site");
+        h.insert(
+            "origin",
+            HeaderValue::from_static("https://ai-db.example.org"),
+        );
+        h.insert("host", HeaderValue::from_static("ai-db.example.org"));
+        assert!(!is_same_origin_request(&h));
+    }
+
+    #[test]
+    fn same_origin_by_origin_and_host_without_fetch_metadata() {
+        let mut same = headers("origin", "https://ai-db.example.org");
+        same.insert("host", HeaderValue::from_static("ai-db.example.org"));
+        assert!(is_same_origin_request(&same));
+
+        // Vite dev proxy: frontend on :8080, Host rewritten to the backend port
+        let mut dev = headers("origin", "http://localhost:8080");
+        dev.insert("host", HeaderValue::from_static("localhost:8000"));
+        assert!(is_same_origin_request(&dev));
+
+        let mut sibling = headers("origin", "https://psos.example.org");
+        sibling.insert("host", HeaderValue::from_static("ai-db.example.org"));
+        assert!(!is_same_origin_request(&sibling));
+
+        let mut null_origin = headers("origin", "null");
+        null_origin.insert("host", HeaderValue::from_static("ai-db.example.org"));
+        assert!(!is_same_origin_request(&null_origin));
+
+        // Origin present but no Host header: cannot verify -> reject
+        assert!(!is_same_origin_request(&headers(
+            "origin",
+            "https://ai-db.example.org"
+        )));
+    }
+
+    #[test]
+    fn requests_without_origin_information_are_not_cross_origin() {
+        assert!(is_same_origin_request(&HeaderMap::new()));
+    }
+
+    #[test]
+    fn owner_secret_from_cookie_accepts_only_canonical_uuid_v4() {
+        let jar = CookieJar::new();
+        assert_eq!(owner_secret_from_cookie(&jar), Ok(None));
+
+        let jar = CookieJar::new().add(Cookie::new(OWNER_COOKIE_NAME, TOKEN));
+        assert_eq!(owner_secret_from_cookie(&jar), Ok(Some(TOKEN.to_string())));
+
+        // As an API token it would be normalised and hash to another owner
+        let jar = CookieJar::new().add(Cookie::new(OWNER_COOKIE_NAME, TOKEN.to_uppercase()));
+        assert_eq!(owner_secret_from_cookie(&jar), Err(InvalidToken));
+
+        let jar = CookieJar::new().add(Cookie::new(OWNER_COOKIE_NAME, "not-a-uuid"));
+        assert_eq!(owner_secret_from_cookie(&jar), Err(InvalidToken));
+    }
+
+    #[test]
+    fn new_owner_cookie_is_http_only_and_matches_the_secret() {
+        let (secret, jar) = add_new_owner_cookie(CookieJar::new());
+        let cookie = jar.get(OWNER_COOKIE_NAME).expect("cookie set");
+        assert_eq!(cookie.value(), secret);
+        assert_eq!(cookie.http_only(), Some(true));
+        assert_eq!(owner_secret_from_cookie(&jar), Ok(Some(secret)));
     }
 
     #[test]
@@ -371,7 +543,10 @@ mod tests {
         let (owner, jar) = get_or_create_owner(CookieJar::new(), &HeaderMap::new()).unwrap();
         let secret = jar.get(OWNER_COOKIE_NAME).unwrap().value().to_string();
         assert_eq!(owner, owner_digest(&secret));
-        assert_ne!(owner, secret, "the secret itself must not become the owner id");
+        assert_ne!(
+            owner, secret,
+            "the secret itself must not become the owner id"
+        );
     }
 
     #[test]
@@ -413,7 +588,11 @@ mod tests {
             (Method::GET, "/api/job/abc/download/tsv"),
             (Method::GET, "/api/job/abc/stats/export"),
         ] {
-            assert_eq!(owner_guarded_job_id(&method, path), Some("abc"), "{method} {path}");
+            assert_eq!(
+                owner_guarded_job_id(&method, path),
+                Some("abc"),
+                "{method} {path}"
+            );
         }
     }
 
@@ -445,8 +624,14 @@ mod tests {
     #[test]
     fn only_admin_header_matches_admin_secret() {
         let secret = "s3cr3t-admin";
-        assert!(admin_secret_matches(&headers("x-admin-secret", secret), secret));
-        assert!(!admin_secret_matches(&headers("x-admin-secret", "wrong"), secret));
+        assert!(admin_secret_matches(
+            &headers("x-admin-secret", secret),
+            secret
+        ));
+        assert!(!admin_secret_matches(
+            &headers("x-admin-secret", "wrong"),
+            secret
+        ));
         assert!(!admin_secret_matches(&headers("x-api-key", secret), secret));
         assert!(!admin_secret_matches(
             &headers("authorization", &format!("Bearer {secret}")),

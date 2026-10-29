@@ -38,14 +38,14 @@ use utoipa::{Modify, OpenApi};
 use utoipa_swagger_ui::SwaggerUi;
 
 use crate::handlers::{
-    bulk_delete_jobs, create_job, db_info, delete_bakta_job, delete_job, delete_psos_results,
-    download_job, export_job_stats, get_bakta_job, get_job, get_job_stats, get_kpi_overview,
-    get_psos_results, get_sequence, health_check, ingest_bakta_results, list_jobs, rename_job,
-    retry_job, save_bakta_job, save_psos_results,
+    bulk_delete_jobs, create_auth_token, create_job, db_info, delete_bakta_job, delete_job,
+    delete_psos_results, download_job, export_job_stats, get_auth_token, get_bakta_job, get_job,
+    get_job_stats, get_kpi_overview, get_psos_results, get_sequence, health_check,
+    ingest_bakta_results, list_jobs, rename_job, retry_job, save_bakta_job, save_psos_results,
 };
 use crate::models::{
-    BaktaJobStateResponse, BulkDeleteRequest, BulkDeleteResponse, CustomAnnotationEntry,
-    ErrorResponse, FunctionalStats, IngestCustomAnnotationsRequest,
+    AuthTokenResponse, BaktaJobStateResponse, BulkDeleteRequest, BulkDeleteResponse,
+    CustomAnnotationEntry, ErrorResponse, FunctionalStats, IngestCustomAnnotationsRequest,
     IngestCustomAnnotationsResponse, JobCreateResponse, JobResponse, JobStatus, JobSummary,
     PaginatedJobResponse, PaginatedJobsResponse, PaginationInfo, PsosResult, PsosResultsResponse,
     RenameJobRequest, SaveBaktaJobRequest, SaveBaktaJobResponse, SavePsosResultsRequest,
@@ -74,7 +74,9 @@ use crate::state::AppState;
             as an HTTP-only cookie. Scripts and pipelines generate their own UUIDv4 \
             (e.g. `uuidgen`) and send it with **every** request as \
             `Authorization: Bearer <token>` or `X-API-Key: <token>` (no cookies needed). \
-            Keep the token secret: it is the key to your jobs.\n\n\
+            Keep the token secret: it is the key to your jobs. To manage jobs created \
+            in the web interface from a script, copy the browser's token via \
+            *Jobs → Access token* (backed by `GET /api/auth/token`).\n\n\
             Shared jobs are **read-only**: anyone who knows a job ID can view the job, its \
             sequences, stats and stored Psos/Bakta results. Downloading (incl. the stats CSV \
             export), renaming, deleting, retrying, starting or saving Psos/Bakta runs and \
@@ -93,6 +95,7 @@ use crate::state::AppState;
         (name = "Jobs", description = "Annotation job management - create and query jobs (viewing by job ID, changes owner-only)"),
         (name = "psos", description = "Psos analysis results storage (read by anyone with the job ID, write owner-only)"),
         (name = "bakta", description = "Bakta job state persistence (read by anyone with the job ID, write owner-only)"),
+        (name = "Auth", description = "Owner token of the current browser session (web interface only, same-origin)"),
         (name = "admin", description = "Admin-only endpoints (X-Admin-Secret only)"),
         (name = "Health", description = "Health check and database info")
     ),
@@ -119,7 +122,9 @@ use crate::state::AppState;
         handlers::kpi::list_admin_annotations,
         handlers::kpi::review_admin_annotation,
         handlers::health::health_check,
-        handlers::health::db_info
+        handlers::health::db_info,
+        handlers::token::get_auth_token,
+        handlers::token::create_auth_token
     ),
     components(schemas(
         JobStatus,
@@ -147,6 +152,7 @@ use crate::state::AppState;
         CustomAnnotationEntry,
         IngestCustomAnnotationsRequest,
         IngestCustomAnnotationsResponse,
+        AuthTokenResponse,
         crate::handlers::kpi::KpiMonthEntry,
         crate::handlers::kpi::KpiOverviewResponse,
         crate::handlers::kpi::AdminAnnotationEntry,
@@ -205,7 +211,10 @@ fn requirement(scheme: &str) -> SecurityRequirement {
 fn security_for(access: Access) -> Option<Vec<SecurityRequirement>> {
     match access {
         Access::Public => None,
-        Access::OwnerRequired => Some(vec![requirement(SCHEME_BEARER), requirement(SCHEME_API_KEY)]),
+        Access::OwnerRequired => Some(vec![
+            requirement(SCHEME_BEARER),
+            requirement(SCHEME_API_KEY),
+        ]),
         Access::OwnerOptional => Some(vec![
             requirement(SCHEME_BEARER),
             requirement(SCHEME_API_KEY),
@@ -319,6 +328,11 @@ async fn main() {
         // Health & info routes
         .route("/api/health", get(health_check))
         .route("/api/db/info", get(db_info))
+        // Owner token of the browser session (same-origin only)
+        .route(
+            "/api/auth/token",
+            get(get_auth_token).post(create_auth_token),
+        )
         // Job management routes
         .route("/api/job/", post(create_job))
         .route(
@@ -405,7 +419,7 @@ mod tests {
             "DELETE" => item.delete.as_ref(),
             _ => None,
         }
-            .unwrap_or_else(|| panic!("{method} {path} missing in OpenAPI doc"))
+        .unwrap_or_else(|| panic!("{method} {path} missing in OpenAPI doc"))
     }
 
     #[test]
@@ -416,7 +430,11 @@ mod tests {
             ("/api/admin/annotations", "GET"),
             ("/api/admin/annotations/{md5}/review", "POST"),
         ] {
-            assert_eq!(schemes(op(&doc, path, method)), vec![SCHEME_ADMIN], "{method} {path}");
+            assert_eq!(
+                schemes(op(&doc, path, method)),
+                vec![SCHEME_ADMIN],
+                "{method} {path}"
+            );
         }
     }
 
@@ -461,6 +479,14 @@ mod tests {
                 "{method} {path}"
             );
         }
+    }
+
+    #[test]
+    fn auth_token_is_cookie_only() {
+        // Browser session only: no Bearer / API key / admin secret offered
+        let doc = ApiDoc::openapi();
+        assert!(op(&doc, "/api/auth/token", "GET").security.is_none());
+        assert!(op(&doc, "/api/auth/token", "POST").security.is_none());
     }
 
     #[test]

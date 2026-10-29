@@ -169,6 +169,10 @@ export interface JobCreateResponse {
 export interface HealthCheckResponse {
     status: string;
     service: string;
+    /** Backend build version, e.g. "1.0.0" */
+    version: string;
+    /** Version of the HTTP API contract (bumped on breaking changes) */
+    api_version: number;
     bakta_db: {
         status: 'connected' | 'error' | 'not_found' | 'not_configured';
         path: string | null;

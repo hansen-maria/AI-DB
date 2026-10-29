@@ -11,6 +11,7 @@
 //!     (server only; clients do not need utoipa).
 //! ============================================================================
 
+pub mod auth;
 pub mod bakta;
 pub mod custom_db;
 pub mod error;
@@ -29,6 +30,7 @@ pub mod stats;
 /// own compiled-in value to detect incompatible servers.
 pub const API_VERSION: u32 = 1;
 
+pub use auth::AuthTokenResponse;
 pub use bakta::{BaktaJobStateResponse, SaveBaktaJobRequest, SaveBaktaJobResponse, StoredBaktaJob};
 pub use custom_db::{
     CustomAnnotationEntry, IngestCustomAnnotationsRequest, IngestCustomAnnotationsResponse,
