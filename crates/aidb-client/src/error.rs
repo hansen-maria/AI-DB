@@ -54,6 +54,10 @@ pub enum Error {
         source: std::io::Error,
     },
 
+    /// Writing a downloaded result failed (disk full, closed pipe, …).
+    #[error("cannot write the downloaded result")]
+    Write(#[source] std::io::Error),
+
     /// [`crate::Client::wait_for_job`] gave up.
     #[error("job {job_id} did not finish within {}s", waited.as_secs())]
     WaitTimeout { job_id: String, waited: Duration },

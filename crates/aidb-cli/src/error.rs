@@ -40,6 +40,21 @@ pub enum CliError {
     #[error("{failed} of {total} jobs failed")]
     JobsFailed { failed: usize, total: usize },
 
+    /// The job has no results yet.
+    #[error("job {job_id} is still {status}; wait for it with `aidb job wait`, or add --wait")]
+    NotReady { job_id: String, status: String },
+
+    /// The job failed on the server, so it has no results.
+    #[error("job {job_id} failed: {reason}")]
+    JobFailed { job_id: String, reason: String },
+
+    /// Results are only available to the job's owner.
+    #[error(
+        "only the owner of job {0} can download its results\n  \
+         if it is yours, import the token it was created with:  aidb auth import"
+    )]
+    NotOwner(String),
+
     /// Some files of a batch could not be submitted (the others were).
     #[error("{failed} of {total} files could not be submitted")]
     SubmissionsFailed { failed: usize, total: usize },
@@ -57,7 +72,9 @@ impl CliError {
         match self {
             CliError::Client(error) => exit::code(error),
             CliError::Usage(_) => exit::USAGE,
-            CliError::NoToken(_) => exit::UNAUTHORIZED,
+            CliError::NoToken(_) | CliError::NotOwner(_) => exit::UNAUTHORIZED,
+            CliError::NotReady { .. } => exit::GENERAL,
+            CliError::JobFailed { .. } => exit::JOB_FAILED,
             CliError::Io { .. } | CliError::Config(_) => exit::GENERAL,
             CliError::Input(_) => exit::INPUT_REJECTED,
             CliError::JobsFailed { failed, total } if failed == total => exit::JOB_FAILED,

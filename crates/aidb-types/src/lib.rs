@@ -17,6 +17,7 @@ pub mod custom_db;
 pub mod error;
 pub mod health;
 pub mod job;
+pub mod naming;
 pub mod pagination;
 pub mod psos;
 pub mod sequence;
@@ -41,10 +42,10 @@ pub use job::{
     BulkDeleteRequest, BulkDeleteResponse, JobCreateResponse, JobResponse, JobStatus, JobSummary,
     RenameJobRequest,
 };
+pub use naming::{result_base_name, result_file_name};
 pub use pagination::{
     GetJobQuery, JobViewResponse, ListJobsQuery, PaginatedJobResponse, PaginatedJobsResponse,
-    PaginationInfo,
-    DEFAULT_PER_PAGE, MAX_PER_PAGE,
+    PaginationInfo, SequenceFilterQuery, DEFAULT_PER_PAGE, MAX_PER_PAGE,
 };
 pub use psos::{PsosResult, PsosResultsResponse, SavePsosResultsRequest, SavePsosResultsResponse};
 pub use sequence::{SequenceInfo, SOURCE_AIDB_DB, SOURCE_BAKTA_DB};

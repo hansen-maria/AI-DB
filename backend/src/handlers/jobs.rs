@@ -17,8 +17,8 @@ use uuid::Uuid;
 use crate::auth::{get_or_create_owner, owner_from_request, validate_owner};
 use crate::models::{
     AdvancedSequenceFilter, BulkDeleteRequest, BulkDeleteResponse, ErrorResponse, GetJobQuery,
-    JobCreateResponse, JobResponse, JobStatus, JobSummary, JobViewResponse, PaginatedJobResponse,
-    PaginatedJobsResponse, PaginationInfo, RenameJobRequest, SequenceFilter, SequenceInfo,
+    JobCreateResponse, JobResponse, JobStatus, JobSummary, JobViewResponse, ListJobsQuery,
+    PaginatedJobResponse, PaginatedJobsResponse, PaginationInfo, RenameJobRequest, SequenceFilter, SequenceInfo,
     DEFAULT_PER_PAGE, MAX_PER_PAGE,
 };
 use crate::services::process_job_from_file;
@@ -438,17 +438,6 @@ pub async fn create_job(
         .into_response()
 }
 
-/// Query parameters for listing jobs – defined locally so no change to models is required.
-#[derive(Debug, serde::Deserialize)]
-pub struct ListJobsParams {
-    pub page: Option<usize>,
-    pub per_page: Option<usize>,
-    /// Optional status filter: pending | processing | completed | failed
-    pub status: Option<String>,
-    /// Optional case-insensitive substring search on filename
-    pub search: Option<String>,
-}
-
 /// List all jobs (only own jobs based on cookie, paginated)
 #[utoipa::path(
     get,
@@ -468,7 +457,7 @@ pub async fn list_jobs(
     State(state): State<AppState>,
     jar: CookieJar,
     headers: HeaderMap,
-    Query(query): Query<ListJobsParams>,
+    Query(query): Query<ListJobsQuery>,
 ) -> impl IntoResponse {
     let page = query.page.unwrap_or(1).max(1);
     let per_page = query

@@ -91,7 +91,8 @@ impl JobReport {
     }
 }
 
-fn status_str(status: &JobStatus) -> &'static str {
+/// API name of a job status (`pending`, `processing`, …).
+pub fn status_str(status: &JobStatus) -> &'static str {
     match status {
         JobStatus::Pending => "pending",
         JobStatus::Processing => "processing",
@@ -209,35 +210,9 @@ pub async fn wait(client: &Client, args: WaitArgs<'_>) -> Result<()> {
         ..WaitOptions::default()
     };
     let human = args.output == OutputFormat::Human;
-    // Live bars in a terminal; plain status lines otherwise (CI logs)
-    let bars = human && !args.quiet && io::stderr().is_terminal();
-    let log_lines = !args.quiet && !bars;
-
-    let multi = MultiProgress::new();
-    let waits = args.job_ids.iter().map(|job_id| {
-        let bar = if bars {
-            multi.add(job_bar(job_id))
-        } else {
-            ProgressBar::hidden()
-        };
-        let options = options.clone();
-        async move {
-            let mut last_logged: Option<(JobStatus, usize)> = None;
-            let result = client
-                .wait_for_job(job_id, &options, |view| {
-                    update_bar(&bar, view);
-                    let state = (view.job.status.clone(), view.job.processed_count);
-                    if log_lines && last_logged.as_ref() != Some(&state) {
-                        eprintln!("{}", status_line(view));
-                        last_logged = Some(state);
-                    }
-                })
-                .await;
-            finish_bar(&bar, &result);
-            (job_id.as_str(), result)
-        }
-    });
-    let results = futures_util::future::join_all(waits).await;
+    let display = Display::choose(args.output, args.quiet);
+    let bars = display == Display::Bars;
+    let results = wait_all(client, args.job_ids, &options, display).await;
 
     // Summary
     if human && !args.quiet && !bars {
@@ -283,12 +258,69 @@ pub async fn wait(client: &Client, args: WaitArgs<'_>) -> Result<()> {
     Ok(())
 }
 
-fn short_id(job_id: &str) -> &str {
+/// How waiting is shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Display {
+    /// Live progress bars on stderr (interactive terminal)
+    Bars,
+    /// One stderr line per status change (CI logs, redirected output)
+    Lines,
+    /// Nothing
+    Silent,
+}
+
+impl Display {
+    pub fn choose(output: OutputFormat, quiet: bool) -> Self {
+        if quiet {
+            Display::Silent
+        } else if output == OutputFormat::Human && io::stderr().is_terminal() {
+            Display::Bars
+        } else {
+            Display::Lines
+        }
+    }
+}
+
+/// Waits for all jobs concurrently and returns each job's final state (or
+/// the error that ended waiting for it), in the order given.
+pub async fn wait_all(
+    client: &Client,
+    job_ids: &[String],
+    options: &WaitOptions,
+    display: Display,
+) -> Vec<(String, aidb_client::Result<JobViewResponse>)> {
+    let multi = MultiProgress::new();
+    let waits = job_ids.iter().map(|job_id| {
+        let bar = if display == Display::Bars {
+            multi.add(job_bar(job_id))
+        } else {
+            ProgressBar::hidden()
+        };
+        async move {
+            let mut last_logged: Option<(JobStatus, usize)> = None;
+            let result = client
+                .wait_for_job(job_id, options, |view| {
+                    update_bar(&bar, view);
+                    let state = (view.job.status.clone(), view.job.processed_count);
+                    if display == Display::Lines && last_logged.as_ref() != Some(&state) {
+                        eprintln!("{}", status_line(view));
+                        last_logged = Some(state);
+                    }
+                })
+                .await;
+            finish_bar(&bar, &result);
+            (job_id.clone(), result)
+        }
+    });
+    futures_util::future::join_all(waits).await
+}
+
+pub fn short_id(job_id: &str) -> &str {
     job_id.get(..8).unwrap_or(job_id)
 }
 
 /// One line per job, e.g. `3f2b8c1e  completed  4,500 of 5,000 matched`.
-fn status_line(view: &JobViewResponse) -> String {
+pub fn status_line(view: &JobViewResponse) -> String {
     let job = &view.job;
     let id = short_id(&job.job_id);
     match job.status {

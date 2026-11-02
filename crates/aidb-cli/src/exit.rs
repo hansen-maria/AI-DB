@@ -40,7 +40,7 @@ pub fn code(error: &Error) -> u8 {
         },
         Error::File { .. } => INPUT_REJECTED,
         Error::WaitTimeout { .. } => WAIT_TIMEOUT,
-        Error::Decode(_) | Error::Http(_) => GENERAL,
+        Error::Decode(_) | Error::Http(_) | Error::Write(_) => GENERAL,
     }
 }
 

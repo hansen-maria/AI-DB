@@ -12,6 +12,6 @@ reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["fs", "time"] }
+tokio = { workspace = true, features = ["fs", "io-util", "time"] }
 tokio-util = { workspace = true }
 futures-util = { workspace = true }

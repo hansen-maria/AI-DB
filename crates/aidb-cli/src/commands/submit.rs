@@ -125,7 +125,7 @@ pub async fn run(client: &Client, options: SubmitOptions<'_>) -> Result<()> {
     }
 }
 
-fn upload_bar(file: &CheckedFile, visible: bool) -> ProgressBar {
+pub fn upload_bar(file: &CheckedFile, visible: bool) -> ProgressBar {
     if !visible {
         return ProgressBar::hidden();
     }

@@ -15,8 +15,8 @@
 //! All request and response types come from `aidb-types`, re-exported as
 //! [`types`], so client and server cannot drift apart silently.
 //!
-//! Covered so far: health and DB info, job submission (streamed multipart
-//! upload with progress), job status and waiting with backoff. Next: result
+//! Covers health and DB info, job submission (streamed multipart upload with
+//! progress), job listing, status, waiting with backoff and streamed result
 //! download.
 //! ============================================================================
 
@@ -27,7 +27,7 @@ pub mod compat;
 mod error;
 
 pub use client::{
-    normalize_server_url, Client, ClientBuilder, WaitOptions, DEFAULT_SERVER, DEFAULT_TIMEOUT,
-    MAX_UPLOAD_BYTES,
+    normalize_server_url, Client, ClientBuilder, ResultFormat, WaitOptions, DEFAULT_SERVER,
+    DEFAULT_TIMEOUT, MAX_UPLOAD_BYTES,
 };
 pub use error::{Error, Result};

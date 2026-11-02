@@ -1,9 +1,9 @@
 //! ============================================================================
 //! aidb – command-line client for AI-DB
 //!
-//! Commands so far: `status`, `db info`, `auth init|import|show`, `submit`,
-//! `job show|wait`. Input is restricted to protein FASTA, matching the
-//! published scope.
+//! Commands: `status`, `db info`, `auth init|import|show`, `submit`,
+//! `job show|wait`, `jobs`, `download`, `annotate` (CLI concept v0.1). Input
+//! is restricted to protein FASTA, matching the published scope.
 //! ============================================================================
 
 mod cli;
@@ -25,8 +25,11 @@ use aidb_client::Client;
 use clap::Parser;
 
 use crate::cli::{AuthCommand, Cli, Command, DbCommand, JobCommand};
+use crate::commands::annotate::AnnotateArgs;
 use crate::commands::auth::AuthContext;
+use crate::commands::download::DownloadArgs;
 use crate::commands::job::WaitArgs;
+use crate::commands::jobs::JobsArgs;
 use crate::commands::submit::SubmitOptions;
 use crate::error::{CliError, Result};
 
@@ -107,6 +110,57 @@ async fn run(cli: Cli) -> Result<()> {
                 quiet,
             };
             commands::job::wait(&client, args).await?
+        }
+        Command::Jobs {
+            status,
+            search,
+            limit,
+            all,
+        } => {
+            // Without a token the server would just return an empty list
+            let token = saved_token(&server)?.ok_or_else(|| CliError::NoToken(server.clone()))?;
+            let args = JobsArgs {
+                status,
+                search,
+                limit: (!all).then_some(limit),
+                output,
+                quiet,
+            };
+            commands::jobs::run(&client(Some(token))?, args).await?
+        }
+        Command::Download {
+            job_id,
+            out,
+            filter,
+            wait,
+        } => {
+            let token = saved_token(&server)?.ok_or_else(|| CliError::NoToken(server.clone()))?;
+            let args = DownloadArgs {
+                job_id: &job_id,
+                out: &out,
+                filter: &filter,
+                wait,
+                output,
+                quiet,
+            };
+            commands::download::run(&client(Some(token))?, args).await?
+        }
+        Command::Annotate {
+            files,
+            out,
+            filter,
+            max_wait,
+        } => {
+            let token = saved_token(&server)?.ok_or_else(|| CliError::NoToken(server.clone()))?;
+            let args = AnnotateArgs {
+                files: &files,
+                out: &out,
+                filter: &filter,
+                max_wait,
+                output,
+                quiet,
+            };
+            commands::annotate::run(&client(Some(token))?, args).await?
         }
     }
     Ok(())

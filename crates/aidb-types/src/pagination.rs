@@ -111,6 +111,12 @@ pub struct ListJobsQuery {
     /// Items per page (default: 20, max: 100)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub per_page: Option<usize>,
+    /// Only jobs with this status: pending | processing | completed | failed
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    /// Case-insensitive substring search in the job name
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub search: Option<String>,
 }
 
 /// Query parameters for job details
@@ -147,4 +153,48 @@ pub struct GetJobQuery {
     /// Filter: only sequences with product/function
     #[serde(skip_serializing_if = "Option::is_none")]
     pub has_product: Option<bool>,
+}
+
+/// Sequence filter of `GET /api/job/{job_id}/download/{format}` – the same
+/// filters as the sequence table, so a filtered view can be exported as is.
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct SequenceFilterQuery {
+    /// Match-status filter: all (default) | bakta_db | aidb_db | hash_match (either DB) | alignment | none
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter: Option<String>,
+    /// Case-insensitive text search in ID, gene, product
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub search: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_length: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_length: Option<usize>,
+    /// COG category code, e.g. "J"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cog: Option<String>,
+    /// EC class digit, e.g. "1"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ec_class: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub has_gene: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub has_product: Option<bool>,
+}
+
+impl SequenceFilterQuery {
+    /// `true` if any filter is set (the server then marks the file name
+    /// with `_filtered`).
+    pub fn is_active(&self) -> bool {
+        self.filter
+            .as_deref()
+            .is_some_and(|f| !f.is_empty() && f != "all")
+            || self.search.as_deref().is_some_and(|s| !s.is_empty())
+            || self.min_length.is_some()
+            || self.max_length.is_some()
+            || self.cog.as_deref().is_some_and(|s| !s.is_empty())
+            || self.ec_class.as_deref().is_some_and(|s| !s.is_empty())
+            || self.has_gene.is_some()
+            || self.has_product.is_some()
+    }
 }

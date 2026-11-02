@@ -5,12 +5,13 @@ use std::time::Duration;
 
 use aidb_types::{
     DbInfoResponse, ErrorResponse, GetJobQuery, HealthCheckResponse, JobCreateResponse, JobStatus,
-    JobViewResponse,
+    JobViewResponse, ListJobsQuery, PaginatedJobsResponse, SequenceFilterQuery,
 };
 use futures_util::TryStreamExt;
 use reqwest::multipart::{Form, Part};
 use reqwest::{Body, RequestBuilder, Url};
 use serde::de::DeserializeOwned;
+use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio_util::io::ReaderStream;
 
 use crate::error::{Error, Result};
@@ -32,6 +33,35 @@ const UPLOAD_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 /// Longest server error text passed on to the user.
 const MAX_DETAIL_CHARS: usize = 300;
+
+/// Result file formats of `GET /api/job/{job_id}/download/{format}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ResultFormat {
+    Tsv,
+    Json,
+    Fasta,
+    Gff3,
+}
+
+impl ResultFormat {
+    pub const ALL: [ResultFormat; 4] = [Self::Tsv, Self::Json, Self::Fasta, Self::Gff3];
+
+    /// Path segment and file extension.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Tsv => "tsv",
+            Self::Json => "json",
+            Self::Fasta => "fasta",
+            Self::Gff3 => "gff3",
+        }
+    }
+}
+
+impl std::fmt::Display for ResultFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 /// Whether a request carries the owner token.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -222,6 +252,54 @@ impl Client {
             .multipart(form)
             .timeout(UPLOAD_TIMEOUT);
         self.send_json(&url, request).await
+    }
+
+    /// `GET /api/jobs/` – one page of the jobs owned by the configured token
+    /// (newest first). Without a token the list is empty.
+    pub async fn list_jobs(&self, query: &ListJobsQuery) -> Result<PaginatedJobsResponse> {
+        let url = self.endpoint("api/jobs/")?;
+        let request = self
+            .request(self.http.get(url.clone()), Auth::Owner)
+            .query(query);
+        self.send_json(&url, request).await
+    }
+
+    /// `GET /api/job/{job_id}/download/{format}` – streams the result file of
+    /// a completed job into `writer` and returns the number of bytes written.
+    /// Owner only.
+    pub async fn download<W>(
+        &self,
+        job_id: &str,
+        format: ResultFormat,
+        filter: &SequenceFilterQuery,
+        writer: &mut W,
+    ) -> Result<u64>
+    where
+        W: AsyncWrite + Unpin + ?Sized,
+    {
+        let url = self.segments_url(&["api", "job", job_id, "download", format.as_str()]);
+        // Result files are built on the server first; allow for large jobs
+        let request = self
+            .request(self.http.get(url.clone()), Auth::Owner)
+            .query(filter)
+            .timeout(UPLOAD_TIMEOUT);
+        let response = request
+            .send()
+            .await
+            .map_err(|e| Error::from_reqwest(url.as_str(), e))?;
+        let mut response = check_status(response).await?;
+
+        let mut written = 0u64;
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|e| Error::from_reqwest(url.as_str(), e))?
+        {
+            writer.write_all(&chunk).await.map_err(Error::Write)?;
+            written += chunk.len() as u64;
+        }
+        writer.flush().await.map_err(Error::Write)?;
+        Ok(written)
     }
 
     /// `GET /api/job/{job_id}` with the given page / filter.

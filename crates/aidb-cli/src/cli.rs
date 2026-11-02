@@ -3,7 +3,9 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use aidb_client::types::SequenceFilterQuery;
+use aidb_client::ResultFormat;
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 /// Command-line client for AI-DB – hash-based annotation of bacterial proteins
 #[derive(Debug, Parser)]
@@ -82,6 +84,228 @@ pub enum Command {
     /// Inspect and wait for jobs
     #[command(subcommand)]
     Job(JobCommand),
+
+    /// List your jobs (newest first)
+    Jobs {
+        /// Only jobs with this status
+        #[arg(long, value_enum)]
+        status: Option<StatusFilter>,
+
+        /// Only jobs whose name contains this text (case-insensitive)
+        #[arg(long)]
+        search: Option<String>,
+
+        /// Show at most this many jobs
+        #[arg(long, default_value_t = 20, conflicts_with = "all")]
+        limit: usize,
+
+        /// Show all jobs
+        #[arg(long)]
+        all: bool,
+    },
+
+    /// Download the results of a completed job
+    ///
+    /// Saves one file per format, named after the job, e.g.
+    /// proteins_annotations.tsv. The filters are the same as in the web
+    /// interface's sequence table.
+    Download {
+        /// Job ID or web link
+        #[arg(value_name = "JOB", value_parser = parse_job_id)]
+        job_id: String,
+
+        #[command(flatten)]
+        out: OutputArgs,
+
+        #[command(flatten)]
+        filter: FilterArgs,
+
+        /// Wait for the job to finish first, if it is still running
+        #[arg(long)]
+        wait: bool,
+    },
+
+    /// Submit, wait and download in one step
+    ///
+    /// One job per file; results are saved next to each other in --dir,
+    /// named after the input files. Exits with 0 when all jobs completed,
+    /// 5 when all failed and 9 when some failed.
+    Annotate {
+        /// Protein FASTA files (plain or gzipped)
+        #[arg(required = true, value_name = "FASTA")]
+        files: Vec<PathBuf>,
+
+        #[command(flatten)]
+        out: OutputArgs,
+
+        #[command(flatten)]
+        filter: FilterArgs,
+
+        /// Give up waiting after this long, e.g. 30m or 2h (default: no limit)
+        #[arg(long, value_name = "DURATION", value_parser = parse_duration)]
+        max_wait: Option<Duration>,
+    },
+}
+
+/// Where and in which formats results are saved.
+#[derive(Debug, Clone, Args)]
+pub struct OutputArgs {
+    /// Result formats, comma-separated or repeated
+    #[arg(
+        long,
+        short = 'f',
+        value_enum,
+        value_delimiter = ',',
+        default_value = "tsv",
+        value_name = "FORMAT"
+    )]
+    pub format: Vec<FormatArg>,
+
+    /// Directory for the result files
+    #[arg(long, short = 'd', default_value = ".", value_name = "DIR")]
+    pub dir: PathBuf,
+
+    /// Write the result to standard output instead of a file (one format only)
+    #[arg(long, conflicts_with = "dir")]
+    pub stdout: bool,
+
+    /// Overwrite existing result files
+    #[arg(long)]
+    pub force: bool,
+}
+
+impl OutputArgs {
+    /// Requested formats without duplicates, in the given order.
+    pub fn formats(&self) -> Vec<ResultFormat> {
+        let mut formats: Vec<ResultFormat> = Vec::new();
+        for format in self.format.iter().map(|f| f.to_result_format()) {
+            if !formats.contains(&format) {
+                formats.push(format);
+            }
+        }
+        formats
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum FormatArg {
+    /// Tab-separated table, one row per sequence
+    Tsv,
+    /// Full job result as JSON
+    Json,
+    /// Sequences with annotations in the headers
+    Fasta,
+    /// GFF3 features
+    Gff3,
+}
+
+impl FormatArg {
+    pub fn to_result_format(self) -> ResultFormat {
+        match self {
+            FormatArg::Tsv => ResultFormat::Tsv,
+            FormatArg::Json => ResultFormat::Json,
+            FormatArg::Fasta => ResultFormat::Fasta,
+            FormatArg::Gff3 => ResultFormat::Gff3,
+        }
+    }
+}
+
+/// Sequence filters of the result download (same as in the web interface).
+#[derive(Debug, Clone, Default, Args)]
+pub struct FilterArgs {
+    /// Only sequences with this match status
+    #[arg(long, value_enum, value_name = "STATUS")]
+    pub only: Option<MatchFilter>,
+
+    /// Only sequences whose ID, gene or product contains this text
+    #[arg(long)]
+    pub search: Option<String>,
+
+    /// Minimum sequence length (aa)
+    #[arg(long, value_name = "AA")]
+    pub min_length: Option<usize>,
+
+    /// Maximum sequence length (aa)
+    #[arg(long, value_name = "AA")]
+    pub max_length: Option<usize>,
+
+    /// Only this COG category, e.g. J
+    #[arg(long, value_name = "CODE")]
+    pub cog: Option<String>,
+
+    /// Only this EC class (1–7)
+    #[arg(long, value_name = "CLASS", value_parser = clap::value_parser!(u8).range(1..=7))]
+    pub ec_class: Option<u8>,
+
+    /// Only sequences with a gene name
+    #[arg(long)]
+    pub has_gene: bool,
+
+    /// Only sequences with a product
+    #[arg(long)]
+    pub has_product: bool,
+}
+
+impl FilterArgs {
+    pub fn to_query(&self) -> SequenceFilterQuery {
+        SequenceFilterQuery {
+            filter: self.only.map(|f| f.as_api().to_string()),
+            search: self.search.clone().filter(|s| !s.trim().is_empty()),
+            min_length: self.min_length,
+            max_length: self.max_length,
+            cog: self.cog.clone().filter(|s| !s.trim().is_empty()),
+            ec_class: self.ec_class.map(|c| c.to_string()),
+            has_gene: self.has_gene.then_some(true),
+            has_product: self.has_product.then_some(true),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum MatchFilter {
+    /// Hash match in the Bakta DB
+    #[value(alias = "bakta_db")]
+    BaktaDb,
+    /// Hash match in the AI-DB annotations DB
+    #[value(alias = "aidb_db")]
+    AidbDb,
+    /// Hash match in either database
+    #[value(alias = "hash_match")]
+    Matched,
+    /// No match – candidates for Bakta or Psos
+    #[value(alias = "none")]
+    Unmatched,
+}
+
+impl MatchFilter {
+    /// Value of the API's `filter` parameter.
+    pub fn as_api(self) -> &'static str {
+        match self {
+            MatchFilter::BaktaDb => "bakta_db",
+            MatchFilter::AidbDb => "aidb_db",
+            MatchFilter::Matched => "hash_match",
+            MatchFilter::Unmatched => "none",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum StatusFilter {
+    Pending,
+    Processing,
+    Completed,
+    Failed,
+}
+
+impl StatusFilter {
+    pub fn as_api(self) -> &'static str {
+        match self {
+            StatusFilter::Pending => "pending",
+            StatusFilter::Processing => "processing",
+            StatusFilter::Completed => "completed",
+            StatusFilter::Failed => "failed",
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -288,6 +512,65 @@ mod tests {
             other => panic!("unexpected {other:?}"),
         }
         assert!(Cli::try_parse_from(["aidb", "job", "show", "not-a-job"]).is_err());
+    }
+
+    #[test]
+    fn download_options_parse_into_api_filters() {
+        let cli = Cli::try_parse_from([
+            "aidb",
+            "download",
+            "3f2b8c1e-5d4a-4e7b-9a6c-1d2e3f4a5b6c",
+            "-f",
+            "tsv,gff3",
+            "-f",
+            "tsv",
+            "--only",
+            "unmatched",
+            "--ec-class",
+            "3",
+            "--has-gene",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Download { out, filter, .. } => {
+                assert_eq!(out.formats(), vec![ResultFormat::Tsv, ResultFormat::Gff3]);
+                let query = filter.to_query();
+                assert_eq!(query.filter.as_deref(), Some("none"));
+                assert_eq!(query.ec_class.as_deref(), Some("3"));
+                assert_eq!(query.has_gene, Some(true));
+                assert_eq!(query.has_product, None);
+                assert!(query.is_active());
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn api_filter_names_work_as_aliases() {
+        let cli = Cli::try_parse_from([
+            "aidb",
+            "download",
+            "3f2b8c1e-5d4a-4e7b-9a6c-1d2e3f4a5b6c",
+            "--only",
+            "bakta_db",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Download { filter, out, .. } => {
+                assert_eq!(filter.only, Some(MatchFilter::BaktaDb));
+                assert_eq!(out.formats(), vec![ResultFormat::Tsv]); // default
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn invalid_output_combinations_are_rejected() {
+        let job = "3f2b8c1e-5d4a-4e7b-9a6c-1d2e3f4a5b6c";
+        assert!(Cli::try_parse_from(["aidb", "download", job, "--stdout", "-d", "out"]).is_err());
+        assert!(Cli::try_parse_from(["aidb", "download", job, "--ec-class", "9"]).is_err());
+        assert!(Cli::try_parse_from(["aidb", "jobs", "--all", "--limit", "5"]).is_err());
+        assert!(Cli::try_parse_from(["aidb", "annotate"]).is_err());
     }
 
     #[test]

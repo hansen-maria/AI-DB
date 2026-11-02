@@ -8,32 +8,13 @@ use axum::{
     response::IntoResponse,
     Json,
 };
+use aidb_types::naming::{result_base_name, result_file_name};
 use axum_extra::extract::CookieJar;
-use serde::Deserialize;
 
 use crate::auth::owner_from_request;
 use crate::export::{generate_content, DownloadFormat};
-use crate::models::{AdvancedSequenceFilter, ErrorResponse, JobStatus, SequenceFilter};
+use crate::models::{AdvancedSequenceFilter, ErrorResponse, JobStatus, SequenceFilter, SequenceFilterQuery};
 use crate::state::AppState;
-
-/// Optional sequence-filter query parameters accepted by the download endpoint.
-/// All fields mirror those of `GetJobQuery` so the frontend can reuse its
-/// existing filter state when triggering a filtered export.
-#[derive(Debug, Default, Deserialize)]
-pub struct DownloadFilterQuery {
-    /// Match-status filter: all (default) | bakta_db | aidb_db | hash_match (either DB) | alignment | none
-    pub filter: Option<String>,
-    /// Case-insensitive text search in ID, gene, product
-    pub search: Option<String>,
-    pub min_length: Option<usize>,
-    pub max_length: Option<usize>,
-    /// COG category code, e.g. "J"
-    pub cog: Option<String>,
-    /// EC class digit, e.g. "1"
-    pub ec_class: Option<String>,
-    pub has_gene: Option<bool>,
-    pub has_product: Option<bool>,
-}
 
 /// Download job results in specified format (with optional sequence filtering)
 #[utoipa::path(
@@ -64,7 +45,7 @@ pub async fn download_job(
     jar: CookieJar,
     headers: HeaderMap,
     Path((job_id, format_str)): Path<(String, String)>,
-    Query(filter_query): Query<DownloadFilterQuery>,
+    Query(filter_query): Query<SequenceFilterQuery>,
 ) -> impl IntoResponse {
     // Parse format
     let format = match DownloadFormat::from_str(&format_str) {
@@ -148,22 +129,12 @@ pub async fn download_job(
             // Generate content based on format
             let content = generate_content(&export_job, format);
 
-            // Generate filename (append "_filtered" suffix when a filter was applied)
-            let base_name = job
-                .filename
-                .as_ref()
-                .map(|f| {
-                    f.trim_end_matches(".gz")
-                        .trim_end_matches(".fasta")
-                        .trim_end_matches(".fa")
-                })
-                .unwrap_or("results");
-            let suffix = if is_filtered { "_filtered" } else { "" };
-            let filename = format!(
-                "{}{}_annotations.{}",
-                base_name,
-                suffix,
-                format.file_extension()
+            // Same name as the CLI: proteins.faa -> proteins[_filtered]_annotations.tsv
+            // (ASCII only, so it is always a valid header value)
+            let filename = result_file_name(
+                &result_base_name(job.filename.as_deref().unwrap_or("results")),
+                is_filtered,
+                format.file_extension(),
             );
 
             // Return file response
