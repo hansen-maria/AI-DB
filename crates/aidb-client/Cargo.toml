@@ -8,5 +8,7 @@ repository.workspace = true
 
 [dependencies]
 aidb-types = { workspace = true }
-# HTTP stack (reqwest, tokio, retry middleware) is added with the first
-# endpoint implementation, see the CLI concept (v0.1).
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

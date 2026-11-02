@@ -1,11 +1,16 @@
 //! ============================================================================
 //! aidb-client – client library for the AI-DB REST API
 //!
-//! Scaffold. Planned modules (see CLI concept, v0.1):
-//!   * `client`   – `Client::builder()`, one method per endpoint, Bearer auth
-//!   * `upload`   – streamed multipart upload of (gzipped) protein FASTA
-//!   * `wait`     – job polling with backoff until completed / failed / timeout
-//!   * `download` – streamed result download (tsv, json, fasta, gff3)
+//! ```no_run
+//! # async fn demo() -> aidb_client::Result<()> {
+//! let client = aidb_client::Client::builder()
+//!     .server("https://ai-db.computational.bio")
+//!     .build()?;
+//! let health = client.health().await?;
+//! println!("{} (API v{})", health.version, health.api_version);
+//! # Ok(())
+//! # }
+//! ```
 //!
 //! All request and response types come from `aidb-types`, re-exported as
 //! [`types`], so client and server cannot drift apart silently.
@@ -13,4 +18,9 @@
 
 pub use aidb_types as types;
 
+mod client;
 pub mod compat;
+mod error;
+
+pub use client::{Client, ClientBuilder, DEFAULT_SERVER, DEFAULT_TIMEOUT};
+pub use error::{Error, Result};
