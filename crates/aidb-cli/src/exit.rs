@@ -20,8 +20,11 @@ pub const GENERAL: u8 = 1;
 pub const USAGE: u8 = 2;
 pub const UNAUTHORIZED: u8 = 3;
 pub const NOT_FOUND: u8 = 4;
+pub const JOB_FAILED: u8 = 5;
+pub const WAIT_TIMEOUT: u8 = 6;
 pub const UNAVAILABLE: u8 = 7;
 pub const INPUT_REJECTED: u8 = 8;
+pub const PARTIAL: u8 = 9;
 
 /// Exit code for a client error.
 pub fn code(error: &Error) -> u8 {
@@ -35,6 +38,8 @@ pub fn code(error: &Error) -> u8 {
             429 | 500..=599 => UNAVAILABLE,
             _ => GENERAL,
         },
+        Error::File { .. } => INPUT_REJECTED,
+        Error::WaitTimeout { .. } => WAIT_TIMEOUT,
         Error::Decode(_) | Error::Http(_) => GENERAL,
     }
 }

@@ -29,6 +29,30 @@ Tokens are saved per server in `~/.config/aidb/credentials.toml` (Windows:
 `%APPDATA%\aidb\`, override with `AIDB_CONFIG_DIR`), readable only by you.
 `AIDB_TOKEN` takes precedence, which suits CI and HPC jobs.
 
+## Jobs
+
+```bash
+# Upload protein FASTA (plain or gzipped, max. 100 MB each); one job per file
+aidb submit proteins.faa
+aidb submit sample_*.faa.gz
+aidb submit genome.faa --name "E. coli K-12"
+
+# Status and match counts (job ID or web link)
+aidb job show 3f2b8c1e-5d4a-4e7b-9a6c-1d2e3f4a5b6c
+
+# Wait with progress bars; exit 0 = completed, 5 = failed, 6 = timeout
+aidb job wait 3f2b8c1e-… 7c1d9a20-… --max-wait 30m
+
+# In scripts: only the job ID, then wait quietly
+JOB=$(aidb submit sample.faa -q)
+aidb job wait "$JOB" -q && echo done
+```
+
+Files are checked locally before the upload: FASTA format, size limit and
+protein content. Nucleotide FASTA is rejected – translate the genes first
+(e.g. with Bakta or Prodigal). `submit` needs an access token (see above), so
+the jobs stay yours to manage.
+
 ## Server
 
 ```bash

@@ -17,7 +17,7 @@ use uuid::Uuid;
 use crate::auth::{get_or_create_owner, owner_from_request, validate_owner};
 use crate::models::{
     AdvancedSequenceFilter, BulkDeleteRequest, BulkDeleteResponse, ErrorResponse, GetJobQuery,
-    JobCreateResponse, JobResponse, JobStatus, JobSummary, PaginatedJobResponse,
+    JobCreateResponse, JobResponse, JobStatus, JobSummary, JobViewResponse, PaginatedJobResponse,
     PaginatedJobsResponse, PaginationInfo, RenameJobRequest, SequenceFilter, SequenceInfo,
     DEFAULT_PER_PAGE, MAX_PER_PAGE,
 };
@@ -25,8 +25,7 @@ use crate::services::process_job_from_file;
 use crate::services::reannotate_sequences;
 use crate::state::AppState;
 
-use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
+use serde::Deserialize;
 
 /// Maximum upload size (100 MB)
 const MAX_UPLOAD_SIZE: usize = 100 * 1024 * 1024;
@@ -45,17 +44,6 @@ pub struct IncludeSequencesQuery {
     /// sequences" workflows need it, and they request it explicitly via a
     /// separate, `filter=none`-scoped call (see useJobPolling.ts).
     pub include_sequences: Option<bool>,
-}
-
-/// `GET /api/job/{job_id}` response: the paginated job plus whether the caller
-/// owns it. Non-owners (anyone who only has the job ID) get a read-only view;
-/// the frontend uses `is_owner` to hide controls that would be rejected.
-#[derive(Debug, Serialize, ToSchema)]
-pub struct JobViewResponse {
-    #[serde(flatten)]
-    pub job: PaginatedJobResponse,
-    /// True if the request carried the owner's cookie or API token
-    pub is_owner: bool,
 }
 
 /// Get temp directory from environment or use default

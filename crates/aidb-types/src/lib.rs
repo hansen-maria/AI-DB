@@ -42,7 +42,8 @@ pub use job::{
     RenameJobRequest,
 };
 pub use pagination::{
-    GetJobQuery, ListJobsQuery, PaginatedJobResponse, PaginatedJobsResponse, PaginationInfo,
+    GetJobQuery, JobViewResponse, ListJobsQuery, PaginatedJobResponse, PaginatedJobsResponse,
+    PaginationInfo,
     DEFAULT_PER_PAGE, MAX_PER_PAGE,
 };
 pub use psos::{PsosResult, PsosResultsResponse, SavePsosResultsRequest, SavePsosResultsResponse};

@@ -31,6 +31,18 @@ pub enum CliError {
     /// A local configuration file is invalid.
     #[error("{0}")]
     Config(String),
+
+    /// Input rejected before it was sent (not protein FASTA, too large, …).
+    #[error("{0}")]
+    Input(String),
+
+    /// Some or all jobs of a batch failed (details were printed already).
+    #[error("{failed} of {total} jobs failed")]
+    JobsFailed { failed: usize, total: usize },
+
+    /// Some files of a batch could not be submitted (the others were).
+    #[error("{failed} of {total} files could not be submitted")]
+    SubmissionsFailed { failed: usize, total: usize },
 }
 
 impl CliError {
@@ -47,6 +59,9 @@ impl CliError {
             CliError::Usage(_) => exit::USAGE,
             CliError::NoToken(_) => exit::UNAUTHORIZED,
             CliError::Io { .. } | CliError::Config(_) => exit::GENERAL,
+            CliError::Input(_) => exit::INPUT_REJECTED,
+            CliError::JobsFailed { failed, total } if failed == total => exit::JOB_FAILED,
+            CliError::JobsFailed { .. } | CliError::SubmissionsFailed { .. } => exit::PARTIAL,
         }
     }
 }
@@ -65,6 +80,20 @@ mod tests {
             exit::UNAUTHORIZED
         );
         assert_eq!(CliError::Config(String::new()).exit_code(), exit::GENERAL);
+        assert_eq!(
+            CliError::Input(String::new()).exit_code(),
+            exit::INPUT_REJECTED
+        );
+        let all = CliError::JobsFailed {
+            failed: 2,
+            total: 2,
+        };
+        assert_eq!(all.exit_code(), exit::JOB_FAILED);
+        let some = CliError::JobsFailed {
+            failed: 1,
+            total: 3,
+        };
+        assert_eq!(some.exit_code(), exit::PARTIAL);
         let api = aidb_client::Error::Api {
             status: 404,
             detail: String::new(),

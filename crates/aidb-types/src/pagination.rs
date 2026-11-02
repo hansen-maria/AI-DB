@@ -89,6 +89,18 @@ pub struct PaginatedJobResponse {
     pub filtered_count: usize,
 }
 
+/// `GET /api/job/{job_id}` response: the paginated job plus whether the caller
+/// owns it. Non-owners (anyone who only has the job ID) get a read-only view;
+/// clients use `is_owner` to hide actions that would be rejected.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct JobViewResponse {
+    #[serde(flatten)]
+    pub job: PaginatedJobResponse,
+    /// True if the request carried the owner's cookie or API token
+    pub is_owner: bool,
+}
+
 /// Query parameters for job list
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]

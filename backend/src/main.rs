@@ -38,15 +38,16 @@ use utoipa::{Modify, OpenApi};
 use utoipa_swagger_ui::SwaggerUi;
 
 use crate::handlers::{
-    bulk_delete_jobs, create_auth_token, create_job, db_info, delete_bakta_job, delete_job,
-    delete_psos_results, download_job, export_job_stats, get_auth_token, get_bakta_job, get_job,
-    get_job_stats, get_kpi_overview, get_psos_results, get_sequence, health_check,
-    ingest_bakta_results, list_jobs, rename_job, retry_job, save_bakta_job, save_psos_results,
+    bulk_delete_jobs, create_auth_token, create_job, db_info, delete_bakta_job, delete_job, delete_psos_results,
+    download_job, export_job_stats, get_bakta_job, get_job, get_job_stats, get_kpi_overview,
+    get_auth_token, get_psos_results, get_sequence, health_check, ingest_bakta_results, list_jobs, rename_job,
+    retry_job, save_bakta_job, save_psos_results,
 };
 use crate::models::{
-    AuthTokenResponse, BaktaJobStateResponse, BulkDeleteRequest, BulkDeleteResponse,
-    CustomAnnotationEntry, ErrorResponse, FunctionalStats, IngestCustomAnnotationsRequest,
+    AuthTokenResponse, BaktaJobStateResponse, BulkDeleteRequest, BulkDeleteResponse, CustomAnnotationEntry,
+    ErrorResponse, FunctionalStats, IngestCustomAnnotationsRequest,
     IngestCustomAnnotationsResponse, JobCreateResponse, JobResponse, JobStatus, JobSummary,
+    JobViewResponse,
     PaginatedJobResponse, PaginatedJobsResponse, PaginationInfo, PsosResult, PsosResultsResponse,
     RenameJobRequest, SaveBaktaJobRequest, SaveBaktaJobResponse, SavePsosResultsRequest,
     SavePsosResultsResponse, SequenceInfo, StoredBaktaJob,
@@ -139,7 +140,7 @@ use crate::state::AppState;
         PaginatedJobsResponse,
         JobSummary,
         PaginatedJobResponse,
-        crate::handlers::jobs::JobViewResponse,
+        JobViewResponse,
         FunctionalStats,
         PsosResult,
         PsosResultsResponse,
@@ -329,10 +330,7 @@ async fn main() {
         .route("/api/health", get(health_check))
         .route("/api/db/info", get(db_info))
         // Owner token of the browser session (same-origin only)
-        .route(
-            "/api/auth/token",
-            get(get_auth_token).post(create_auth_token),
-        )
+        .route("/api/auth/token", get(get_auth_token).post(create_auth_token))
         // Job management routes
         .route("/api/job/", post(create_job))
         .route(

@@ -1,10 +1,17 @@
 //! HTTP client for the AI-DB REST API.
 
+use std::path::Path;
 use std::time::Duration;
 
-use aidb_types::{DbInfoResponse, ErrorResponse, HealthCheckResponse};
-use reqwest::Url;
+use aidb_types::{
+    DbInfoResponse, ErrorResponse, GetJobQuery, HealthCheckResponse, JobCreateResponse, JobStatus,
+    JobViewResponse,
+};
+use futures_util::TryStreamExt;
+use reqwest::multipart::{Form, Part};
+use reqwest::{Body, RequestBuilder, Url};
 use serde::de::DeserializeOwned;
+use tokio_util::io::ReaderStream;
 
 use crate::error::{Error, Result};
 
@@ -14,8 +21,14 @@ pub const DEFAULT_SERVER: &str = "https://ai-db.computational.bio";
 /// Default timeout for a whole request.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Largest upload the server accepts (`MAX_UPLOAD_SIZE` in the backend).
+pub const MAX_UPLOAD_BYTES: u64 = 100 * 1024 * 1024;
+
 /// Upper bound for establishing the connection.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Uploads of up to 100 MB may take long on slow links.
+const UPLOAD_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 /// Longest server error text passed on to the user.
 const MAX_DETAIL_CHARS: usize = 300;
@@ -26,7 +39,6 @@ enum Auth {
     /// Public endpoint: the token is never sent.
     None,
     /// The token is sent if one is configured.
-    #[allow(dead_code)] // first used by the job endpoints (next step)
     Owner,
 }
 
@@ -64,7 +76,8 @@ impl ClientBuilder {
         self
     }
 
-    /// Timeout for a whole request (connecting is capped at 10 s).
+    /// Timeout for a whole request (connecting is capped at 10 s). Uploads use
+    /// a longer timeout of their own.
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
@@ -78,9 +91,10 @@ impl ClientBuilder {
 
     pub fn build(self) -> Result<Client> {
         let base = normalize_server_url(&self.server)?;
+        // No client-wide total timeout: it is set per request, so uploads can
+        // take longer than ordinary API calls
         let http = reqwest::Client::builder()
             .user_agent(self.user_agent)
-            .timeout(self.timeout)
             .connect_timeout(self.timeout.min(CONNECT_TIMEOUT))
             .build()
             .map_err(Error::Http)?;
@@ -88,7 +102,32 @@ impl ClientBuilder {
             http,
             base,
             token: self.token,
+            timeout: self.timeout,
         })
+    }
+}
+
+/// Options for [`Client::wait_for_job`].
+#[derive(Debug, Clone)]
+pub struct WaitOptions {
+    /// Delay before the second poll; grows by 1.5× up to `max_interval`.
+    pub initial_interval: Duration,
+    pub max_interval: Duration,
+    /// Give up with [`Error::WaitTimeout`] after this long (`None`: never).
+    pub max_wait: Option<Duration>,
+    /// Consecutive temporary failures (unreachable, 429, 5xx) tolerated
+    /// before the error is returned.
+    pub max_retries: u32,
+}
+
+impl Default for WaitOptions {
+    fn default() -> Self {
+        Self {
+            initial_interval: Duration::from_secs(2),
+            max_interval: Duration::from_secs(15),
+            max_wait: None,
+            max_retries: 5,
+        }
     }
 }
 
@@ -98,6 +137,7 @@ pub struct Client {
     http: reqwest::Client,
     base: Url,
     token: Option<String>,
+    timeout: Duration,
 }
 
 impl Client {
@@ -115,14 +155,152 @@ impl Client {
         self.token.is_some()
     }
 
+    /// Link to a job in the web interface.
+    pub fn job_web_url(&self, job_id: &str) -> Url {
+        self.segments_url(&["job", job_id])
+    }
+
+    // ── Service ──────────────────────────────────────────────────────────────
+
     /// `GET /api/health` – service status and API version.
     pub async fn health(&self) -> Result<HealthCheckResponse> {
-        self.get_json("api/health", Auth::None).await
+        let url = self.endpoint("api/health")?;
+        self.send_json(&url, self.request(self.http.get(url.clone()), Auth::None))
+            .await
     }
 
     /// `GET /api/db/info` – Bakta DB release and AI-DB annotations DB status.
     pub async fn db_info(&self) -> Result<DbInfoResponse> {
-        self.get_json("api/db/info", Auth::None).await
+        let url = self.endpoint("api/db/info")?;
+        self.send_json(&url, self.request(self.http.get(url.clone()), Auth::None))
+            .await
+    }
+
+    // ── Jobs ─────────────────────────────────────────────────────────────────
+
+    /// `POST /api/job/` – uploads a FASTA file (plain or gzipped, streamed)
+    /// as a new job owned by the configured token.
+    ///
+    /// `on_progress` is called with the number of bytes sent per chunk.
+    /// Without a token the server creates a new, anonymous owner whose jobs
+    /// cannot be managed afterwards – callers should require a token.
+    pub async fn submit_fasta<F>(
+        &self,
+        path: &Path,
+        job_name: Option<&str>,
+        on_progress: F,
+    ) -> Result<JobCreateResponse>
+    where
+        F: Fn(u64) + Send + Sync + 'static,
+    {
+        let file_error = |source| Error::File {
+            path: path.to_path_buf(),
+            source,
+        };
+        let file = tokio::fs::File::open(path).await.map_err(file_error)?;
+        let length = file.metadata().await.map_err(file_error)?.len();
+
+        let stream =
+            ReaderStream::new(file).inspect_ok(move |chunk| on_progress(chunk.len() as u64));
+        let file_name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "input.fasta".to_string());
+        let part = Part::stream_with_length(Body::wrap_stream(stream), length)
+            .file_name(file_name)
+            .mime_str("application/octet-stream")
+            .map_err(Error::Http)?;
+
+        let mut form = Form::new().part("file", part);
+        if let Some(name) = job_name.filter(|n| !n.trim().is_empty()) {
+            form = form.text("job_name", name.to_string());
+        }
+
+        let url = self.endpoint("api/job/")?;
+        let request = self
+            .request(self.http.post(url.clone()), Auth::Owner)
+            .multipart(form)
+            .timeout(UPLOAD_TIMEOUT);
+        self.send_json(&url, request).await
+    }
+
+    /// `GET /api/job/{job_id}` with the given page / filter.
+    pub async fn job(&self, job_id: &str, query: &GetJobQuery) -> Result<JobViewResponse> {
+        let url = self.segments_url(&["api", "job", job_id]);
+        let request = self
+            .request(self.http.get(url.clone()), Auth::Owner)
+            .query(query);
+        self.send_json(&url, request).await
+    }
+
+    /// Status and counters of a job, without the sequence list (one entry at
+    /// most, to keep polling cheap).
+    pub async fn job_status(&self, job_id: &str) -> Result<JobViewResponse> {
+        let query = GetJobQuery {
+            per_page: Some(1),
+            ..GetJobQuery::default()
+        };
+        self.job(job_id, &query).await
+    }
+
+    /// Number of sequences of a job matching a match-status filter
+    /// (`bakta_db`, `aidb_db`, `hash_match`, `none`, …).
+    pub async fn count_sequences(&self, job_id: &str, filter: &str) -> Result<usize> {
+        let query = GetJobQuery {
+            per_page: Some(1),
+            filter: Some(filter.to_string()),
+            ..GetJobQuery::default()
+        };
+        Ok(self.job(job_id, &query).await?.job.filtered_count)
+    }
+
+    /// Polls a job until it is `completed` or `failed` and returns its final
+    /// state. `on_update` sees every polled state (for progress output).
+    ///
+    /// Temporary failures are retried (see [`WaitOptions::max_retries`]); a
+    /// failed job is not an error here – check `status` of the result.
+    pub async fn wait_for_job<F>(
+        &self,
+        job_id: &str,
+        options: &WaitOptions,
+        mut on_update: F,
+    ) -> Result<JobViewResponse>
+    where
+        F: FnMut(&JobViewResponse),
+    {
+        let started = tokio::time::Instant::now();
+        let mut interval = options.initial_interval;
+        let mut failures = 0;
+
+        loop {
+            match self.job_status(job_id).await {
+                Ok(view) => {
+                    failures = 0;
+                    on_update(&view);
+                    if matches!(view.job.status, JobStatus::Completed | JobStatus::Failed) {
+                        return Ok(view);
+                    }
+                }
+                Err(error) if error.is_temporary() && failures < options.max_retries => {
+                    failures += 1;
+                }
+                Err(error) => return Err(error),
+            }
+
+            if let Some(max_wait) = options.max_wait {
+                let waited = started.elapsed();
+                if waited >= max_wait {
+                    return Err(Error::WaitTimeout {
+                        job_id: job_id.to_string(),
+                        waited,
+                    });
+                }
+                // Do not sleep past the deadline
+                interval = interval.min(max_wait - waited);
+            }
+            tokio::time::sleep(interval).await;
+            interval = interval.mul_f64(1.5).min(options.max_interval);
+        }
     }
 
     // ── Internals ────────────────────────────────────────────────────────────
@@ -134,14 +312,31 @@ impl Client {
         })
     }
 
-    async fn get_json<T: DeserializeOwned>(&self, path: &str, auth: Auth) -> Result<T> {
-        let url = self.endpoint(path)?;
-        let mut request = self.http.get(url.clone());
-        if auth == Auth::Owner {
-            if let Some(token) = &self.token {
-                request = request.bearer_auth(token);
-            }
+    /// URL below the base with each segment percent-encoded, so IDs can never
+    /// change the path (`../`, `?`, …).
+    fn segments_url(&self, segments: &[&str]) -> Url {
+        let mut url = self.base.clone();
+        url.path_segments_mut()
+            .expect("normalize_server_url guarantees a base URL")
+            .pop_if_empty()
+            .extend(segments);
+        url
+    }
+
+    /// Default timeout plus the token on owner routes.
+    fn request(&self, request: RequestBuilder, auth: Auth) -> RequestBuilder {
+        let request = request.timeout(self.timeout);
+        match (&self.token, auth) {
+            (Some(token), Auth::Owner) => request.bearer_auth(token),
+            _ => request,
         }
+    }
+
+    async fn send_json<T: DeserializeOwned>(
+        &self,
+        url: &Url,
+        request: RequestBuilder,
+    ) -> Result<T> {
         let response = request
             .send()
             .await
@@ -246,6 +441,26 @@ mod tests {
                 "{bad}"
             );
         }
+    }
+
+    #[test]
+    fn ids_are_encoded_as_single_path_segments() {
+        let client = Client::builder()
+            .server("https://example.org/ai-db/")
+            .build()
+            .unwrap();
+        assert_eq!(
+            client.segments_url(&["api", "job", "abc"]).as_str(),
+            "https://example.org/ai-db/api/job/abc"
+        );
+        assert_eq!(
+            client.segments_url(&["api", "job", "../admin?x"]).as_str(),
+            "https://example.org/ai-db/api/job/..%2Fadmin%3Fx"
+        );
+        assert_eq!(
+            client.job_web_url("abc").as_str(),
+            "https://example.org/ai-db/job/abc"
+        );
     }
 
     #[test]
