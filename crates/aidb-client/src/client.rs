@@ -77,7 +77,7 @@ impl ClientBuilder {
     }
 
     pub fn build(self) -> Result<Client> {
-        let base = normalize_base_url(&self.server)?;
+        let base = normalize_server_url(&self.server)?;
         let http = reqwest::Client::builder()
             .user_agent(self.user_agent)
             .timeout(self.timeout)
@@ -154,8 +154,12 @@ impl Client {
     }
 }
 
-/// Parses the server URL and makes it usable as a base for relative joins.
-fn normalize_base_url(raw: &str) -> Result<Url> {
+/// Parses a server URL into the canonical form used by [`Client`]:
+/// http(s) only, no query or fragment, path always ending with `/`.
+///
+/// Useful as a stable key for per-server settings (e.g. saved tokens), since
+/// `https://host`, `https://host/` and `https://host/?x` map to the same value.
+pub fn normalize_server_url(raw: &str) -> Result<Url> {
     let invalid = |reason: &str| Error::InvalidUrl {
         url: raw.to_string(),
         reason: reason.to_string(),
@@ -213,7 +217,7 @@ mod tests {
 
     #[test]
     fn base_url_gets_a_trailing_slash_and_loses_query() {
-        let url = normalize_base_url("https://ai-db.example.org?x=1#top").unwrap();
+        let url = normalize_server_url("https://ai-db.example.org?x=1#top").unwrap();
         assert_eq!(url.as_str(), "https://ai-db.example.org/");
     }
 
@@ -238,7 +242,7 @@ mod tests {
             "mailto:x@y.z",
         ] {
             assert!(
-                matches!(normalize_base_url(bad), Err(Error::InvalidUrl { .. })),
+                matches!(normalize_server_url(bad), Err(Error::InvalidUrl { .. })),
                 "{bad}"
             );
         }

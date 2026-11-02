@@ -15,4 +15,12 @@ aidb-client = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true }
+uuid = { workspace = true }
+toml = { workspace = true }
+directories = { workspace = true }
+rpassword = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

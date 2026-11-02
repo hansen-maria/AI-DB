@@ -78,11 +78,17 @@ pub async fn run(client: &Client, output: OutputFormat) -> Result<()> {
         Compatibility::Unknown => {
             warn("the server does not report its API version; some commands may not work")
         }
-        Compatibility::ServerOlder { server, client: cli_api } => warn(&format!(
+        Compatibility::ServerOlder {
+            server,
+            client: cli_api,
+        } => warn(&format!(
             "the server speaks API v{server}, this CLI expects v{cli_api}; \
              some commands may not work until the server is updated"
         )),
-        Compatibility::ServerNewer { server, client: cli_api } => warn(&format!(
+        Compatibility::ServerNewer {
+            server,
+            client: cli_api,
+        } => warn(&format!(
             "the server speaks API v{server}, this CLI only v{cli_api}; please update the AI-DB CLI"
         )),
     }

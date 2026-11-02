@@ -1,5 +1,7 @@
 //! Command-line interface definition (clap).
 
+use std::path::PathBuf;
+
 use clap::{Parser, Subcommand, ValueEnum};
 
 /// Command-line client for AI-DB – hash-based annotation of bacterial proteins
@@ -51,6 +53,43 @@ pub enum Command {
     /// Information about the annotation databases
     #[command(subcommand)]
     Db(DbCommand),
+
+    /// Manage the access token that identifies your jobs
+    #[command(subcommand)]
+    Auth(AuthCommand),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AuthCommand {
+    /// Create a new access token for this server and save it
+    Init {
+        /// Replace a token that is already saved for this server
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Save an existing token, e.g. the one from the web interface
+    ///
+    /// Copy it in the web interface (Jobs → Access token) and paste it when
+    /// asked, pipe it in (`pbpaste | aidb auth import`), or pass the downloaded
+    /// file with --file. The token is never taken as an argument, so it does
+    /// not end up in your shell history.
+    Import {
+        /// Read the token from a file, e.g. aidb-token.env from the web interface
+        #[arg(long, value_name = "PATH")]
+        file: Option<PathBuf>,
+
+        /// Replace a different token that is already saved for this server
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Show the token in use and where it comes from
+    Show {
+        /// Print the full token instead of a masked one (e.g. for a CI secret)
+        #[arg(long)]
+        reveal: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -83,6 +122,37 @@ mod tests {
         assert_eq!(cli.output, OutputFormat::Json);
         assert_eq!(cli.server, "http://localhost:8000");
         assert!(matches!(cli.command, Command::Status));
+    }
+
+    #[test]
+    fn auth_commands_parse() {
+        let cli = Cli::try_parse_from([
+            "aidb",
+            "auth",
+            "import",
+            "--file",
+            "aidb-token.env",
+            "--force",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Auth(AuthCommand::Import { file, force }) => {
+                assert_eq!(file, Some(PathBuf::from("aidb-token.env")));
+                assert!(force);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+        let cli = Cli::try_parse_from(["aidb", "auth", "show", "--reveal"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Auth(AuthCommand::Show { reveal: true })
+        ));
+    }
+
+    #[test]
+    fn import_never_takes_the_token_as_an_argument() {
+        let token = "3f2b8c1e-5d4a-4e7b-9a6c-1d2e3f4a5b6c";
+        assert!(Cli::try_parse_from(["aidb", "auth", "import", token]).is_err());
     }
 
     #[test]

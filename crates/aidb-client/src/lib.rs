@@ -22,5 +22,5 @@ mod client;
 pub mod compat;
 mod error;
 
-pub use client::{Client, ClientBuilder, DEFAULT_SERVER, DEFAULT_TIMEOUT};
+pub use client::{normalize_server_url, Client, ClientBuilder, DEFAULT_SERVER, DEFAULT_TIMEOUT};
 pub use error::{Error, Result};
