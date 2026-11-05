@@ -56,6 +56,29 @@ let goChart:  any = null
 let ecChart:  any = null
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Shared sunburst helpers
+// ─────────────────────────────────────────────────────────────────────────────
+// Note: `levels` are indexed by ABSOLUTE tree depth. Fixed r0/r per level must
+// therefore NOT be set – otherwise, after drilling into a level-1 node, that
+// node keeps its overview radius and covers the "back" ring (virtual root)
+// that ECharts draws on the innermost ring, making the top level unreachable.
+
+/** levels[0]: virtual root – rendered as the inner "back" ring after drill-down. */
+const ROLLUP_LEVEL = {
+  itemStyle: { color: '#9e9e9e' },
+  label: {
+    show:      true,
+    rotate:    0,
+    fontSize:  11,
+    color:     '#fff',
+    formatter: () => '↩ Back',
+  },
+}
+
+/** Tooltip text for the virtual root (it has an empty name). */
+const ROLLUP_TOOLTIP = 'Click to go back one level'
+
+// ─────────────────────────────────────────────────────────────────────────────
 // COG Sunburst
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -162,6 +185,7 @@ async function renderCog() {
     tooltip: {
       trigger: 'item',
       formatter: (p: any) => {
+        if (!p.name) return ROLLUP_TOOLTIP
         const pct = props.stats
             ? ((p.value / props.stats.cog_categories.reduce((s, c) => s + c.count, 0)) * 100).toFixed(1)
             : '?'
@@ -178,10 +202,9 @@ async function renderCog() {
       // Global label default – overridden per level below
       label: { show: false },
       levels: [
-        {},
+        ROLLUP_LEVEL,
         // Inner ring: super-categories – always show, full name
         {
-          r0: '15%', r: '45%',
           label: {
             show:         true,
             rotate:       'tangential',
@@ -192,7 +215,6 @@ async function renderCog() {
         },
         // Outer ring: COG codes – show only when segment is large enough
         {
-          r0: '46%', r: '85%',
           minAngle: 8,
           label: {
             show:         true,
@@ -277,6 +299,7 @@ async function renderGo() {
     tooltip: {
       trigger: 'item',
       formatter: (p: any) => {
+        if (!p.name) return ROLLUP_TOOLTIP
         const pct = ((p.value / totalGo) * 100).toFixed(1)
         const nameParts = String(p.name).split('\n')
         const id  = nameParts[0]
@@ -296,10 +319,9 @@ async function renderGo() {
       emphasis: { focus: 'ancestor' },
       label: { show: false },
       levels: [
-        {},
+        ROLLUP_LEVEL,
         // Inner ring: BP / MF / CC – always visible, short abbreviation
         {
-          r0: '15%', r: '42%',
           label: {
             show:       true,
             fontSize:   14,
@@ -314,7 +336,6 @@ async function renderGo() {
         },
         // Outer ring: individual GO terms – label only when space allows
         {
-          r0: '43%', r: '85%',
           minAngle: 6,
           label: {
             show:        true,
@@ -484,6 +505,7 @@ async function renderEc() {
     tooltip: {
       trigger: 'item',
       formatter: (p: any) => {
+        if (!p.name) return ROLLUP_TOOLTIP
         const pct = ((p.value / totalEc) * 100).toFixed(1)
         return `<b>${p.name}</b><br/>${p.value.toLocaleString()} sequences (${pct}%)`
       },
@@ -497,10 +519,9 @@ async function renderEc() {
       emphasis: { focus: 'ancestor' },
       label: { show: false },
       levels: [
-        {},
+        ROLLUP_LEVEL,
         // Inner ring: EC classes – always show class number + short name
         {
-          r0: '15%', r: '45%',
           label: {
             show:       true,
             rotate:     'tangential',
@@ -515,7 +536,6 @@ async function renderEc() {
         },
         // Outer ring: sub-classes – show only when large enough
         {
-          r0: '46%', r: '85%',
           minAngle: 6,
           label: {
             show:        true,
@@ -643,7 +663,7 @@ onUnmounted(() => {
         <div v-if="!hasCog" class="viz-no-data">No COG annotations found in this job.</div>
         <template v-else>
           <p class="viz-hint">
-            Click a super-category to expand. Hover for counts. COG assignments from
+            Click a super-category to expand, the inner ring to go back. Hover for counts. COG assignments from
             <code>cog_category</code> field across {{ stats.total_sequences.toLocaleString() }} sequences.
           </p>
           <div ref="cogContainer" class="viz-chart"></div>
@@ -656,7 +676,7 @@ onUnmounted(() => {
         <template v-else>
           <p class="viz-hint">
             Three root ontologies (BP / MF / CC) shown as inner ring; individual GO terms as outer ring.
-            Labels resolved via QuickGO. Click to drill down, hover for counts.
+            Labels resolved via QuickGO. Click to drill down, the inner ring to go back. Hover for counts.
             <span v-if="goLabelsLoading" class="viz-hint-loading">Resolving GO labels…</span>
           </p>
           <div ref="goContainer" class="viz-chart"></div>
@@ -669,6 +689,7 @@ onUnmounted(() => {
         <template v-else>
           <p class="viz-hint">
             Enzyme classes (EC 1–7) as inner ring; sub-classes (EC x.y) as outer ring.
+            Click to drill down, the inner ring to go back.
             Counts from <code>ec_ids</code> across all annotated sequences.
           </p>
           <div ref="ecContainer" class="viz-chart"></div>
