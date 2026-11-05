@@ -1,8 +1,38 @@
 import { ref, type Ref } from 'vue'
 import {
   getJob, getJobStats,
-  type PaginatedJobResponse, type FunctionalStats,
+  type PaginatedJobResponse, type FunctionalStats, type SequenceFilter, type SequenceInfo,
 } from '../api/jobs.ts'
+
+/** Must match MAX_PER_PAGE in crates/aidb-types/src/pagination.rs (server clamps to it). */
+const FETCH_PAGE_SIZE = 10_000
+
+/**
+ * Fetches ALL sequences of a job by walking through every page.
+ * The backend caps `per_page` at 10,000, so a single request silently
+ * truncates larger jobs. Returns the first page's response (job metadata)
+ * with `sequences` replaced by the full, concatenated list.
+ *
+ * @param stopWhen Optional early-exit check, evaluated after each page.
+ */
+async function getJobAllSequences(
+    jobId: string,
+    filter: SequenceFilter,
+    includeSequences = false,
+    stopWhen?: (seqs: SequenceInfo[]) => boolean,
+): Promise<PaginatedJobResponse> {
+  const first = await getJob(jobId, 1, FETCH_PAGE_SIZE, filter, undefined, includeSequences)
+  const sequences: SequenceInfo[] = [...(first.sequences || [])]
+  const totalPages = first.pagination?.total_pages ?? 1
+
+  for (let page = 2; page <= totalPages; page++) {
+    if (stopWhen?.(sequences)) break
+    const res = await getJob(jobId, page, FETCH_PAGE_SIZE, filter, undefined, includeSequences)
+    sequences.push(...(res.sequences || []))
+  }
+
+  return { ...first, sequences }
+}
 
 /**
  * Manages fetching job data, background polling while the job is running,
@@ -20,6 +50,7 @@ export function useJobPolling(jobId: Ref<string>) {
   const error      = ref('')
 
   let pollInterval: number | null = null
+  let pollInFlight = false
 
   // ── Public API ─────────────────────────────────────────────────────────────
 
@@ -29,11 +60,11 @@ export function useJobPolling(jobId: Ref<string>) {
     try {
       // NOTE: intentionally NOT passing includeSequences here – the raw
       // `sequence` text field is by far the largest part of the payload
-      // (full protein/DNA text × up to 10,000 entries) and isn't used
+      // (full protein/DNA text × every entry) and isn't used
       // anywhere in the table/filtering UI. For a completed job, unmatched
       // sequences' text is fetched separately below (much smaller subset,
       // filtered server-side) only once it's actually needed.
-      const response    = await getJob(jobId.value, 1, 10_000, 'all')
+      const response    = await getJobAllSequences(jobId.value, 'all')
       job.value         = response
       allSequences.value = response.sequences || []
 
@@ -70,7 +101,7 @@ export function useJobPolling(jobId: Ref<string>) {
    */
   async function loadUnmatchedSequenceText() {
     try {
-      const response = await getJob(jobId.value, 1, 10_000, 'none', undefined, true)
+      const response = await getJobAllSequences(jobId.value, 'none', true)
       const textById = new Map((response.sequences || []).map(s => [s.id, s.sequence]))
       if (textById.size === 0) return
       allSequences.value = allSequences.value.map(s =>
@@ -92,7 +123,11 @@ export function useJobPolling(jobId: Ref<string>) {
     if (ids.length === 0) return
     const wanted = new Set(ids)
     try {
-      const response = await getJob(jobId.value, 1, 10_000, 'all', undefined, true)
+      // Stop paging as soon as every requested id has been seen.
+      const response = await getJobAllSequences(
+          jobId.value, 'all', true,
+          seqs => seqs.reduce((n, s) => n + (wanted.has(s.id) ? 1 : 0), 0) >= wanted.size,
+      )
       const textById = new Map(
         (response.sequences || []).filter(s => wanted.has(s.id)).map(s => [s.id, s.sequence]),
       )
@@ -107,8 +142,12 @@ export function useJobPolling(jobId: Ref<string>) {
   function startPolling(onCompleted?: () => Promise<void>) {
     if (pollInterval) return
     pollInterval = window.setInterval(async () => {
+      // Fetching all pages of a large job can take longer than the interval –
+      // skip ticks instead of stacking overlapping requests.
+      if (pollInFlight) return
+      pollInFlight = true
       try {
-        const response     = await getJob(jobId.value, 1, 10_000, 'all')
+        const response     = await getJobAllSequences(jobId.value, 'all')
         job.value          = response
         allSequences.value = response.sequences || []
         if (response.status === 'completed' || response.status === 'failed') {
@@ -121,6 +160,8 @@ export function useJobPolling(jobId: Ref<string>) {
         }
       } catch {
         stopPolling()
+      } finally {
+        pollInFlight = false
       }
     }, 1_000)
   }
