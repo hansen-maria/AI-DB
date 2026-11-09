@@ -2,6 +2,7 @@
 import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { createJobWithFile, createJobWithContent } from '../api/jobs.ts'
+import { trackJobSubmitted } from '../api/analytics.ts'
 
 const router = useRouter()
 
@@ -159,6 +160,11 @@ async function submitJob() {
     } else {
       response = await createJobWithContent(fastaContent.value, jobName.value || undefined)
     }
+
+    trackJobSubmitted(
+        inputMode.value === 'file' ? 'file' : (fastaContent.value === exampleFasta ? 'example' : 'paste'),
+        response.sequence_count,
+    )
 
     // Navigate to job detail page
     await router.push({name: 'job', params: {id: response.job_id}})

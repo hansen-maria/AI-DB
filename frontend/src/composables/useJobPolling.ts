@@ -1,4 +1,5 @@
 import { ref, type Ref } from 'vue'
+import { trackJobFinished } from '../api/analytics.ts'
 import {
   getJob, getJobStats,
   type PaginatedJobResponse, type FunctionalStats, type SequenceFilter, type SequenceInfo,
@@ -152,6 +153,11 @@ export function useJobPolling(jobId: Ref<string>) {
         allSequences.value = response.sequences || []
         if (response.status === 'completed' || response.status === 'failed') {
           stopPolling()
+          trackJobFinished(
+              response.status,
+              response.sequence_count,
+              response.hash_matches + response.alignment_matches,
+          )
           if (response.status === 'completed') {
             await loadStats()
             await loadUnmatchedSequenceText()

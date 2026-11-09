@@ -67,6 +67,15 @@ const router = createRouter({
                 window.location.href = '/api/docs'
             },
             component: HomeView // Placeholder, will redirect
+        },
+        {
+            // Catch-all – must stay the last route
+            path: '/:pathMatch(.*)*',
+            name: 'not-found',
+            component: () => import('@/views/NotFoundView.vue'),
+            meta: {
+                title: 'Page not found - AI-DB'
+            }
         }
     ],
     scrollBehavior(to, _from, savedPosition) {

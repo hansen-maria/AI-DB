@@ -3,6 +3,8 @@
  * TypeScript client for the REST API
  */
 
+import { trackExport } from './analytics.ts';
+
 const API_BASE = '/api';
 
 // ============================================================================
@@ -535,6 +537,7 @@ export async function downloadFilteredJobResults(
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    trackExport('filtered', format);
     window.URL.revokeObjectURL(downloadUrl);
 }
 
@@ -585,6 +588,7 @@ export async function exportJobStats(jobId: string): Promise<void> {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    trackExport('stats', 'csv');
     window.URL.revokeObjectURL(downloadUrl);
 }
 
@@ -699,6 +703,7 @@ export async function downloadJobResults(
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    trackExport('results', format);
     window.URL.revokeObjectURL(downloadUrl);
 }
 

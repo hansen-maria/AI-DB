@@ -1,4 +1,5 @@
 import { ref, computed, type Ref, type ComputedRef } from 'vue'
+import { trackForwardToBakta, trackAutoSaveToggle } from '../api/analytics.ts'
 import {
   runBaktaAnnotation, resumeBaktaAnnotation,
   loadBaktaState, deleteBaktaState, groupFeaturesByType,
@@ -70,6 +71,7 @@ export function useBaktaAnalysis(
   const autoIngestAnnotations = ref(loadAutoIngestPreference())
 
   function setAutoIngestAnnotations(value: boolean) {
+    if (value !== autoIngestAnnotations.value) trackAutoSaveToggle(value)
     autoIngestAnnotations.value = value
     try { localStorage.setItem(AUTO_INGEST_STORAGE_KEY, String(value)) } catch { /* ignore */ }
   }
@@ -219,6 +221,8 @@ export function useBaktaAnalysis(
     const config: BaktaJobOptions = { completeGenome: baktaCompleteGenome.value }
     if (baktaGenus.value.trim())   config.genus   = baktaGenus.value.trim()
     if (baktaSpecies.value.trim()) config.species = baktaSpecies.value.trim()
+
+    trackForwardToBakta(baktaWorkflowMode.value, sequences.length, autoIngestAnnotations.value)
 
     try {
       baktaResult.value = await runBaktaAnnotation(

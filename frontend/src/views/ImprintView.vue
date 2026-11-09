@@ -1,7 +1,7 @@
 <script setup lang="ts">
 const CONTACT_EMAIL = 'maria.hansen@computational.bio.uni-giessen.de'
 
-const LAST_EDITED = '2026-10-19'
+const LAST_EDITED = '2026-11-09'
 const lastEditedLabel = `Last edited: ${new Date(LAST_EDITED).toLocaleDateString('en-GB', {
   day: '2-digit',
   month: 'long',
@@ -120,7 +120,8 @@ const lastEditedLabel = `Last edited: ${new Date(LAST_EDITED).toLocaleDateString
       <section class="legal-section">
         <h3>4. Browser Storage</h3>
         <p>
-          AI-DB does not use cookies. We use your browser's local storage solely to
+          AI-DB does not use cookies — this also applies to the web analytics described
+          in section 6. We use your browser's local storage solely to
           remember settings you have made yourself: your colour theme (light or dark),
           dismissed service notices, and whether annotations may be contributed to the
           AI-DB annotations DB. This information never leaves your device and can be
@@ -156,11 +157,45 @@ const lastEditedLabel = `Last edited: ${new Date(LAST_EDITED).toLocaleDateString
       </section>
 
       <section class="legal-section">
-        <h3>6. Usage Statistics</h3>
+        <h3>6. Usage Statistics and Web Analytics</h3>
         <p>
           To report on the use of AI-DB to our funding bodies, we record aggregated
           monthly figures (e.g. number of jobs and sequences submitted). These figures
           contain no personal data and cannot be traced back to individual users.
+        </p>
+        <p>
+          In addition, we use the open-source web analytics software
+          <strong>Plausible Analytics</strong> (Community Edition) to understand how AI-DB
+          is used and to improve it. Plausible is operated on a server of Justus Liebig
+          University Giessen (<code>plausible.computational.bio.uni-giessen.de</code>);
+          no data is transmitted to Plausible Insights OÜ or any other third party.
+          Requests are routed through the AI-DB web server.
+        </p>
+        <p>When you use AI-DB, the following information is processed:</p>
+        <ul>
+          <li>Visited pages, referring website (referrer) and UTM campaign parameters</li>
+          <li>Browser, operating system, device type and screen size (derived from the user agent and screen width)</li>
+          <li>Country derived from your IP address</li>
+          <li>
+            Interactions within AI-DB: submitting a job (including the input type and the
+            number of sequences in coarse ranges), job completion (status and match rate in
+            coarse ranges), forwarding to Bakta or Psos, switching the contribution setting
+            on or off, downloads and exports (type and file format), clicks on external
+            links, form submissions and calls of non-existent pages
+          </li>
+        </ul>
+        <p>
+          Your IP address is used only briefly to determine your approximate location and,
+          together with the user agent, to calculate an anonymous daily identifier (a hash
+          with a salt that is replaced every 24 hours). The IP address itself is not
+          stored. Plausible sets no cookies and creates no cross-site or cross-day profiles,
+          so individual visitors cannot be identified or recognised on later days.
+          Sequence content, sequence IDs, job IDs and file names are never sent to Plausible.
+        </p>
+        <p>
+          You can prevent this analysis at any time, for example by blocking
+          <code>/pl/</code> requests with a content blocker or by disabling JavaScript for
+          this site. You may also object to the processing (see section 9).
         </p>
       </section>
 
@@ -168,8 +203,9 @@ const lastEditedLabel = `Last edited: ${new Date(LAST_EDITED).toLocaleDateString
         <h3>7. Purpose and Legal Basis of Data Processing</h3>
         <p>
           Data is processed exclusively to provide AI-DB as a research service, to
-          ensure its technical operation and security, and to compile aggregated usage
-          statistics. As a public university, JLU processes this data in the performance
+          ensure its technical operation and security, to compile aggregated usage
+          statistics, and to analyse and improve the use of the service (web analytics,
+          section 6). As a public university, JLU processes this data in the performance
           of its tasks in the public interest (research and the provision of research
           infrastructure). The legal basis is Art. 6 para. 1 lit. e GDPR in conjunction
           with § 3 of the Hessian Data Protection and Freedom of Information Act (HDSIG).
@@ -187,6 +223,7 @@ const lastEditedLabel = `Last edited: ${new Date(LAST_EDITED).toLocaleDateString
           <li><strong>Server log files</strong> — deleted after a short, defined retention period.</li>
           <li><strong>Contributed annotations</strong> (MD5 hash and annotation only) — retained permanently as part of the AI-DB annotations DB.</li>
           <li><strong>Aggregated usage statistics</strong> — retained permanently; they contain no personal data.</li>
+          <li><strong>Web analytics (Plausible)</strong> — IP addresses are not stored; the salt for the daily visitor identifier is deleted after 24 hours. The resulting aggregated statistics contain no personal data and are retained permanently.</li>
         </ul>
       </section>
 

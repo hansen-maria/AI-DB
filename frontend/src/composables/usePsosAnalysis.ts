@@ -1,4 +1,5 @@
 import { ref, type Ref, type ComputedRef } from 'vue'
+import { trackForwardToPsos, trackExport } from '../api/analytics.ts'
 import {
   submitToPsos, pollPsosJob, getPsosJobUrl, getPsosFile, parsePsosResult,
   openInPsos, downloadForPsos,
@@ -55,6 +56,7 @@ export function usePsosAnalysis(
     psosProgress.value  = 0
     psosTotal.value     = unmatchedSequences.value.length
     psosResults.value.clear()
+    trackForwardToPsos('api', unmatchedSequences.value.length)
 
     try {
       for (let i = 0; i < unmatchedSequences.value.length; i++) {
@@ -111,6 +113,7 @@ export function usePsosAnalysis(
       .map(s => ({ id: s.id, sequence: s.sequence }))
     if (!sequences.length) return
 
+    trackForwardToPsos('open', sequences.length)
     await openInPsos(sequences)
     psosCopied.value = true
     setTimeout(() => { psosCopied.value = false }, 3_000)
@@ -127,6 +130,7 @@ export function usePsosAnalysis(
       : 'unmatched_sequences.fasta'
 
     downloadForPsos(sequences, filename)
+    trackForwardToPsos('fasta', sequences.length)
   }
 
   // ── Download results TSV ───────────────────────────────────────────────────
@@ -158,6 +162,7 @@ export function usePsosAnalysis(
     const url  = URL.createObjectURL(blob)
     const a    = Object.assign(document.createElement('a'), { href: url, download: filename })
     a.click()
+    trackExport('psos', 'tsv')
     URL.revokeObjectURL(url)
   }
 
