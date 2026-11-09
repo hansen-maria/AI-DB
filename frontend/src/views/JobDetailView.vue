@@ -37,13 +37,11 @@ const detectedSequenceType = computed(() => {
   return seqs.length === 0 ? 'protein' : detectSequenceType(seqs.map(s => ({ sequence: s.sequence })))
 })
 
-// Community entries that are not confirmed (candidate, conflicted, legacy or
-// without status in older jobs) can be re-checked with Bakta:
-// an independent result is what lets them reach consensus (server-side the
-// ingest only accepts such hashes if they belong to this job).
+// AI-DB annotations DB matches can be re-checked with Bakta: the result only
+// fills empty fields of the existing entries, it never overwrites them
+// (server-side the ingest only accepts such hashes if they belong to this job).
 const recheckCandidates = computed(() =>
-    allSequences.value.filter(s =>
-        s.annotation_source === 'aidb_db' && s.annotation_status !== 'confirmed'))
+    allSequences.value.filter(s => s.annotation_source === 'aidb_db'))
 const includeRecheck = ref(false)
 const recheckLoading = ref(false)
 watch(includeRecheck, async (on) => {
@@ -58,17 +56,6 @@ watch(includeRecheck, async (on) => {
 // Sequences sent to Bakta: unmatched ones, plus re-check candidates if opted in
 const baktaTargets = computed(() =>
     includeRecheck.value ? [...unmatchedSequences.value, ...recheckCandidates.value] : unmatchedSequences.value)
-
-// Community entries (aidb_db matches) by curation status
-const communityStats = computed(() => {
-  const s = { confirmed: 0, unreviewed: 0 }
-  for (const seq of allSequences.value) {
-    if (seq.annotation_source !== 'aidb_db') continue
-    if (seq.annotation_status === 'confirmed') s.confirmed++
-    else s.unreviewed++
-  }
-  return s
-})
 
 // ── Sequence filters ──────────────────────────────────────────────────────────
 const filters = useSequenceFilters(allSequences, job)
@@ -321,12 +308,6 @@ function openBaktaConfig() {
               </div>
             </div>
 
-            <p v-if="communityStats.confirmed + communityStats.unreviewed > 0" class="community-note">
-              {{ (communityStats.confirmed + communityStats.unreviewed).toLocaleString() }} matches come from the community database:
-              {{ communityStats.confirmed.toLocaleString() }} confirmed by independent contributors,
-              {{ communityStats.unreviewed.toLocaleString() }} unreviewed (single contribution or conflicting annotations).
-            </p>
-
             <!-- Action cards -->
             <div class="action-cards">
               <button class="action-card action-card--sequences" @click="setTab('sequences')">
@@ -367,14 +348,14 @@ function openBaktaConfig() {
                 </div>
                 <div class="action-card__body">
                   <template v-if="!bakta.baktaAnalyzing.value && !bakta.baktaResult.value">
-                    <span class="action-card__title">{{ unmatchedSequences.length > 0 ? 'Annotate Unmatched' : 'Re-check Community Entries' }}</span>
-                    <span class="action-card__desc" v-if="(unmatchedSequences.length > 0 || recheckCandidates.length > 0) && !isOwner">Only the job owner can annotate sequences or re-check community entries.</span>
+                    <span class="action-card__title">{{ unmatchedSequences.length > 0 ? 'Annotate Unmatched' : 'Re-check AI-DB Entries' }}</span>
+                    <span class="action-card__desc" v-if="(unmatchedSequences.length > 0 || recheckCandidates.length > 0) && !isOwner">Only the job owner can annotate sequences or re-check AI-DB entries.</span>
                     <span class="action-card__desc" v-else-if="unmatchedSequences.length > 0">Run Bakta on {{ unmatchedSequences.length.toLocaleString() }} sequences with no database match.</span>
-                    <span class="action-card__desc" v-else-if="recheckCandidates.length > 0">All sequences have a match, but {{ recheckCandidates.length.toLocaleString() }} community {{ recheckCandidates.length === 1 ? 'entry is' : 'entries are' }} unconfirmed. An independent Bakta run can confirm or contest them.</span>
+                    <span class="action-card__desc" v-else-if="recheckCandidates.length > 0">All sequences have a match. {{ recheckCandidates.length.toLocaleString() }} {{ recheckCandidates.length === 1 ? 'match comes' : 'matches come' }} from the AI-DB annotations DB; a new Bakta run can complete missing fields.</span>
                     <span class="action-card__desc" v-else>All sequences are annotated.</span>
                     <label v-if="isOwner && recheckCandidates.length > 0" class="annotate-card-recheck" @click.stop>
                       <input type="checkbox" v-model="includeRecheck" />
-                      {{ unmatchedSequences.length > 0 ? 'Also re-check' : 'Include' }} {{ recheckCandidates.length.toLocaleString() }} unconfirmed community {{ recheckCandidates.length === 1 ? 'entry' : 'entries' }}
+                      {{ unmatchedSequences.length > 0 ? 'Also re-check' : 'Include' }} {{ recheckCandidates.length.toLocaleString() }} AI-DB {{ recheckCandidates.length === 1 ? 'entry' : 'entries' }}
                     </label>
                     <div v-if="bakta.baktaError.value" class="annotate-card-error">{{ bakta.baktaError.value }}</div>
                     <div v-if="isOwner && baktaTargets.length > 0" class="annotate-card-actions">
@@ -396,7 +377,7 @@ function openBaktaConfig() {
                   </template>
                   <template v-else-if="bakta.baktaResult.value">
                     <span class="action-card__title">Annotation complete</span>
-                    <span class="action-card__desc">{{ bakta.baktaResult.value.featureCount ?? '?' }} features found.<span v-if="bakta.baktaIngestResult.value"> Contributed to the community database: {{ bakta.baktaIngestResult.value.ingested }} new (unreviewed), {{ bakta.baktaIngestResult.value.updated }} added to existing entries<span v-if="bakta.baktaIngestResult.value.newly_confirmed"> ({{ bakta.baktaIngestResult.value.newly_confirmed }} now confirmed)</span>.</span></span>
+                    <span class="action-card__desc">{{ bakta.baktaResult.value.featureCount ?? '?' }} features found.<span v-if="bakta.baktaIngestResult.value"> Saved to the AI-DB annotations DB: {{ bakta.baktaIngestResult.value.ingested }} new, {{ bakta.baktaIngestResult.value.updated }} existing entries completed.</span></span>
                     <div class="annotate-card-actions">
                       <button v-if="detectedSequenceType === 'nucleotide'" class="annotate-card-configure" @click.stop="openBaktaConfig">View results →</button>
                     </div>
@@ -404,7 +385,7 @@ function openBaktaConfig() {
                 </div>
                 <div v-if="!bakta.baktaAnalyzing.value && !bakta.baktaResult.value" class="action-card__meta">
                   <span class="action-card__badge" :class="unmatchedSequences.length > 0 ? 'action-card__badge--amber' : 'action-card__badge--muted'">{{ unmatchedSequences.length.toLocaleString() }} unmatched</span>
-                  <span v-if="recheckCandidates.length > 0" class="action-card__badge action-card__badge--muted">{{ recheckCandidates.length.toLocaleString() }} unconfirmed</span>
+                  <span v-if="recheckCandidates.length > 0" class="action-card__badge action-card__badge--muted">{{ recheckCandidates.length.toLocaleString() }} AI-DB</span>
                 </div>
                 <div v-else-if="bakta.baktaAnalyzing.value" class="action-card__meta">
                   <span class="action-card__badge action-card__badge--amber">{{ Math.round(bakta.baktaProgressPercent.value) }}%</span>
@@ -572,7 +553,6 @@ function openBaktaConfig() {
 .rename-icon-btn { display: flex; align-items: center; padding: 0.25rem; background: none; border: none; color: var(--color-text); opacity: 0.4; cursor: pointer; border-radius: 4px; transition: opacity 0.15s; }
 .rename-icon-btn:hover { opacity: 1; }
 .readonly-badge { font-size: 0.72rem; font-weight: 600; padding: 0.15rem 0.55rem; border-radius: 99px; background: var(--color-background-soft); border: 1px solid var(--color-border); color: var(--color-text); opacity: 0.8; white-space: nowrap; }
-.community-note { margin: -1rem 0 1.5rem; font-size: 0.82rem; color: var(--color-text); opacity: 0.75; }
 .download-note { margin: 0; font-size: 0.85rem; color: var(--color-text); opacity: 0.75; }
 
 /* Inline rename form */

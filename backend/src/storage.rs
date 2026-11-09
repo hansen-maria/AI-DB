@@ -587,8 +587,8 @@ pub fn cleanup_orphaned_bakta_jobs(conn: &Connection) -> Result<usize, rusqlite:
 // AI-DB Annotations DB
 // Mirrors the Bakta DB schema (ups / ips / psc) so the same lookup code works.
 //
-// The database file and schema are created by setup-custom-annotations-db.sh.
-// This module only reads and writes data – never creates or migrates the DB.
+// The database file and base schema are created by setup-custom-annotations-db.sh.
+// The backend only adds the `hash_sightings` table (see `ensure_annotations_schema`).
 // ============================================================================
 
 use crate::models::CustomAnnotationEntry;
@@ -604,204 +604,157 @@ fn hex_to_bytes(hex: &str) -> Option<Vec<u8>> {
         .collect()
 }
 
-// ── Curation model ───────────────────────────────────────────────────────────
-//
-// ups.status:
-//   legacy      – added before curation tracking (unreviewed)
-//   candidate   – one contribution (or fewer than the threshold)
-//   confirmed   – the same annotation was contributed by >= N independent
-//                 contributors (AI_DB_CONFIRMATIONS, default 2) or an admin confirmed it
-//   conflicted  – competing annotations, none (or several) reached the threshold
-//   rejected    – an admin rejected it; hidden from lookups
-//
-// Contributions live in `annotation_submissions` (one vote per contributor and
-// hash; a changed vote replaces the earlier one). The annotation stored in
-// ups/ips/psc is the first one submitted, unless a different annotation
-// reaches the threshold on its own, in which case consensus replaces it.
+/// Idempotent, additive migration of the AI-DB annotations DB.
+///
+/// Creates `hash_sightings`, which counts in how many jobs AI-DB has seen a
+/// hash (lookup hits in the Bakta DB or the AI-DB annotations DB, and ingests).
+/// When the table is created for the first time, every existing AI-DB entry is
+/// seeded with the number of distinct jobs that contributed it (from the former
+/// `annotation_submissions` table, if present), at least 1.
+pub fn ensure_annotations_schema(conn: &Connection) -> Result<(), rusqlite::Error> {
+    let table_exists = |c: &Connection, name: &str| -> Result<bool, rusqlite::Error> {
+        c.query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            params![name],
+            |_| Ok(()),
+        )
+        .optional()
+        .map(|r| r.is_some())
+    };
 
-pub const STATUS_LEGACY: &str = "legacy";
-pub const STATUS_CANDIDATE: &str = "candidate";
-pub const STATUS_CONFIRMED: &str = "confirmed";
-pub const STATUS_CONFLICTED: &str = "conflicted";
-pub const STATUS_REJECTED: &str = "rejected";
-
-/// Independent contributors required to confirm an annotation.
-pub fn confirmation_threshold() -> i64 {
-    std::env::var("AI_DB_CONFIRMATIONS")
-        .ok()
-        .and_then(|v| v.parse::<i64>().ok())
-        .filter(|n| *n >= 1)
-        .unwrap_or(2)
-}
-
-/// Idempotent, additive migration of the AI-DB annotations DB: curation
-/// columns on `ups` and the `annotation_submissions` table. Existing rows are
-/// preserved and marked `legacy`.
-pub fn ensure_provenance_schema(conn: &Connection) -> Result<(), rusqlite::Error> {
-    let alters = [
-        "ALTER TABLE ups ADD COLUMN status TEXT NOT NULL DEFAULT 'legacy'",
-        "ALTER TABLE ups ADD COLUMN confirmations INTEGER NOT NULL DEFAULT 0",
-        "ALTER TABLE ups ADD COLUMN annotation_key TEXT",
-        "ALTER TABLE ups ADD COLUMN reviewed_at TEXT",
-    ];
-    for ddl in alters {
-        if let Err(e) = conn.execute(ddl, []) {
-            // "duplicate column name" → already migrated
-            if !e.to_string().contains("duplicate column name") {
-                return Err(e);
-            }
-        }
+    if table_exists(conn, "hash_sightings")? {
+        return Ok(());
     }
 
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS annotation_submissions (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            hash            BLOB    NOT NULL,
-            annotation_key  TEXT    NOT NULL,
-            contributor     TEXT    NOT NULL,
-            job_id          TEXT    NOT NULL,
-            submitted_at    TEXT    NOT NULL,
-            length          INTEGER NOT NULL,
-            uniparc_id      TEXT,
-            ncbi_nrp_id     TEXT,
-            uniref100_id    TEXT,
-            uniref90_id     TEXT,
-            gene            TEXT,
-            product         TEXT,
-            ec_ids          TEXT,
-            go_ids          TEXT,
-            cog_category    TEXT,
-            source          TEXT,
-            tool_version    TEXT,
-            workflow_mode   TEXT,
-            psc_identity    REAL,
-            psc_evalue      REAL,
-            UNIQUE(hash, contributor)
-        );
-        CREATE INDEX IF NOT EXISTS idx_submissions_hash
-            ON annotation_submissions(hash);
-        CREATE INDEX IF NOT EXISTS idx_submissions_contributor
-            ON annotation_submissions(contributor, submitted_at);",
+    // IMMEDIATE takes the write lock before the existence check, so concurrent
+    // first connections (several jobs starting at once) do not both try to
+    // create and seed the table; the loser sees it and returns.
+    let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?;
+    if table_exists(&*tx, "hash_sightings")? {
+        return Ok(());
+    }
+    tx.execute_batch(
+        "CREATE TABLE hash_sightings (
+            hash          BLOB    PRIMARY KEY,
+            seen_count    INTEGER NOT NULL DEFAULT 1,
+            first_seen_at TEXT    NOT NULL,
+            last_seen_at  TEXT    NOT NULL,
+            last_job_id   TEXT
+        ) WITHOUT ROWID;",
     )?;
+
+    let now = Utc::now().to_rfc3339();
+    let seeded = if table_exists(&*tx, "annotation_submissions")? {
+        tx.execute(
+            "INSERT OR IGNORE INTO hash_sightings (hash, seen_count, first_seen_at, last_seen_at)
+             SELECT u.hash,
+                    MAX(1, (SELECT COUNT(DISTINCT s.job_id)
+                            FROM annotation_submissions s WHERE s.hash = u.hash)),
+                    COALESCE(u.created_at, ?1),
+                    COALESCE(u.updated_at, u.created_at, ?1)
+             FROM ups u",
+            params![now],
+        )?
+    } else {
+        tx.execute(
+            "INSERT OR IGNORE INTO hash_sightings (hash, seen_count, first_seen_at, last_seen_at)
+             SELECT hash, 1, COALESCE(created_at, ?1), COALESCE(updated_at, created_at, ?1)
+             FROM ups",
+            params![now],
+        )?
+    };
+    tx.commit()?;
+    tracing::info!(
+        "AI-DB annotations DB: created hash_sightings, seeded {} existing entries",
+        seeded
+    );
     Ok(())
 }
 
-/// Canonical fingerprint of the annotation content of an entry. Two
-/// contributions "agree" iff their keys are equal.
-fn annotation_key(e: &CustomAnnotationEntry) -> String {
-    fn norm_list(v: &Option<String>) -> String {
-        let mut items: Vec<String> = v
-            .as_deref()
-            .unwrap_or("")
-            .split(',')
-            .map(|s| s.trim().to_lowercase())
-            .filter(|s| !s.is_empty())
-            .collect();
-        items.sort();
-        items.dedup();
-        items.join(",")
-    }
-    fn norm(v: &Option<String>) -> String {
-        v.as_deref().unwrap_or("").trim().to_lowercase()
-    }
-    let joined = [
-        norm(&e.uniref90_id),
-        norm(&e.gene),
-        norm(&e.product),
-        norm_list(&e.ec_ids),
-        norm_list(&e.go_ids),
-        norm(&e.cog_category),
-    ]
-    .join("\u{1f}");
-    format!("{:x}", md5::compute(joined.as_bytes()))
+// ── Sightings counter ────────────────────────────────────────────────────────
+//
+// `seen_count` is incremented at most once per job: `last_job_id` remembers the
+// job that last saw the hash, so duplicate sequences within a job, a repeated
+// ingest of the same job or a retry do not inflate the counter.
+
+const SIGHTING_SQL: &str =
+    "INSERT INTO hash_sightings (hash, seen_count, first_seen_at, last_seen_at, last_job_id)
+     VALUES (?1, 1, ?2, ?2, ?3)
+     ON CONFLICT(hash) DO UPDATE SET
+         seen_count   = seen_count + (last_job_id IS NOT excluded.last_job_id),
+         last_seen_at = excluded.last_seen_at,
+         last_job_id  = excluded.last_job_id
+     RETURNING seen_count";
+
+fn record_sighting(
+    conn: &Connection,
+    hash_bytes: &[u8],
+    job_id: &str,
+    now: &str,
+) -> Result<i64, rusqlite::Error> {
+    conn.prepare_cached(SIGHTING_SQL)?
+        .query_row(params![hash_bytes, now, job_id], |row| row.get(0))
 }
+
+/// Records that job `job_id` has seen each of `hashes` (16-byte MD5) and
+/// returns the updated `seen_count` per hash, in input order. One transaction.
+pub fn record_sightings(
+    conn: &Connection,
+    hashes: &[Vec<u8>],
+    job_id: &str,
+) -> Result<Vec<i64>, rusqlite::Error> {
+    let now = Utc::now().to_rfc3339();
+    let tx = conn.unchecked_transaction()?;
+    let mut counts = Vec::with_capacity(hashes.len());
+    for hash in hashes {
+        counts.push(record_sighting(&tx, hash, job_id, &now)?);
+    }
+    tx.commit()?;
+    Ok(counts)
+}
+
+// ── Ingest: insert new entries, fill gaps in existing ones ───────────────────
 
 /// Counters returned by [`ingest_custom_annotations`].
 #[derive(Debug, Default, Clone)]
 pub struct IngestStats {
-    /// New hashes added as unreviewed candidates
+    /// New hashes added to the AI-DB annotations DB
     pub inserted: usize,
-    /// Existing hashes that received an additional or changed contribution
-    pub reinforced: usize,
-    /// Contributions identical to the contributor's earlier one
+    /// Existing entries where previously empty fields were filled in
+    pub updated: usize,
+    /// Existing entries that already contained everything submitted
     pub unchanged: usize,
-    /// Hashes that became `confirmed` through this call
-    pub newly_confirmed: usize,
 }
 
-/// Writes the annotation of `e` into ups / ips / psc.
-///
-/// `overwrite == false`: only inserts; existing ips/psc rows keep their values
-/// and only missing (NULL) fields are filled in.
-/// `overwrite == true`: used solely when consensus replaces the stored annotation.
-fn write_annotation(
+/// Ingest one entry. Existing values are never overwritten; only empty (NULL)
+/// fields are filled in. `updated_at` changes only when something was added.
+fn ingest_one(
     conn: &Connection,
-    hash_bytes: &[u8],
     e: &CustomAnnotationEntry,
-    key: &str,
-    status: &str,
-    confirmations: i64,
+    job_id: &str,
     now: &str,
-    overwrite: bool,
+    stats: &mut IngestStats,
 ) -> Result<(), rusqlite::Error> {
-    if overwrite {
-        conn.execute(
-            "UPDATE ups SET length = ?2, uniparc_id = ?3, ncbi_nrp_id = ?4, uniref100_id = ?5,
-                    product = ?6, updated_at = ?7, annotation_key = ?8, status = ?9,
-                    confirmations = ?10
-             WHERE hash = ?1",
-            params![
-                hash_bytes,
-                e.length as i64,
-                e.uniparc_id,
-                e.ncbi_nrp_id,
-                e.uniref100_id,
-                e.product,
-                now,
-                key,
-                status,
-                confirmations
-            ],
-        )?;
-    } else {
-        conn.execute(
-            "INSERT INTO ups
-                 (hash, length, uniparc_id, ncbi_nrp_id, uniref100_id, product,
-                  created_at, updated_at, status, confirmations, annotation_key)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?8, ?9, ?10)",
-            params![
-                hash_bytes,
-                e.length as i64,
-                e.uniparc_id,
-                e.ncbi_nrp_id,
-                e.uniref100_id,
-                e.product,
-                now,
-                status,
-                confirmations,
-                key
-            ],
-        )?;
-    }
+    let Some(hash_bytes) = hex_to_bytes(&e.md5_hash) else {
+        tracing::warn!("AI-DB annotations DB: invalid MD5 hex – skipping");
+        return Ok(());
+    };
 
-    // ips / psc rows are shared by all proteins of a UniRef cluster. They are
-    // only filled where missing – except when consensus replaces the annotation.
-    let (ips_sql, psc_sql) = if overwrite {
-        (
-            "INSERT INTO ips (uniref100_id, uniref90_id, gene, product, ec_ids, go_ids)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-             ON CONFLICT(uniref100_id) DO UPDATE SET
-                 uniref90_id = excluded.uniref90_id, gene = excluded.gene,
-                 product = excluded.product, ec_ids = excluded.ec_ids, go_ids = excluded.go_ids",
-            "INSERT INTO psc (uniref90_id, gene, product, cog_category, ec_ids, go_ids)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-             ON CONFLICT(uniref90_id) DO UPDATE SET
-                 gene = excluded.gene, product = excluded.product,
-                 cog_category = excluded.cog_category, ec_ids = excluded.ec_ids,
-                 go_ids = excluded.go_ids",
+    let exists = conn
+        .query_row(
+            "SELECT 1 FROM ups WHERE hash = ?1",
+            params![hash_bytes],
+            |_| Ok(()),
         )
-    } else {
-        (
+        .optional()?
+        .is_some();
+
+    // ips / psc rows are shared by all proteins of a UniRef cluster: insert
+    // when missing, otherwise only fill empty fields (the WHERE clause makes
+    // the upsert a no-op – 0 changes – when there is nothing to fill).
+    let mut cluster_changed = false;
+    if let Some(ref uniref100) = e.uniref100_id {
+        cluster_changed |= conn.execute(
             "INSERT INTO ips (uniref100_id, uniref90_id, gene, product, ec_ids, go_ids)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(uniref100_id) DO UPDATE SET
@@ -809,21 +762,12 @@ fn write_annotation(
                  gene        = COALESCE(ips.gene,        excluded.gene),
                  product     = COALESCE(ips.product,     excluded.product),
                  ec_ids      = COALESCE(ips.ec_ids,      excluded.ec_ids),
-                 go_ids      = COALESCE(ips.go_ids,      excluded.go_ids)",
-            "INSERT INTO psc (uniref90_id, gene, product, cog_category, ec_ids, go_ids)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-             ON CONFLICT(uniref90_id) DO UPDATE SET
-                 gene         = COALESCE(psc.gene,         excluded.gene),
-                 product      = COALESCE(psc.product,      excluded.product),
-                 cog_category = COALESCE(psc.cog_category, excluded.cog_category),
-                 ec_ids       = COALESCE(psc.ec_ids,       excluded.ec_ids),
-                 go_ids       = COALESCE(psc.go_ids,       excluded.go_ids)",
-        )
-    };
-
-    if let Some(ref uniref100) = e.uniref100_id {
-        conn.execute(
-            ips_sql,
+                 go_ids      = COALESCE(ips.go_ids,      excluded.go_ids)
+             WHERE (ips.uniref90_id IS NULL AND excluded.uniref90_id IS NOT NULL)
+                OR (ips.gene        IS NULL AND excluded.gene        IS NOT NULL)
+                OR (ips.product     IS NULL AND excluded.product     IS NOT NULL)
+                OR (ips.ec_ids      IS NULL AND excluded.ec_ids      IS NOT NULL)
+                OR (ips.go_ids      IS NULL AND excluded.go_ids      IS NOT NULL)",
             params![
                 uniref100,
                 e.uniref90_id,
@@ -832,11 +776,23 @@ fn write_annotation(
                 e.ec_ids,
                 e.go_ids
             ],
-        )?;
+        )? > 0;
     }
     if let Some(ref uniref90) = e.uniref90_id {
-        conn.execute(
-            psc_sql,
+        cluster_changed |= conn.execute(
+            "INSERT INTO psc (uniref90_id, gene, product, cog_category, ec_ids, go_ids)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(uniref90_id) DO UPDATE SET
+                 gene         = COALESCE(psc.gene,         excluded.gene),
+                 product      = COALESCE(psc.product,      excluded.product),
+                 cog_category = COALESCE(psc.cog_category, excluded.cog_category),
+                 ec_ids       = COALESCE(psc.ec_ids,       excluded.ec_ids),
+                 go_ids       = COALESCE(psc.go_ids,       excluded.go_ids)
+             WHERE (psc.gene         IS NULL AND excluded.gene         IS NOT NULL)
+                OR (psc.product      IS NULL AND excluded.product      IS NOT NULL)
+                OR (psc.cog_category IS NULL AND excluded.cog_category IS NOT NULL)
+                OR (psc.ec_ids       IS NULL AND excluded.ec_ids       IS NOT NULL)
+                OR (psc.go_ids       IS NULL AND excluded.go_ids       IS NOT NULL)",
             params![
                 uniref90,
                 e.gene,
@@ -845,363 +801,86 @@ fn write_annotation(
                 e.ec_ids,
                 e.go_ids
             ],
-        )?;
-    }
-    Ok(())
-}
-
-enum VoteChange {
-    New,
-    Changed,
-    Same,
-}
-
-/// Records / replaces the contributor's vote for this hash.
-fn upsert_submission(
-    conn: &Connection,
-    hash_bytes: &[u8],
-    e: &CustomAnnotationEntry,
-    key: &str,
-    contributor: &str,
-    job_id: &str,
-    now: &str,
-) -> Result<VoteChange, rusqlite::Error> {
-    let previous: Option<String> = conn
-        .query_row(
-            "SELECT annotation_key FROM annotation_submissions
-             WHERE hash = ?1 AND contributor = ?2",
-            params![hash_bytes, contributor],
-            |row| row.get(0),
-        )
-        .optional()?;
-
-    if previous.as_deref() == Some(key) {
-        return Ok(VoteChange::Same);
+        )? > 0;
     }
 
-    conn.execute(
-        "INSERT INTO annotation_submissions
-             (hash, annotation_key, contributor, job_id, submitted_at, length,
-              uniparc_id, ncbi_nrp_id, uniref100_id, uniref90_id, gene, product,
-              ec_ids, go_ids, cog_category, source, tool_version, workflow_mode,
-              psc_identity, psc_evalue)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
-         ON CONFLICT(hash, contributor) DO UPDATE SET
-             annotation_key = excluded.annotation_key, job_id = excluded.job_id,
-             submitted_at = excluded.submitted_at, length = excluded.length,
-             uniparc_id = excluded.uniparc_id, ncbi_nrp_id = excluded.ncbi_nrp_id,
-             uniref100_id = excluded.uniref100_id, uniref90_id = excluded.uniref90_id,
-             gene = excluded.gene, product = excluded.product, ec_ids = excluded.ec_ids,
-             go_ids = excluded.go_ids, cog_category = excluded.cog_category,
-             source = excluded.source, tool_version = excluded.tool_version,
-             workflow_mode = excluded.workflow_mode, psc_identity = excluded.psc_identity,
-             psc_evalue = excluded.psc_evalue",
-        params![
-            hash_bytes,
-            key,
-            contributor,
-            job_id,
-            now,
-            e.length as i64,
-            e.uniparc_id,
-            e.ncbi_nrp_id,
-            e.uniref100_id,
-            e.uniref90_id,
-            e.gene,
-            e.product,
-            e.ec_ids,
-            e.go_ids,
-            e.cog_category,
-            e.source,
-            e.tool_version,
-            e.workflow_mode,
-            e.psc_identity,
-            e.psc_evalue,
-        ],
-    )?;
-
-    Ok(if previous.is_some() {
-        VoteChange::Changed
-    } else {
-        VoteChange::New
-    })
-}
-
-/// Rebuilds a full entry from the newest submission carrying `key` (used when
-/// consensus replaces the stored annotation).
-fn load_submission_entry(
-    conn: &Connection,
-    hash_bytes: &[u8],
-    key: &str,
-) -> Result<Option<CustomAnnotationEntry>, rusqlite::Error> {
-    conn.query_row(
-        "SELECT length, uniparc_id, ncbi_nrp_id, uniref100_id, uniref90_id, gene, product,
-                ec_ids, go_ids, cog_category
-         FROM annotation_submissions
-         WHERE hash = ?1 AND annotation_key = ?2
-         ORDER BY submitted_at DESC LIMIT 1",
-        params![hash_bytes, key],
-        |row| {
-            Ok(CustomAnnotationEntry {
-                md5_hash: String::new(),
-                length: row.get::<_, i64>(0)? as usize,
-                uniparc_id: row.get(1)?,
-                ncbi_nrp_id: row.get(2)?,
-                uniref100_id: row.get(3)?,
-                uniref90_id: row.get(4)?,
-                gene: row.get(5)?,
-                product: row.get(6)?,
-                ec_ids: row.get(7)?,
-                go_ids: row.get(8)?,
-                cog_category: row.get(9)?,
-                source: None,
-                tool_version: None,
-                workflow_mode: None,
-                psc_identity: None,
-                psc_evalue: None,
-            })
-        },
-    )
-    .optional()
-}
-
-/// Ingest one entry as a contribution. Never overwrites an existing annotation
-/// on a single submission.
-fn ingest_one(
-    conn: &Connection,
-    e: &CustomAnnotationEntry,
-    contributor: &str,
-    job_id: &str,
-    threshold: i64,
-    stats: &mut IngestStats,
-) -> Result<(), rusqlite::Error> {
-    let Some(hash_bytes) = hex_to_bytes(&e.md5_hash) else {
-        tracing::warn!("AI-DB annotations DB: invalid MD5 hex – skipping");
-        return Ok(());
-    };
-    let key = annotation_key(e);
-    let now = Utc::now().to_rfc3339();
-
-    let existing: Option<(String, Option<String>, Option<String>)> = conn
-        .query_row(
-            "SELECT status, annotation_key, reviewed_at FROM ups WHERE hash = ?1",
-            params![hash_bytes],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .optional()?;
-
-    // ── New hash: insert as candidate (or confirmed if threshold is 1) ───────
-    let Some((old_status, canonical_key, reviewed_at)) = existing else {
-        let status = if threshold <= 1 {
-            STATUS_CONFIRMED
-        } else {
-            STATUS_CANDIDATE
-        };
-        write_annotation(conn, &hash_bytes, e, &key, status, 1, &now, false)?;
-        upsert_submission(conn, &hash_bytes, e, &key, contributor, job_id, &now)?;
-        stats.inserted += 1;
-        if status == STATUS_CONFIRMED {
-            stats.newly_confirmed += 1;
-        }
-        return Ok(());
-    };
-
-    // ── Existing hash: record the vote, never overwrite on its own ───────────
-    let change = upsert_submission(conn, &hash_bytes, e, &key, contributor, job_id, &now)?;
-    if matches!(change, VoteChange::Same) {
-        stats.unchanged += 1;
-        return Ok(());
-    }
-    stats.reinforced += 1;
-
-    // Admin-reviewed and legacy entries (no recorded annotation key) are not
-    // changed by votes; the contribution is kept for later review.
-    let Some(canonical_key) = canonical_key else {
-        return Ok(());
-    };
-    if reviewed_at.is_some() {
-        return Ok(());
-    }
-
-    // ── Consensus ────────────────────────────────────────────────────────────
-    let mut stmt = conn.prepare(
-        "SELECT annotation_key, COUNT(*) FROM annotation_submissions
-         WHERE hash = ?1 GROUP BY annotation_key",
-    )?;
-    let counts: Vec<(String, i64)> = stmt
-        .query_map(params![hash_bytes], |row| Ok((row.get(0)?, row.get(1)?)))?
-        .filter_map(|r| r.ok())
-        .collect();
-    drop(stmt);
-
-    let canonical_count = counts
-        .iter()
-        .find(|(k, _)| *k == canonical_key)
-        .map(|(_, c)| *c)
-        .unwrap_or(0);
-    let qualified: Vec<&(String, i64)> = counts.iter().filter(|(_, c)| *c >= threshold).collect();
-
-    let (new_status, confirmations, replace_with): (&str, i64, Option<&str>) = match qualified.len()
-    {
-        0 => {
-            let s = if counts.len() > 1 {
-                STATUS_CONFLICTED
-            } else {
-                STATUS_CANDIDATE
-            };
-            (s, canonical_count, None)
-        }
-        1 => {
-            let (k, c) = qualified[0];
-            if *k == canonical_key {
-                (STATUS_CONFIRMED, *c, None)
-            } else {
-                // A different annotation reached consensus on its own: it replaces
-                // the first-come annotation.
-                (STATUS_CONFIRMED, *c, Some(k.as_str()))
-            }
-        }
-        _ => (STATUS_CONFLICTED, canonical_count, None),
-    };
-
-    if let Some(winner_key) = replace_with {
-        if let Some(winner) = load_submission_entry(conn, &hash_bytes, winner_key)? {
-            write_annotation(
-                conn,
-                &hash_bytes,
-                &winner,
-                winner_key,
-                new_status,
-                confirmations,
-                &now,
-                true,
-            )?;
-        }
-    } else {
+    if !exists {
         conn.execute(
-            "UPDATE ups SET status = ?2, confirmations = ?3 WHERE hash = ?1",
-            params![hash_bytes, new_status, confirmations],
+            "INSERT INTO ups
+                 (hash, length, uniparc_id, ncbi_nrp_id, uniref100_id, product, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+            params![
+                hash_bytes,
+                e.length as i64,
+                e.uniparc_id,
+                e.ncbi_nrp_id,
+                e.uniref100_id,
+                e.product,
+                now
+            ],
         )?;
+        stats.inserted += 1;
+    } else {
+        let ups_changed = conn.execute(
+            "UPDATE ups SET
+                 uniparc_id   = COALESCE(uniparc_id,   ?2),
+                 ncbi_nrp_id  = COALESCE(ncbi_nrp_id,  ?3),
+                 uniref100_id = COALESCE(uniref100_id, ?4),
+                 product      = COALESCE(product,      ?5),
+                 updated_at   = ?6
+             WHERE hash = ?1
+               AND (   (uniparc_id   IS NULL AND ?2 IS NOT NULL)
+                    OR (ncbi_nrp_id  IS NULL AND ?3 IS NOT NULL)
+                    OR (uniref100_id IS NULL AND ?4 IS NOT NULL)
+                    OR (product      IS NULL AND ?5 IS NOT NULL)
+                    OR ?7)",
+            params![
+                hash_bytes,
+                e.uniparc_id,
+                e.ncbi_nrp_id,
+                e.uniref100_id,
+                e.product,
+                now,
+                cluster_changed
+            ],
+        )? > 0;
+        if ups_changed {
+            stats.updated += 1;
+        } else {
+            stats.unchanged += 1;
+        }
     }
 
-    if new_status == STATUS_CONFIRMED && old_status != STATUS_CONFIRMED {
-        stats.newly_confirmed += 1;
-    }
+    record_sighting(conn, &hash_bytes, job_id, now)?;
     Ok(())
 }
 
-/// Ingest verified entries as contributions of `contributor` (pseudonymous id)
-/// from job `job_id`, in a single transaction.
+/// Ingest verified entries from job `job_id` into the AI-DB annotations DB,
+/// in a single transaction.
 ///
-/// * New hashes are added as `candidate` (or `confirmed` if the threshold is 1).
-/// * Existing entries are NOT overwritten: the submission is recorded as a
-///   vote; once `AI_DB_CONFIRMATIONS` independent contributors agree the entry
-///   becomes `confirmed`.
-/// * Re-submitting the same annotation is idempotent.
+/// * New hashes are inserted.
+/// * Existing entries are never overwritten: only empty fields are filled in
+///   (ups, and the shared ips / psc cluster rows).
+/// * Every entry counts as a sighting of the hash by this job (`hash_sightings`).
 pub fn ingest_custom_annotations(
     conn: &Connection,
     entries: &[CustomAnnotationEntry],
-    contributor: &str,
     job_id: &str,
 ) -> Result<IngestStats, rusqlite::Error> {
-    let threshold = confirmation_threshold();
     let mut stats = IngestStats::default();
+    let now = Utc::now().to_rfc3339();
     let tx = conn.unchecked_transaction()?;
     for entry in entries {
-        ingest_one(&tx, entry, contributor, job_id, threshold, &mut stats)?;
+        ingest_one(&tx, entry, job_id, &now, &mut stats)?;
     }
     tx.commit()?;
     tracing::info!(
-        "AI-DB annotations DB: {} new candidates, {} reinforced, {} unchanged, {} newly confirmed",
+        "AI-DB annotations DB: {} inserted, {} updated (gaps filled), {} unchanged",
         stats.inserted,
-        stats.reinforced,
-        stats.unchanged,
-        stats.newly_confirmed
+        stats.updated,
+        stats.unchanged
     );
     Ok(stats)
-}
-
-/// Contributions by `contributor` within the last `hours` hours (rate limiting).
-pub fn count_recent_contributions(
-    conn: &Connection,
-    contributor: &str,
-    hours: i64,
-) -> Result<usize, rusqlite::Error> {
-    let since = (Utc::now() - Duration::hours(hours)).to_rfc3339();
-    conn.query_row(
-        "SELECT COUNT(*) FROM annotation_submissions
-         WHERE contributor = ?1 AND submitted_at > ?2",
-        params![contributor, since],
-        |row| row.get::<_, i64>(0).map(|c| c as usize),
-    )
-}
-
-/// One row of the admin listing of annotation entries.
-#[derive(Debug, Clone)]
-pub struct AdminAnnotationRow {
-    pub md5_hash: String,
-    pub status: String,
-    pub confirmations: i64,
-    pub length: i64,
-    pub product: Option<String>,
-    pub uniref100_id: Option<String>,
-    pub contributors: i64,
-    pub updated_at: Option<String>,
-}
-
-/// Lists entries with the given status (newest first) for admin review.
-pub fn list_annotations_by_status(
-    conn: &Connection,
-    status: &str,
-    limit: usize,
-) -> Result<Vec<AdminAnnotationRow>, rusqlite::Error> {
-    let mut stmt = conn.prepare(
-        "SELECT lower(hex(u.hash)), u.status, u.confirmations, u.length,
-                COALESCE(u.product, i.product), u.uniref100_id,
-                (SELECT COUNT(*) FROM annotation_submissions s WHERE s.hash = u.hash),
-                u.updated_at
-         FROM ups u LEFT JOIN ips i ON i.uniref100_id = u.uniref100_id
-         WHERE u.status = ?1
-         ORDER BY u.updated_at DESC
-         LIMIT ?2",
-    )?;
-    let rows = stmt
-        .query_map(params![status, limit as i64], |row| {
-            Ok(AdminAnnotationRow {
-                md5_hash: row.get(0)?,
-                status: row.get(1)?,
-                confirmations: row.get(2)?,
-                length: row.get(3)?,
-                product: row.get(4)?,
-                uniref100_id: row.get(5)?,
-                contributors: row.get(6)?,
-                updated_at: row.get(7)?,
-            })
-        })?
-        .filter_map(|r| r.ok())
-        .collect();
-    Ok(rows)
-}
-
-/// Admin review of an entry: `confirmed`, `rejected` or `candidate`.
-/// Locks the entry against automatic consensus changes.
-/// Exposed via `POST /api/admin/annotations/{md5}/review` (admin secret).
-pub fn review_annotation(
-    conn: &Connection,
-    md5_hex: &str,
-    status: &str,
-) -> Result<bool, rusqlite::Error> {
-    if ![STATUS_CONFIRMED, STATUS_REJECTED, STATUS_CANDIDATE].contains(&status) {
-        return Ok(false);
-    }
-    let Some(hash_bytes) = hex_to_bytes(&md5_hex.to_lowercase()) else {
-        return Ok(false);
-    };
-    let rows = conn.execute(
-        "UPDATE ups SET status = ?2, reviewed_at = ?3 WHERE hash = ?1",
-        params![hash_bytes, status, Utc::now().to_rfc3339()],
-    )?;
-    Ok(rows > 0)
 }
 
 // ============================================================================
@@ -1435,10 +1114,10 @@ pub fn get_aidb_growth_by_month(conn: &Connection) -> Result<Vec<(String, i64)>,
 }
 
 #[cfg(test)]
-mod curation_tests {
+mod annotations_db_tests {
     use super::*;
 
-    /// Minimal Bakta-like schema + the curation migration, in memory.
+    /// Minimal Bakta-like schema + the sightings migration, in memory.
     fn db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
@@ -1450,13 +1129,13 @@ mod curation_tests {
                  cog_category TEXT, ec_ids TEXT, go_ids TEXT);",
         )
         .unwrap();
-        ensure_provenance_schema(&conn).unwrap();
+        ensure_annotations_schema(&conn).unwrap();
         // idempotent
-        ensure_provenance_schema(&conn).unwrap();
+        ensure_annotations_schema(&conn).unwrap();
         conn
     }
 
-    fn entry(hash: &str, gene: &str, product: &str) -> CustomAnnotationEntry {
+    fn entry(hash: &str, gene: Option<&str>, product: &str) -> CustomAnnotationEntry {
         CustomAnnotationEntry {
             md5_hash: hash.to_string(),
             length: 100,
@@ -1464,7 +1143,7 @@ mod curation_tests {
             ncbi_nrp_id: None,
             uniref100_id: Some("UniRef90_A".into()),
             uniref90_id: Some("UniRef90_A".into()),
-            gene: Some(gene.into()),
+            gene: gene.map(str::to_string),
             product: Some(product.into()),
             ec_ids: None,
             go_ids: None,
@@ -1479,108 +1158,118 @@ mod curation_tests {
 
     const H: &str = "0123456789abcdef0123456789abcdef";
 
-    fn state_of(conn: &Connection) -> (String, i64) {
-        let hash = hex_to_bytes(H).unwrap();
+    fn hash() -> Vec<u8> {
+        hex_to_bytes(H).unwrap()
+    }
+
+    fn ips_of(conn: &Connection) -> (Option<String>, Option<String>) {
         conn.query_row(
-            "SELECT status, confirmations FROM ups WHERE hash = ?1",
-            params![hash],
+            "SELECT gene, product FROM ips WHERE uniref100_id = 'UniRef90_A'",
+            [],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .unwrap()
     }
 
-    fn product_of(conn: &Connection) -> String {
-        let hash = hex_to_bytes(H).unwrap();
+    fn seen_count(conn: &Connection) -> i64 {
         conn.query_row(
-            "SELECT product FROM ups WHERE hash = ?1",
-            params![hash],
+            "SELECT seen_count FROM hash_sightings WHERE hash = ?1",
+            params![hash()],
             |r| r.get(0),
         )
         .unwrap()
     }
 
     #[test]
-    fn first_contribution_is_a_candidate() {
+    fn new_hash_is_inserted_and_seen_once() {
         let conn = db();
         let s =
-            ingest_custom_annotations(&conn, &[entry(H, "dnaK", "chaperone")], "c1", "j1").unwrap();
+            ingest_custom_annotations(&conn, &[entry(H, Some("dnaK"), "chaperone")], "j1").unwrap();
         assert_eq!(s.inserted, 1);
-        assert_eq!(state_of(&conn), ("candidate".to_string(), 1));
+        assert_eq!(seen_count(&conn), 1);
     }
 
     #[test]
-    fn resubmission_by_same_contributor_is_idempotent() {
+    fn existing_values_are_never_overwritten() {
         let conn = db();
-        let e = entry(H, "dnaK", "chaperone");
-        ingest_custom_annotations(&conn, &[e.clone()], "c1", "j1").unwrap();
-        let s = ingest_custom_annotations(&conn, &[e], "c1", "j1").unwrap();
+        ingest_custom_annotations(&conn, &[entry(H, Some("dnaK"), "chaperone")], "j1").unwrap();
+        let s = ingest_custom_annotations(&conn, &[entry(H, Some("evil"), "junk")], "j2").unwrap();
         assert_eq!(s.unchanged, 1);
-        assert_eq!(state_of(&conn), ("candidate".to_string(), 1));
-    }
-
-    #[test]
-    fn independent_agreement_confirms() {
-        let conn = db();
-        let e = entry(H, "dnaK", "chaperone");
-        ingest_custom_annotations(&conn, &[e.clone()], "c1", "j1").unwrap();
-        let s = ingest_custom_annotations(&conn, &[e], "c2", "j2").unwrap();
-        assert_eq!(s.newly_confirmed, 1);
-        assert_eq!(state_of(&conn), ("confirmed".to_string(), 2));
-    }
-
-    #[test]
-    fn single_conflicting_submission_never_overwrites() {
-        let conn = db();
-        ingest_custom_annotations(&conn, &[entry(H, "dnaK", "chaperone")], "c1", "j1").unwrap();
-        ingest_custom_annotations(&conn, &[entry(H, "evil", "junk")], "c2", "j2").unwrap();
-        assert_eq!(product_of(&conn), "chaperone");
-        assert_eq!(state_of(&conn).0, "conflicted");
-    }
-
-    #[test]
-    fn consensus_replaces_a_poisoned_first_annotation() {
-        let conn = db();
-        ingest_custom_annotations(&conn, &[entry(H, "evil", "junk")], "attacker", "j0").unwrap();
-        ingest_custom_annotations(&conn, &[entry(H, "dnaK", "chaperone")], "c1", "j1").unwrap();
-        ingest_custom_annotations(&conn, &[entry(H, "dnaK", "chaperone")], "c2", "j2").unwrap();
-        assert_eq!(product_of(&conn), "chaperone");
-        assert_eq!(state_of(&conn), ("confirmed".to_string(), 2));
-    }
-
-    #[test]
-    fn changed_vote_of_same_contributor_replaces_the_old_one() {
-        let conn = db();
-        ingest_custom_annotations(&conn, &[entry(H, "evil", "junk")], "c1", "j1").unwrap();
-        ingest_custom_annotations(&conn, &[entry(H, "dnaK", "chaperone")], "c1", "j2").unwrap();
-        let votes: i64 = conn
-            .query_row("SELECT COUNT(*) FROM annotation_submissions", [], |r| {
-                r.get(0)
-            })
+        assert_eq!(
+            ips_of(&conn),
+            (Some("dnaK".to_string()), Some("chaperone".to_string()))
+        );
+        let ups_product: String = conn
+            .query_row(
+                "SELECT product FROM ups WHERE hash = ?1",
+                params![hash()],
+                |r| r.get(0),
+            )
             .unwrap();
-        assert_eq!(votes, 1);
+        assert_eq!(ups_product, "chaperone");
     }
 
     #[test]
-    fn admin_review_locks_and_rejected_entries_are_hidden() {
+    fn empty_fields_are_filled_in() {
         let conn = db();
-        ingest_custom_annotations(&conn, &[entry(H, "dnaK", "chaperone")], "c1", "j1").unwrap();
-        assert!(review_annotation(&conn, H, STATUS_REJECTED).unwrap());
-        // further agreement does not change an admin decision
-        ingest_custom_annotations(&conn, &[entry(H, "dnaK", "chaperone")], "c2", "j2").unwrap();
-        assert_eq!(state_of(&conn).0, "rejected");
+        ingest_custom_annotations(&conn, &[entry(H, None, "chaperone")], "j1").unwrap();
+        let s = ingest_custom_annotations(&conn, &[entry(H, Some("dnaK"), "other")], "j2").unwrap();
+        assert_eq!(s.updated, 1);
+        assert_eq!(
+            ips_of(&conn),
+            (Some("dnaK".to_string()), Some("chaperone".to_string()))
+        );
     }
 
     #[test]
-    fn recent_contributions_are_counted_per_contributor() {
+    fn counter_increments_once_per_job() {
         let conn = db();
-        ingest_custom_annotations(&conn, &[entry(H, "dnaK", "chaperone")], "c1", "j1").unwrap();
-        assert_eq!(count_recent_contributions(&conn, "c1", 24).unwrap(), 1);
-        assert_eq!(count_recent_contributions(&conn, "c2", 24).unwrap(), 0);
+        let e = entry(H, Some("dnaK"), "chaperone");
+        ingest_custom_annotations(&conn, &[e.clone()], "j1").unwrap();
+        // same job again (e.g. auto-save + manual save): not counted twice
+        ingest_custom_annotations(&conn, &[e.clone()], "j1").unwrap();
+        assert_eq!(seen_count(&conn), 1);
+        // lookup hits of other jobs, duplicates within one job count once
+        let counts = record_sightings(&conn, &[hash(), hash()], "j2").unwrap();
+        assert_eq!(counts, vec![2, 2]);
+        ingest_custom_annotations(&conn, &[e], "j3").unwrap();
+        assert_eq!(seen_count(&conn), 3);
+    }
+
+    #[test]
+    fn existing_entries_are_seeded_on_first_migration() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE ups(hash BLOB PRIMARY KEY, length INTEGER, uniparc_id TEXT,
+                 ncbi_nrp_id TEXT, uniref100_id TEXT, product TEXT, created_at TEXT, updated_at TEXT);
+             CREATE TABLE annotation_submissions(hash BLOB, job_id TEXT, contributor TEXT);",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO ups (hash, length) VALUES (?1, 100), (x'00000000000000000000000000000000', 5)",
+            params![hash()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO annotation_submissions VALUES (?1, 'j1', 'c1'), (?1, 'j2', 'c2'), (?1, 'j2', 'c3')",
+            params![hash()],
+        )
+        .unwrap();
+        ensure_annotations_schema(&conn).unwrap();
+        assert_eq!(seen_count(&conn), 2);
+        let other: i64 = conn
+            .query_row(
+                "SELECT seen_count FROM hash_sightings WHERE hash = x'00000000000000000000000000000000'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(other, 1);
     }
 
     #[test]
     fn entry_validation_rejects_hostile_values() {
-        let ok = entry(H, "dnaK", "chaperone");
+        let ok = entry(H, Some("dnaK"), "chaperone");
         assert!(ok.normalized().is_ok());
         for bad in [
             CustomAnnotationEntry {

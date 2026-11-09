@@ -1,14 +1,12 @@
 //! ============================================================================
 //! Data models for AI-DB Annotations DB ingestion
 //!
-//! Curation model (see README "Community curation"):
+//! Ingest model (see README "AI-DB annotations DB"):
 //!   * Every submission is verified server-side (the hash must belong to an
-//!     unmatched / unreviewed sequence of the submitting job, fields are
-//!     validated) and stored with provenance.
-//!   * Existing entries are never silently overwritten.
-//!   * An entry is `candidate` until N independent contributors submitted the
-//!     same annotation; then it becomes `confirmed`. Competing annotations mark
-//!     it `conflicted`. Admins can review (`confirmed` / `rejected`).
+//!     unmatched sequence or AI-DB match of the submitting job, fields are validated).
+//!   * New hashes are inserted; existing entries are never overwritten, only
+//!     empty fields are filled in.
+//!   * Every hash carries a `seen_count`: in how many jobs AI-DB has seen it.
 //! ============================================================================
 
 use serde::{Deserialize, Serialize};
@@ -51,8 +49,8 @@ pub struct CustomAnnotationEntry {
     pub go_ids: Option<String>,
     // psc table field
     pub cog_category: Option<String>,
-    // ── Provenance (optional, client-reported; contributor, job and time are
-    //    stamped by the server and cannot be forged) ─────────────────────────
+    // ── Provenance (optional, client-reported). Validated, but currently not
+    //    stored by the server. ─────────────────────────────────────────────────
     /// Annotation source, currently only "bakta-web"
     #[serde(default)]
     pub source: Option<String>,
@@ -258,18 +256,16 @@ pub struct IngestCustomAnnotationsRequest {
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct IngestCustomAnnotationsResponse {
-    /// New sequences added as unreviewed `candidate` entries
+    /// New sequences added to the AI-DB annotations DB
     pub ingested: usize,
-    /// Existing entries that received an additional (or changed) contribution
-    /// from this job. Existing annotations are never overwritten by a single
-    /// submission.
+    /// Existing entries where previously empty fields were filled in.
+    /// Existing values are never overwritten.
     pub updated: usize,
-    /// Contributions identical to what this contributor already submitted
+    /// Existing entries that already contained everything submitted
+    #[serde(default)]
     pub unchanged: usize,
-    /// Entries that became `confirmed` through this request
-    pub newly_confirmed: usize,
     /// Entries rejected by server-side verification (hash not part of this
-    /// job's unmatched/unreviewed sequences, length mismatch, invalid fields)
+    /// job's unmatched sequences / AI-DB matches, length mismatch, invalid fields)
     pub rejected: usize,
     /// Total entries received
     pub total: usize,

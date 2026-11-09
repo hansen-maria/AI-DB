@@ -120,8 +120,6 @@ use crate::state::AppState;
         handlers::bakta::delete_bakta_job,
         handlers::bakta::ingest_bakta_results,
         handlers::kpi::get_kpi_overview,
-        handlers::kpi::list_admin_annotations,
-        handlers::kpi::review_admin_annotation,
         handlers::health::health_check,
         handlers::health::db_info,
         handlers::token::get_auth_token,
@@ -156,10 +154,6 @@ use crate::state::AppState;
         AuthTokenResponse,
         crate::handlers::kpi::KpiMonthEntry,
         crate::handlers::kpi::KpiOverviewResponse,
-        crate::handlers::kpi::AdminAnnotationEntry,
-        crate::handlers::kpi::AdminAnnotationsResponse,
-        crate::handlers::kpi::ReviewAnnotationRequest,
-        crate::handlers::kpi::ReviewAnnotationResponse,
     ))
 )]
 struct ApiDoc;
@@ -314,14 +308,6 @@ async fn main() {
     // Admin routes: authorized exclusively by X-Admin-Secret
     let admin_routes = Router::new()
         .route("/api/admin/kpis", get(get_kpi_overview))
-        .route(
-            "/api/admin/annotations",
-            get(crate::handlers::kpi::list_admin_annotations),
-        )
-        .route(
-            "/api/admin/annotations/{md5}/review",
-            post(crate::handlers::kpi::review_admin_annotation),
-        )
         .route_layer(middleware::from_fn(auth::require_admin_secret));
 
     // Build router
@@ -423,11 +409,7 @@ mod tests {
     #[test]
     fn admin_routes_accept_only_admin_secret() {
         let doc = ApiDoc::openapi();
-        for (path, method) in [
-            ("/api/admin/kpis", "GET"),
-            ("/api/admin/annotations", "GET"),
-            ("/api/admin/annotations/{md5}/review", "POST"),
-        ] {
+        for (path, method) in [("/api/admin/kpis", "GET")] {
             assert_eq!(
                 schemes(op(&doc, path, method)),
                 vec![SCHEME_ADMIN],

@@ -29,12 +29,12 @@ pub struct SequenceInfo {
     /// - `aidb_db` matches: ISO-8601 timestamp of when the entry was (re-)annotated
     #[serde(skip_serializing_if = "Option::is_none")]
     pub annotation_release: Option<String>,
-    /// Curation status of `aidb_db` matches: `confirmed` (reproduced by several
-    /// independent contributors or reviewed by an admin), `candidate` (single
-    /// contribution, unreviewed), `conflicted` (competing annotations) or
-    /// `legacy` (added before curation tracking). Absent for Bakta DB matches.
+    /// In how many jobs AI-DB has seen this hash (lookup hits in the Bakta DB
+    /// or the AI-DB annotations DB, and ingests), including this job; counted
+    /// at most once per job. Snapshot taken when this job was processed.
+    /// Absent for unmatched sequences and for jobs from before the counter.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub annotation_status: Option<String>,
+    pub seen_count: Option<i64>,
     /// UniParc ID (if found)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uniparc_id: Option<String>,

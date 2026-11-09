@@ -2154,7 +2154,7 @@ export interface CustomAnnotationEntry {
   ec_ids?: string | null
   go_ids?: string | null
   cog_category?: string | null
-  // Provenance (the server additionally stamps contributor, job and time)
+  // Provenance (validated by the server, currently not stored)
   source?: string | null
   tool_version?: string | null
   workflow_mode?: string | null
@@ -2163,13 +2163,12 @@ export interface CustomAnnotationEntry {
 }
 
 export interface IngestResponse {
-  /** New sequences added as unreviewed candidates */
+  /** New sequences added to the AI-DB annotations DB */
   ingested: number
-  /** Existing entries that received an additional contribution (never overwritten) */
+  /** Existing entries where empty fields were filled in (values are never overwritten) */
   updated: number
+  /** Existing entries that already contained everything submitted */
   unchanged?: number
-  /** Entries that became 'confirmed' through this contribution */
-  newly_confirmed?: number
   /** Entries rejected by server-side verification */
   rejected?: number
   total: number
@@ -2177,9 +2176,9 @@ export interface IngestResponse {
 
 /**
  * POST /api/job/{aidbJobId}/bakta/ingest
- * Contributes annotation entries to the community-curated AI-DB annotations DB.
- * The server verifies them against the job (only unmatched / unreviewed hashes are
- * accepted), stores them as unreviewed candidates and never overwrites existing entries.
+ * Sends annotation entries to the backend for insertion into the AI-DB annotations DB.
+ * The server verifies them against the job (only its unmatched hashes and AI-DB matches are accepted),
+ * inserts new entries and only fills empty fields of existing ones (never overwrites).
  */
 export async function ingestBaktaResults(
     aidbJobId: string,

@@ -15,7 +15,7 @@
 //! If both are present, the token takes precedence over the cookie.
 //!
 //! The secret (cookie value / API token) is never stored. Everything that is
-//! persisted or compared (`jobs.owner_id`, KPI owner counts, contributor ids)
+//! persisted or compared (`jobs.owner_id`, KPI owner counts)
 //! uses its one-way digest (`owner_digest`), so a database leak or backup does
 //! not expose credentials. Existing rows are migrated at startup.
 //!
@@ -365,16 +365,6 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-/// Pseudonymous, stable identifier of a contributor for the shared annotations
-/// DB, derived from the (already hashed) owner id with a different domain
-/// separator, so contributions cannot be linked to jobs or owners.
-pub fn contributor_id(owner_id: &str) -> String {
-    format!(
-        "{:x}",
-        md5::compute(format!("aidb-contributor:{owner_id}").as_bytes())
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -557,15 +547,6 @@ mod tests {
         assert_eq!(a.len(), 32);
         assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
         assert!(!a.contains('-') && !a.contains(TOKEN));
-    }
-
-    #[test]
-    fn contributor_id_is_stable_and_hides_the_token() {
-        let a = contributor_id(TOKEN);
-        assert_eq!(a, contributor_id(TOKEN));
-        assert_ne!(a, contributor_id("someone-else"));
-        assert!(!a.contains(TOKEN));
-        assert_eq!(a.len(), 32);
     }
 
     #[test]

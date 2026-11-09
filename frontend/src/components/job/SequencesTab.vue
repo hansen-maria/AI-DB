@@ -23,26 +23,25 @@ function formatAnnotationRelease(seq: any): string {
   return seq.annotation_release
 }
 
-function statusLabel(seq: any): string {
-  switch (seq.annotation_status) {
-    case 'confirmed':  return 'confirmed by independent contributors or review'
-    case 'conflicted': return 'conflicting submissions, unreviewed'
-    case 'candidate':  return 'community candidate, not yet confirmed'
-    default:           return 'unreviewed community entry'
-  }
+/** "seen in N jobs" – how often AI-DB has seen this hash (at most once per job) */
+function seenLabel(seq: any): string {
+  const n = seq.seen_count
+  if (typeof n !== 'number' || n < 1) return ''
+  return ` · seen in ${n.toLocaleString()} ${n === 1 ? 'job' : 'jobs'}`
 }
 
 function sourceBadgeTitle(seq: any): string {
   if (seq.annotation_source === 'bakta_db') {
-    return seq.annotation_release
+    const base = seq.annotation_release
         ? `Bakta DB · Release ${seq.annotation_release}`
         : 'Bakta DB'
+    return base + seenLabel(seq)
   }
   if (seq.annotation_source === 'aidb_db') {
     const base = seq.annotation_release
         ? `AI-DB annotations DB · annotated ${formatAnnotationRelease(seq)}`
         : 'AI-DB annotations DB'
-    return `${base} · ${statusLabel(seq)}`
+    return base + seenLabel(seq)
   }
   return ''
 }
@@ -340,8 +339,6 @@ watch(() => props.paginatedSequences, (seqs) => { validateVisibleLinks(seqs) }, 
                         class="db-link aidb-source has-tooltip"
                         :data-tooltip="sourceBadgeTitle(seq)" :aria-label="sourceBadgeTitle(seq)">
                       AI-DB<template v-if="seq.annotation_release"> · {{ formatAnnotationRelease(seq) }}</template>
-                      <template v-if="seq.annotation_status === 'confirmed'"> ✓</template>
-                      <template v-else> (unconfirmed)</template>
                     </span>
                 </div>
               </template>

@@ -198,7 +198,7 @@ interface FunctionalStats {
 ```typescript
 // Get job with pagination and filtering
 getJob(jobId, page?, perPage?, filter?, advancedFilters?, includeSequences?): Promise<PaginatedJobResponse>
-// response includes `is_owner`; sequences include `annotation_source`, `annotation_release`, `annotation_status`
+// response includes `is_owner`; sequences include `annotation_source`, `annotation_release`, `seen_count`
 
 // Get functional statistics
 getJobStats(jobId): Promise<FunctionalStats>

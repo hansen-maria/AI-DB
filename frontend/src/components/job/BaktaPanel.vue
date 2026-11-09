@@ -142,18 +142,17 @@ const emit = defineEmits<{
           workflow requires no additional configuration.
         </p>
 
-        <!-- Re-check unconfirmed community entries (enables consensus) -->
+        <!-- Re-check AI-DB annotations DB matches -->
         <div v-if="recheckCount > 0" class="bakta-autoingest-toggle">
           <label class="bakta-checkbox-label">
             <input :checked="includeRecheck" type="checkbox"
                    @change="emit('update:includeRecheck', ($event.target as HTMLInputElement).checked)" />
-            Also re-check {{ recheckCount }} unconfirmed community {{ recheckCount === 1 ? 'entry' : 'entries' }}
+            Also re-check {{ recheckCount }} AI-DB {{ recheckCount === 1 ? 'entry' : 'entries' }}
           </label>
           <p class="bakta-note" style="margin:0.35rem 0 0">
-            These sequences already have a community annotation that has not been confirmed.
-            An independent Bakta result is stored as a vote: if it matches, the entry moves
-            towards <em>confirmed</em>; if it differs, it is flagged for review. Only the
-            hash and annotation are stored.
+            These sequences already have an entry in the AI-DB annotations DB. The new Bakta
+            result only fills fields that are still empty; existing values are never
+            overwritten. Only the hash and annotation are stored.
           </p>
         </div>
 
@@ -304,8 +303,8 @@ const emit = defineEmits<{
               sequences via hash lookup without re-running Bakta.
             </span>
             Only the MD5 hash of each sequence and the resolved annotation are stored,
-            <strong>never the sequence itself</strong>. New entries start as
-            <em>unreviewed</em> and become <em>confirmed</em> once independent submissions agree. Annotated proteins populate
+            <strong>never the sequence itself</strong>. Existing entries are never
+            overwritten, only completed where fields are empty. Annotated proteins populate
             <code>ups</code>, <code>ips</code> and <code>psc</code>; hypothetical proteins are
             stored in <code>ups</code> only.
           </p>
@@ -316,9 +315,8 @@ const emit = defineEmits<{
               <polyline points="20 6 9 17 4 12"/>
             </svg>
             <span>
-              <strong>{{ ingestResult.ingested }}</strong> new entries (unreviewed),
-              <strong>{{ ingestResult.updated }}</strong> votes added to existing entries<template v-if="ingestResult.newly_confirmed">
-              (<strong>{{ ingestResult.newly_confirmed }}</strong> newly confirmed)</template>
+              <strong>{{ ingestResult.ingested }}</strong> new sequences added,
+              <strong>{{ ingestResult.updated }}</strong> existing entries completed
               ({{ ingestResult.total }} total)<span v-if="autoIngestEnabled"> — saved automatically</span>
             </span>
           </div>

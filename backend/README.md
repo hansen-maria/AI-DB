@@ -21,7 +21,7 @@ backend/src/
 │   ├── download.rs      # download_job
 │   ├── health.rs        # health_check, db_info
 │   ├── jobs.rs          # get_job, create_job, list_jobs, delete_job, rename/retry/bulk delete
-│   ├── kpi.rs           # Admin: KPI overview, curation review (X-Admin-Secret)
+│   ├── kpi.rs           # Admin: KPI overview (X-Admin-Secret)
 │   ├── psos.rs          # save_psos_results, get_psos_results, delete_psos_results
 │   └── stats.rs         # get_job_stats, export_job_stats (functional analysis, CSV)
 │
@@ -68,8 +68,7 @@ A job belongs to a random secret (UUIDv4), supplied in one of two ways:
   subdomains) and sends `Cache-Control: no-store`.
 
 **The secret is never stored.** `auth::owner_digest` computes `md5("aidb-owner:" + secret)`
-(32 hex characters); this digest is the `owner_id` in `jobs.db`, in the KPI counters and the basis of
-the contributor id (`auth::contributor_id`, a second digest) used for community curation. At startup,
+(32 hex characters); this digest is the `owner_id` in `jobs.db` and in the KPI counters. At startup,
 `storage::migrate_owner_ids_to_digest` / `migrate_kpi_owner_ids_to_digest` convert rows that still hold a raw
 UUID (idempotent, in a transaction).
 
@@ -152,8 +151,6 @@ Access: **public** = no credentials; **anyone** = anyone with the job ID (owner 
 | `POST`   | `/api/job/{id}/bakta/ingest`          | `handlers::bakta::ingest_bakta_results`  | owner                                 |
 | `ADMIN`  |                                       |                                          |                                       |
 | `GET`    | `/api/admin/kpis`                     | `handlers::kpi::get_kpi_overview`        | admin                                 |
-| `GET`    | `/api/admin/annotations`              | `handlers::kpi::list_admin_annotations`  | admin                                 |
-| `POST`   | `/api/admin/annotations/{md5}/review` | `handlers::kpi::review_admin_annotation` | admin                                 |
 | `HEALTH` |                                       |                                          |                                       |
 | `GET`    | `/api/health`                         | `handlers::health::health_check`         | public                                |
 | `GET`    | `/api/db/info`                        | `handlers::health::db_info`              | public                                |
@@ -179,37 +176,37 @@ The `/api/job/{id}/stats` endpoint computes statistics from the job's stored ann
 sequence.aa_hash (MD5)
     → Hash lookup (per sequence during job processing):
       1. MD5(seq) → hash in Bakta DB?        → Annotation, else Step 2
-      2. MD5(seq) → hash in AI-DB?           → Annotation (+ annotation_status), else Step 3
+      2. MD5(seq) → hash in AI-DB?           → Annotation, else Step 3
       3. No match
 ```
 
-`annotation_source` is `bakta_db` or `aidb_db`; AI-DB matches additionally carry `annotation_status`
-(`confirmed`, `candidate`, `conflicted`, `legacy`). Entries with status `rejected` are hidden from lookups.
-TSV and GFF3 exports include the status (`annotation_status` column / attribute).
+`annotation_source` is `bakta_db` or `aidb_db`; matched sequences additionally carry `seen_count`
+(see [Sightings counter](#sightings-counter)).
 
-## Community Curation
+## AI-DB Annotations DB Ingest
 
-`POST /api/job/{id}/bakta/ingest` does not blindly store what a client sends:
+`POST /api/job/{id}/bakta/ingest` (owner only):
 
-1. **Verification** (owner only): hashes must belong to the job's unmatched sequences, or to unconfirmed
-   `aidb_db` matches of the same job (re-check); length must match; all fields are validated. Hashes from the Bakta DB are never accepted.
-2. **Provenance, insert-only**: every contribution is stored in `annotation_submissions` (contributor digest, job,
-   time, workflow, PSC identity/e-value), one vote per contributor and hash. Existing values are never overwritten by one contribution.
-3. **Consensus**: new entries are `candidate`; `AI_DB_CONFIRMATIONS` (default 2) identical submissions from
-   different contributors make them `confirmed`; differing ones make them `conflicted`; a different annotation
-   reaching the threshold on its own replaces a first-come one. Pre-curation entries are `legacy`.
-4. **Rate limit**: `AI_DB_INGEST_DAILY_LIMIT` contributions per contributor and 24 h (default 1000000).
-5. **Admin review**: `confirmed`/`rejected` lock an entry against consensus changes; `candidate` releases it.
+1. **Verification**: hashes must belong to the job's unmatched sequences or to its `aidb_db` matches
+   (re-check); length must match; all fields are
+   validated. Hashes from the Bakta DB are never accepted.
+2. **Insert or complete**: new hashes are inserted into `ups` (+ `ips`/`psc`). Existing values are never
+   overwritten; only NULL fields are filled in (`COALESCE(existing, new)`), `updated_at` changes only then.
+   Response: `ingested` (new), `updated` (completed), `unchanged`, `rejected`, `total`.
+3. **Sightings**: every accepted entry is counted in `hash_sightings` (see below).
 
-```bash
-curl -H "X-Admin-Secret: $ADMIN_KPI_SECRET" "https://HOST/api/admin/annotations?status=conflicted&limit=50"
-curl -X POST -H "X-Admin-Secret: $ADMIN_KPI_SECRET" -H "Content-Type: application/json" \
-     -d '{"status":"confirmed"}' https://HOST/api/admin/annotations/<md5>/review
-```
+### Sightings counter
 
-"Independent" means different tokens; a single actor can obtain several (sybil), so review remains
-the authority for sensitive entries. The schema is created or extended lazily
-(`storage::ensure_provenance_schema`); `migrate-custom-annotations-db.sql` is the manual equivalent.
+`hash_sightings(hash, seen_count, first_seen_at, last_seen_at, last_job_id)` in `custom_annotations.db`
+counts in how many jobs AI-DB has seen a hash: lookup hits in the Bakta DB or the AI-DB annotations DB
+(`services::annotation::apply_sightings`, after a job or retry) and ingests. `last_job_id` limits this to
+once per job, so duplicates within a job, repeated ingests or retries do not inflate it. Unmatched hashes are
+not recorded unless ingested. The value after the job is stored per sequence as `seen_count`.
+
+The table is created lazily (`storage::ensure_annotations_schema`) and seeded once from existing `ups` rows
+(number of distinct jobs in the former `annotation_submissions` table, at least 1). Columns and tables of the
+former curation model (`ups.status`, `ups.confirmations`, `annotation_submissions`, …) are left in place but no
+longer used.
 
 ## Advanced Filtering
 
@@ -235,8 +232,6 @@ The `AdvancedSequenceFilter` supports (query parameters of `GET /api/job/{id}` a
 | `AI_DB_TEMP_DIR`                | Directory for temporary upload files                                  | `/tmp`                             |
 | `AI_DB_JOBS_PATH`               | Path to SQLite jobs database                                          | `/data/jobs.db`                    |
 | `AI_DB_CUSTOM_ANNOTATIONS_PATH` | Path to custom AI-DB database                                         | `/custom-db/custom_annotations.db` |
-| `AI_DB_CONFIRMATIONS`           | Independent submissions needed to confirm                             | `2`                                |
-| `AI_DB_INGEST_DAILY_LIMIT`      | Max contributions per contributor per 24 h                            | `1000000`                          |
 | `ADMIN_KPI_SECRET`              | Secret for `X-Admin-Secret` (admin routes return 503 if unset/empty)  | unset                              |
 
 ## Usage

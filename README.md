@@ -89,7 +89,7 @@ ai-db/
         │   ├── psos.rs                 # Psos analysis endpoints
         │   ├── stats.rs                # Functional analysis endpoint
         │   ├── download.rs             # Export handler
-        │   ├── kpi.rs                  # Admin: KPIs & curation review
+        │   ├── kpi.rs                  # Admin: KPI overview
         │   └── health.rs               # Health check & DB info
         ├── services/                   # Business Logic
         │   ├── fasta.rs                # FASTA parsing & MD5 computation
@@ -166,7 +166,7 @@ Backend hashes each sequence (MD5)
        │
        ├─── Hash in Bakta DB ──► Annotation (annotation_source = bakta_db)
        │
-       ├─── Hash in AI-DB    ──► Annotation (annotation_source = aidb_db, + annotation_status)
+       ├─── Hash in AI-DB    ──► Annotation (annotation_source = aidb_db)
        │
        └─── No match         ──► Mark as unmatched
                                │
@@ -199,7 +199,7 @@ A job belongs to a random owner identifier (UUIDv4), transported in one of two w
 - **Storage**: the secret (cookie value or token) is **never stored**. The server keeps only a one-way digest
   (`md5("aidb-owner:" + secret)`, 32 hex characters) as `owner_id`, in the jobs DB and in the KPI counters.
   A database leak therefore does not reveal usable credentials. On startup, existing rows that still hold a
-  raw UUID are converted automatically (idempotent). Contributor ids in the curation DB are a second digest of the owner digest.
+  raw UUID are converted automatically (idempotent).
 
 ```bash
 TOKEN=$(uuidgen)
@@ -214,36 +214,29 @@ curl -H "Authorization: Bearer $TOKEN" -OJ https://ai-db.computational.bio/api/j
 | Download (TSV/JSON/FASTA/GFF3), stats CSV export                            | Owner                                                                      |
 | Delete, bulk delete, rename, retry                                          | Owner                                                                      |
 | Start/save/delete Psos and Bakta runs, ingest into the AI-DB annotations DB | Owner                                                                      |
-| KPIs, curation review (`/api/admin/*`)                                      | Admin only (`X-Admin-Secret`; owner tokens are not accepted there)         |
+| KPIs (`/api/admin/*`)                                                       | Admin only (`X-Admin-Secret`; owner tokens are not accepted there)         |
 
 Shared jobs are therefore **read-only** for everyone but the owner; this is enforced centrally by a
 middleware before any handler runs. The admin secret grants no rights on jobs. Jobs created before token/ownership
 enforcement may have no owner and can then no longer be modified (they expire after 30 days).
 
-### Community curation of the AI-DB annotations DB
+### AI-DB annotations DB: ingest and sightings counter
 
-Annotations contributed from Bakta runs are **verified, versioned and curated**, not blindly trusted:
+Annotations from Bakta runs are stored in the AI-DB annotations DB so later jobs recognize these sequences by hash:
 
-1. **Verification** – only hashes of the submitting job's unmatched sequences (or of its unreviewed community matches)
-   are accepted; length and all fields (UniRef/EC/GO/COG formats, text without control characters) are validated.
-   Everything else is rejected. Contributions are rate-limited per contributor (`AI_DB_INGEST_DAILY_LIMIT`).
-2. **Provenance, no overwriting** – every contribution is stored with a pseudonymous contributor id (a one-way digest;
-   the API token itself is never stored), job, timestamp, workflow (`bakta`/`baktfold`) and the PSC identity / e-value.
-   An existing annotation is never overwritten by a single contribution.
-3. **Consensus** – a new entry is `candidate`. When `AI_DB_CONFIRMATIONS` (default 2) independent contributors submit
-   the *same* annotation it becomes `confirmed`; competing annotations make it `conflicted`; if a different annotation
-   reaches the threshold on its own, it replaces the first-come one. Admins can confirm or reject entries
-   (`GET /api/admin/annotations?status=…`, `POST /api/admin/annotations/{md5}/review` with
-   `{"status":"confirmed|rejected|candidate"}`; header `X-Admin-Secret`, same secret as `ADMIN_KPI_SECRET`).
-   Reviewed entries are locked against consensus changes. In the UI, job owners can opt in to **re-check
-   unconfirmed community entries** with Bakta; an independent result counts as a vote. Entries from before curation tracking are `legacy`.
+1. **Verification** – only hashes of the submitting job's unmatched sequences and of its AI-DB annotations DB matches
+   (owners can opt in to **re-check** these with Bakta) are accepted; length and all fields
+   (UniRef/EC/GO/COG formats, text without control characters) are validated. Everything else is rejected.
+2. **Insert or complete, never overwrite** – new hashes are inserted. For existing entries (and the shared
+   UniRef cluster rows in `ips`/`psc`) existing values are kept; only empty fields are filled in. `updated_at`
+   changes only when something was added.
+3. **Sightings counter** – `hash_sightings` counts in how many jobs AI-DB has seen a hash: every lookup hit
+   (Bakta DB or AI-DB annotations DB) and every ingest, at most once per job. Sequences carry the value at
+   processing time as `seen_count` (shown when hovering the source badge in the Sequences tab). Hashes of unmatched
+   sequences are only counted once they are ingested.
 
-Lookups return the status as `annotation_status` (`confirmed`, `candidate`, `conflicted`, `legacy`; absent for Bakta DB
-matches). The first start after the update migrates `custom_annotations.db` additively
-(see `migrate-custom-annotations-db.sql`); existing data is kept.
-
-Limits: "independent" means different API tokens / browsers, which raises the cost of manipulation but is not
-identity-proof; and the status stored in a job is the status at lookup time (retry refreshes it).
+The first start after the update adds `hash_sightings` to `custom_annotations.db` and seeds existing entries
+(at least 1, or the number of distinct jobs that submitted them); existing data is kept.
 
 ### API Documentation
 

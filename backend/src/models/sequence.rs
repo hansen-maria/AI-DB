@@ -28,8 +28,6 @@ pub struct HashLookupResult {
     /// Release/version of the source database, or ingestion timestamp for AI-DB matches.
     /// See `SequenceInfo::annotation_release` for details.
     pub annotation_release: Option<String>,
-    /// Curation status (AI-DB annotations DB matches only)
-    pub annotation_status: Option<String>,
 }
 
 impl Default for HashLookupResult {
@@ -46,7 +44,6 @@ impl Default for HashLookupResult {
             ec_ids: None,
             go_ids: None,
             annotation_release: None,
-            annotation_status: None,
         }
     }
 }
@@ -237,7 +234,7 @@ mod tests {
             annotation: None,
             annotation_source: source.map(str::to_string),
             annotation_release: None,
-            annotation_status: None,
+            seen_count: None,
             uniparc_id: None,
             ncbi_nrp_id: None,
             uniref100_id: None,

@@ -115,7 +115,7 @@ export function useJobPolling(jobId: Ref<string>) {
   }
 
   /**
-   * Fetches the raw sequence text for specific sequence ids (e.g. community
+   * Fetches the raw sequence text for specific sequence ids (e.g. AI-DB
    * entries that are re-checked with Bakta) and merges it into `allSequences`.
    * Needs the full job payload with sequences, so it is only called on demand.
    */

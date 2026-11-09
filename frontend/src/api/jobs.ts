@@ -41,8 +41,8 @@ export interface SequenceInfo {
     annotation_source?: string | null;  // Used for filtering
     /** Release/version of the source DB (bakta_db) or ingestion timestamp (aidb_db) */
     annotation_release?: string | null;
-    /** Curation status of aidb_db matches: confirmed | candidate | conflicted | legacy */
-    annotation_status?: 'confirmed' | 'candidate' | 'conflicted' | 'legacy' | null;
+    /** In how many jobs AI-DB has seen this hash (at most once per job), incl. this one */
+    seen_count?: number | null;
     uniparc_id?: string | null;
     ncbi_nrp_id?: string | null;
     uniref100_id?: string | null;

@@ -12,6 +12,7 @@ use std::path::Path;
 use crate::models::{HashLookupResult, JobStatus, SequenceInfo};
 use crate::services::fasta::{compute_md5, FastaIterator, BATCH_SIZE, MAX_RESULTS};
 use crate::state::AppState;
+use crate::storage;
 
 /// Reads the Bakta DB release/version label from `version.json`.
 ///
@@ -68,7 +69,6 @@ fn lookup_in_db(conn: &Connection, hash_bytes: &[u8], seq_length: usize) -> Hash
             ec_ids: None,
             go_ids: None,
             annotation_release: None,
-            annotation_status: None,
         })
     }) {
         Ok(mut result) => {
@@ -109,11 +109,8 @@ fn lookup_in_db(conn: &Connection, hash_bytes: &[u8], seq_length: usize) -> Hash
 fn lookup_in_aidb(conn: &Connection, hash_bytes: &[u8], seq_length: usize) -> HashLookupResult {
     // `updated_at` reflects when this entry was last (re-)annotated via a Bakta ingest –
     // used as the per-row "release" timestamp shown to the user for AI-DB matches.
-    // Entries an admin rejected are hidden; everything else is returned together
-    // with its curation status (candidate / confirmed / conflicted / legacy).
-    let query =
-        "SELECT length, uniparc_id, ncbi_nrp_id, uniref100_id, product, updated_at, status \
-                 FROM ups WHERE hash = ? AND COALESCE(status, 'legacy') <> 'rejected'";
+    let query = "SELECT length, uniparc_id, ncbi_nrp_id, uniref100_id, product, updated_at \
+                 FROM ups WHERE hash = ?";
 
     match conn.query_row(query, [hash_bytes], |row| {
         Ok(HashLookupResult {
@@ -128,7 +125,6 @@ fn lookup_in_aidb(conn: &Connection, hash_bytes: &[u8], seq_length: usize) -> Ha
             ec_ids: None,
             go_ids: None,
             annotation_release: row.get(5).ok(),
-            annotation_status: row.get(6).ok(),
         })
     }) {
         Ok(mut result) => {
@@ -441,6 +437,8 @@ pub fn process_job_from_file(state: &AppState, job_id: &str, file_path: &Path, i
     let alignment_matches = 0;
     let mut processed_count = 0;
     let mut batch_count = 0;
+    // (index in sequence_infos, hash) of every matched sequence
+    let mut sighted: Vec<(Option<usize>, Vec<u8>)> = Vec::new();
 
     // Process sequences one at a time (streaming)
     for (header, seq) in fasta_iter {
@@ -456,31 +454,35 @@ pub fn process_job_from_file(state: &AppState, job_id: &str, file_path: &Path, i
             seq_length,
         );
 
-        let (annotation, annotation_source, annotation_release, annotation_status) =
-            match lookup_source {
-                "bakta_db" => {
-                    bakta_db_matches += 1;
-                    (
-                        format_annotation(&lookup_result),
-                        Some("bakta_db".to_string()),
-                        bakta_release.clone(),
-                        None,
-                    )
-                }
-                "aidb_db" => {
-                    aidb_db_matches += 1;
-                    (
-                        format_annotation(&lookup_result),
-                        Some("aidb_db".to_string()),
-                        lookup_result.annotation_release.clone(),
-                        lookup_result.annotation_status.clone(),
-                    )
-                }
-                _ => (None, None, None, None),
-            };
+        let (annotation, annotation_source, annotation_release) = match lookup_source {
+            "bakta_db" => {
+                bakta_db_matches += 1;
+                (
+                    format_annotation(&lookup_result),
+                    Some("bakta_db".to_string()),
+                    bakta_release.clone(),
+                )
+            }
+            "aidb_db" => {
+                aidb_db_matches += 1;
+                (
+                    format_annotation(&lookup_result),
+                    Some("aidb_db".to_string()),
+                    lookup_result.annotation_release.clone(),
+                )
+            }
+            _ => (None, None, None),
+        };
+
+        // Matched hashes count as sightings (also beyond MAX_RESULTS, then
+        // without a stored result to attach the counter to).
+        let stored = sequence_infos.len() < MAX_RESULTS;
+        if lookup_result.found {
+            sighted.push((stored.then_some(sequence_infos.len()), hash_bytes));
+        }
 
         // Only store results if we haven't hit the limit
-        if sequence_infos.len() < MAX_RESULTS {
+        if stored {
             sequence_infos.push(SequenceInfo {
                 id: header,
                 md5_hash: Some(hash_hex),
@@ -489,7 +491,7 @@ pub fn process_job_from_file(state: &AppState, job_id: &str, file_path: &Path, i
                 annotation,
                 annotation_source,
                 annotation_release,
-                annotation_status,
+                seen_count: None,
                 uniparc_id: lookup_result.uniparc_id,
                 ncbi_nrp_id: lookup_result.ncbi_nrp_id,
                 uniref100_id: lookup_result.uniref100_id,
@@ -530,6 +532,8 @@ pub fn process_job_from_file(state: &AppState, job_id: &str, file_path: &Path, i
 
     // Shrink to fit to release unused memory
     sequence_infos.shrink_to_fit();
+
+    apply_sightings(aidb_conn.as_ref(), job_id, sighted, &mut sequence_infos);
 
     let total_matches = bakta_db_matches + aidb_db_matches;
     let unmatched = processed_count.saturating_sub(total_matches);
@@ -600,6 +604,34 @@ pub fn process_job_from_file(state: &AppState, job_id: &str, file_path: &Path, i
     }
 }
 
+/// Counts this job as a sighting of every matched hash (`hash_sightings`,
+/// at most once per job) and stores the updated `seen_count` in the
+/// corresponding results. Failures are logged and never fail the job.
+fn apply_sightings(
+    aidb_conn: Option<&Connection>,
+    job_id: &str,
+    sighted: Vec<(Option<usize>, Vec<u8>)>,
+    sequences: &mut [SequenceInfo],
+) {
+    let Some(conn) = aidb_conn else {
+        return;
+    };
+    if sighted.is_empty() {
+        return;
+    }
+    let (indices, hashes): (Vec<Option<usize>>, Vec<Vec<u8>>) = sighted.into_iter().unzip();
+    match storage::record_sightings(conn, &hashes, job_id) {
+        Ok(counts) => {
+            for (idx, count) in indices.into_iter().zip(counts) {
+                if let Some(seq) = idx.and_then(|i| sequences.get_mut(i)) {
+                    seq.seen_count = Some(count);
+                }
+            }
+        }
+        Err(e) => tracing::warn!("Job {job_id}: failed to record hash sightings: {e}"),
+    }
+}
+
 // ── Retry / Re-annotation ─────────────────────────────────────────────────────
 
 /// Re-runs hash lookups for sequences already stored in a failed job.
@@ -626,6 +658,7 @@ pub fn reannotate_sequences(state: &AppState, job_id: &str, sequences: Vec<Seque
     let mut bakta_matches = 0usize;
     let mut aidb_matches = 0usize;
     let mut batch_count = 0usize;
+    let mut sighted: Vec<(Option<usize>, Vec<u8>)> = Vec::new();
 
     for (i, seq) in sequences.into_iter().enumerate() {
         // Prefer re-hashing the stored sequence; fall back to decoding stored MD5 hex
@@ -658,6 +691,7 @@ pub fn reannotate_sequences(state: &AppState, job_id: &str, sequences: Vec<Seque
                 _ => {}
             }
             if result.found {
+                sighted.push((Some(i), hb.clone()));
                 let annotation_release = match source {
                     "bakta_db" => bakta_release.clone(),
                     "aidb_db" => result.annotation_release.clone(),
@@ -671,11 +705,7 @@ pub fn reannotate_sequences(state: &AppState, job_id: &str, sequences: Vec<Seque
                         Some(source.to_string())
                     },
                     annotation_release,
-                    annotation_status: if source == "aidb_db" {
-                        result.annotation_status.clone()
-                    } else {
-                        None
-                    },
+                    seen_count: None,
                     uniparc_id: result.uniparc_id,
                     ncbi_nrp_id: result.ncbi_nrp_id,
                     uniref100_id: result.uniref100_id,
@@ -691,7 +721,7 @@ pub fn reannotate_sequences(state: &AppState, job_id: &str, sequences: Vec<Seque
                     annotation: None,
                     annotation_source: None,
                     annotation_release: None,
-                    annotation_status: None,
+                    seen_count: None,
                     uniparc_id: None,
                     ncbi_nrp_id: None,
                     uniref100_id: None,
@@ -723,6 +753,8 @@ pub fn reannotate_sequences(state: &AppState, job_id: &str, sequences: Vec<Seque
     }
 
     let total_matches = bakta_matches + aidb_matches;
+
+    apply_sightings(aidb_conn.as_ref(), job_id, sighted, &mut updated);
 
     let final_job = {
         let mut jobs = state.jobs_mut();
