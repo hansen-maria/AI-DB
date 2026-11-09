@@ -2,18 +2,20 @@
 //! Download handlers for exporting job results
 //! ============================================================================
 
+use aidb_types::naming::{result_base_name, result_file_name};
 use axum::{
     extract::{Path, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::IntoResponse,
     Json,
 };
-use aidb_types::naming::{result_base_name, result_file_name};
 use axum_extra::extract::CookieJar;
 
 use crate::auth::owner_from_request;
 use crate::export::{generate_content, DownloadFormat};
-use crate::models::{AdvancedSequenceFilter, ErrorResponse, JobStatus, SequenceFilter, SequenceFilterQuery};
+use crate::models::{
+    AdvancedSequenceFilter, ErrorResponse, JobStatus, SequenceFilter, SequenceFilterQuery,
+};
 use crate::state::AppState;
 
 /// Download job results in specified format (with optional sequence filtering)

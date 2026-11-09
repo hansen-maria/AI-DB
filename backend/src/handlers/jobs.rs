@@ -18,8 +18,8 @@ use crate::auth::{get_or_create_owner, owner_from_request, validate_owner};
 use crate::models::{
     AdvancedSequenceFilter, BulkDeleteRequest, BulkDeleteResponse, ErrorResponse, GetJobQuery,
     JobCreateResponse, JobResponse, JobStatus, JobSummary, JobViewResponse, ListJobsQuery,
-    PaginatedJobResponse, PaginatedJobsResponse, PaginationInfo, RenameJobRequest, SequenceFilter, SequenceInfo,
-    DEFAULT_PER_PAGE, MAX_PER_PAGE,
+    PaginatedJobResponse, PaginatedJobsResponse, PaginationInfo, RenameJobRequest, SequenceFilter,
+    SequenceInfo, DEFAULT_PER_PAGE, MAX_PER_PAGE,
 };
 use crate::services::process_job_from_file;
 use crate::services::reannotate_sequences;
