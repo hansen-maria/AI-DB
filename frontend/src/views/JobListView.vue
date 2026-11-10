@@ -165,6 +165,15 @@ async function handleBulkDelete() {
   }
 }
 
+// ── Truncated filenames ───────────────────────────────────────────────────────
+
+// Only show the full-name tooltip when the filename is actually cut off.
+function updateNameTruncation(e: MouseEvent) {
+  const info = e.currentTarget as HTMLElement
+  const name = info.querySelector<HTMLElement>('.job-name')
+  info.classList.toggle('is-truncated', !!name && name.scrollWidth > name.clientWidth)
+}
+
 // ── Formatting ────────────────────────────────────────────────────────────────
 
 function formatDate(dateStr: string) {
@@ -323,7 +332,11 @@ onMounted(() => loadJobs())
               <span class="status-text">{{ statusLabels[job.status] }}</span>
             </div>
 
-            <div class="job-info">
+            <div
+                class="job-info"
+                :data-tooltip="job.filename || 'Direct Input'"
+                @mouseenter="updateNameTruncation"
+            >
               <span class="job-name">{{ job.filename || 'Direct Input' }}</span>
               <span class="job-id">{{ job.job_id.substring(0, 8) }}…</span>
             </div>
@@ -479,7 +492,9 @@ onMounted(() => loadJobs())
   margin-bottom: 0;
 }
 .job-checkbox { width: 16px; height: 16px; flex-shrink: 0; accent-color: hsla(160,100%,37%,1); cursor: pointer; }
-.job-card { flex: 1; }
+/* min-width: 0 lets the card shrink below its content width, so long filenames
+   are truncated instead of widening the card. All cards share the list width. */
+.job-card { flex: 1 1 0; min-width: 0; }
 .job-card.selected { border-color: hsla(160,100%,37%,0.4); background: hsla(160,100%,37%,0.03); }
 
 /* ── Inline link in empty state ──────────────────────────────────────────────── */
@@ -659,8 +674,39 @@ onMounted(() => loadJobs())
 }
 
 .job-info {
-  flex: 1;
+  position: relative;
+  flex: 1 1 0;
   min-width: 0;
+}
+
+/* Full filename on hover, only when truncated. Self-contained CSS tooltip
+   (same approach as SequencesTab), placed on .job-info because .job-name
+   has overflow: hidden and would clip a pseudo-element. */
+.job-info::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  background: #1f1f1f;
+  color: #fff;
+  padding: 0.35rem 0.6rem;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  font-weight: 400;
+  line-height: 1.3;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  width: max-content;
+  max-width: 400px;
+  z-index: 30;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.12s ease;
+}
+.job-info.is-truncated:hover::after {
+  opacity: 1;
+  visibility: visible;
 }
 
 .job-name {
@@ -682,7 +728,12 @@ onMounted(() => loadJobs())
 .job-stats {
   display: flex;
   gap: 1rem;
+  flex-shrink: 0;
 }
+
+/* Fixed column widths keep stats and dates aligned across rows */
+.job-stats .stat         { min-width: 6.5rem; }
+.job-stats .stat.success { min-width: 8.5rem; }
 
 .stat {
   display: flex;
@@ -702,8 +753,10 @@ onMounted(() => loadJobs())
   font-size: 0.85rem;
   color: var(--color-text);
   opacity: 0.6;
-  min-width: 80px;
+  width: 6.5rem;
+  flex-shrink: 0;
   text-align: right;
+  white-space: nowrap;
 }
 
 .arrow {
@@ -758,7 +811,7 @@ onMounted(() => loadJobs())
 
   .job-time {
     order: 3;
-    min-width: auto;
+    width: auto;
   }
 
   .arrow {
