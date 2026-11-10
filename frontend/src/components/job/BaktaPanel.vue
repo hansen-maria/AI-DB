@@ -147,10 +147,10 @@ const emit = defineEmits<{
           <label class="bakta-checkbox-label">
             <input :checked="includeRecheck" type="checkbox"
                    @change="emit('update:includeRecheck', ($event.target as HTMLInputElement).checked)" />
-            Also re-check {{ recheckCount }} AI-DB {{ recheckCount === 1 ? 'entry' : 'entries' }}
+            Also re-check {{ recheckCount }} AI-DB · Community {{ recheckCount === 1 ? 'entry' : 'entries' }}
           </label>
           <p class="bakta-note" style="margin:0.35rem 0 0">
-            These sequences already have an entry in the AI-DB annotations DB. The new Bakta
+            These sequences already have an entry in AI-DB · Community. The new Bakta
             result only fills fields that are still empty; existing values are never
             overwritten. Only the hash and annotation are stored.
           </p>
@@ -161,12 +161,12 @@ const emit = defineEmits<{
           <label class="bakta-checkbox-label">
             <input :checked="autoIngestEnabled" type="checkbox"
                    @change="emit('update:autoIngestEnabled', ($event.target as HTMLInputElement).checked)" />
-            Save annotations to the AI-DB annotations DB automatically
+            Save annotations to AI-DB · Community automatically
           </label>
           <p class="bakta-note" style="margin:0.35rem 0 0">
             Only the sequence's MD5 hash and the resolved annotation (gene, product, EC/GO/COG, …)
             are stored — never the sequence itself. Uncheck this if you don't want unmatched
-            sequences' annotations added to the shared AI-DB annotations DB.
+            sequences' annotations added to the shared AI-DB · Community database.
           </p>
         </div>
 
@@ -291,15 +291,15 @@ const emit = defineEmits<{
 
         <!-- Ingest into AI-DB DB -->
         <div class="bakta-ingest">
-          <h4 class="bakta-section-title">AI-DB annotations DB</h4>
+          <h4 class="bakta-section-title">AI-DB · Community</h4>
           <p class="bakta-description" style="margin:0 0 0.6rem">
             <span v-if="autoIngestEnabled">
-              Bakta annotations are automatically written back into the local AI-DB annotations DB
+              Bakta annotations are automatically written back into AI-DB · Community
               so future jobs recognize these sequences via hash lookup — without re-running Bakta.
             </span>
             <span v-else>
               Automatic saving is turned off for this run. You can still add these annotations to
-              the local AI-DB annotations DB manually below, so future jobs recognize these
+              AI-DB · Community manually below, so future jobs recognize these
               sequences via hash lookup without re-running Bakta.
             </span>
             Only the MD5 hash of each sequence and the resolved annotation are stored,
@@ -326,7 +326,7 @@ const emit = defineEmits<{
                  fill="none" stroke="currentColor" stroke-width="2" style="animation:spin 1s linear infinite">
               <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
             </svg>
-            <span>Automatically saving annotations to the AI-DB annotations DB…</span>
+            <span>Automatically saving annotations to AI-DB · Community…</span>
           </div>
 
           <div v-else-if="ingestError" class="bakta-error" style="margin-bottom:0.5rem">
@@ -346,7 +346,7 @@ const emit = defineEmits<{
               <polyline points="7 10 12 15 17 10"/>
               <line x1="12" y1="15" x2="12" y2="3"/>
             </svg>
-            {{ ingestError ? 'Retry' : `Add ${result?.featureCount ?? result?.features?.length ?? 0} features to AI-DB annotations DB` }}
+            {{ ingestError ? 'Retry' : `Add ${result?.featureCount ?? result?.features?.length ?? 0} features to AI-DB · Community` }}
           </button>
         </div>
 

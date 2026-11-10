@@ -2,11 +2,26 @@ import type { JobStatus, SequenceFilter } from '../api/jobs.ts'
 
 // ── Filter / Status ──────────────────────────────────────────────────────────
 
+// Display names of the match sources. BakRep DB and AI-DB annotations DB are
+// separate databases technically (API values `bakrep_db` / `aidb_db`), but are
+// shown to users as one family, "AI-DB" = annotated by AI-DB, not in the Bakta DB:
+//   AI-DB · BakRep     – BakRep proteins missing from the Bakta DB (versioned bulk import)
+//   AI-DB · Community  – annotations contributed by AI-DB users' Bakta jobs
+export const SOURCE_LABELS = {
+  bakta_db:  'Bakta',
+  bakrep_db: 'AI-DB · BakRep',
+  aidb_db:   'AI-DB · Community',
+} as const
+
+/** Common tooltip prefix for both AI-DB sources */
+export const AIDB_FAMILY_HINT = 'AI-DB'
+
 export const filterOptions: { value: SequenceFilter; label: string }[] = [
   { value: 'all',        label: 'All' },
   { value: 'hash_match', label: 'Matched' },
-  { value: 'bakta_db',   label: 'Match (Bakta)' },
-  { value: 'aidb_db',    label: 'Match (AI-DB)' },
+  { value: 'bakta_db',   label: `Match (${SOURCE_LABELS.bakta_db})` },
+  { value: 'bakrep_db',  label: `Match (${SOURCE_LABELS.bakrep_db})` },
+  { value: 'aidb_db',    label: `Match (${SOURCE_LABELS.aidb_db})` },
   { value: 'none',       label: 'No Match' },
 ]
 

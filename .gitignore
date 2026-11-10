@@ -37,3 +37,14 @@ backend/target
 
 # Vitest
 __screenshots__/
+
+# Scripts
+/scripts/
+/deploy.sh
+/setup-bakta-db.sh
+/setup-custom-annotations-db.sh
+/setup-kpi-volume.sh
+/setup-temp-volume.sh
+
+# Internal Docs
+/docs/

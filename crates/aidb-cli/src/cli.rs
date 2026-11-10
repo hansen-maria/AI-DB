@@ -266,10 +266,13 @@ pub enum MatchFilter {
     /// Hash match in the Bakta DB
     #[value(alias = "bakta_db")]
     BaktaDb,
+    /// Hash match in the BakRep DB (needs a server with BakRep support)
+    #[value(alias = "bakrep_db")]
+    BakrepDb,
     /// Hash match in the AI-DB annotations DB
     #[value(alias = "aidb_db")]
     AidbDb,
-    /// Hash match in either database
+    /// Hash match in any database
     #[value(alias = "hash_match")]
     Matched,
     /// No match – candidates for Bakta or Psos
@@ -282,6 +285,7 @@ impl MatchFilter {
     pub fn as_api(self) -> &'static str {
         match self {
             MatchFilter::BaktaDb => "bakta_db",
+            MatchFilter::BakrepDb => "bakrep_db",
             MatchFilter::AidbDb => "aidb_db",
             MatchFilter::Matched => "hash_match",
             MatchFilter::Unmatched => "none",
@@ -561,6 +565,27 @@ mod tests {
                 assert_eq!(out.formats(), vec![ResultFormat::Tsv]); // default
             }
             other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bakrep_filter_maps_to_api_value() {
+        for arg in ["bakrep-db", "bakrep_db"] {
+            let cli = Cli::try_parse_from([
+                "aidb",
+                "download",
+                "3f2b8c1e-5d4a-4e7b-9a6c-1d2e3f4a5b6c",
+                "--only",
+                arg,
+            ])
+            .unwrap();
+            match cli.command {
+                Command::Download { filter, .. } => {
+                    assert_eq!(filter.only, Some(MatchFilter::BakrepDb));
+                    assert_eq!(filter.to_query().filter.as_deref(), Some("bakrep_db"));
+                }
+                other => panic!("unexpected {other:?}"),
+            }
         }
     }
 

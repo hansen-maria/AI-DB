@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { filterOptions, cogCategories, ecClasses, getUniRef100Url, getUniParcUrl, getNcbiUrl, hasAnnotationLinks, checkUniRefExists, checkNcbiProteinExists } from '../../constants/sequences.ts'
+import { filterOptions, SOURCE_LABELS, AIDB_FAMILY_HINT, cogCategories, ecClasses, getUniRef100Url, getUniParcUrl, getNcbiUrl, hasAnnotationLinks, checkUniRefExists, checkNcbiProteinExists } from '../../constants/sequences.ts'
 import type { SequenceFilter, FilteredDownloadFormat } from '../../api/jobs.ts'
 import PsosPanel from './PsosPanel.vue'
 import BaktaPanel from './BaktaPanel.vue'
@@ -11,7 +11,8 @@ import type { BaktaAnnotationSummary, IngestResponse, SequenceType } from '../..
 
 /**
  * Formats `annotation_release` for display.
- * - bakta_db: already a human-readable version label (e.g. "6.0 (2025-01-15)") – shown as-is
+ * - bakta_db / bakrep_db: already a human-readable version label
+ *   (e.g. "6.0 (2025-01-15)", "BakRep v2 (2026-11-20)") – shown as-is
  * - aidb_db: an ISO-8601 timestamp – formatted as a locale date
  */
 function formatAnnotationRelease(seq: any): string {
@@ -37,10 +38,17 @@ function sourceBadgeTitle(seq: any): string {
         : 'Bakta DB'
     return base + seenLabel(seq)
   }
+  // Both AI-DB sources share the family hint, then name their sub-source
+  if (seq.annotation_source === 'bakrep_db') {
+    const base = seq.annotation_release
+        ? `${AIDB_FAMILY_HINT} · BakRep (${seq.annotation_release})`
+        : `${AIDB_FAMILY_HINT} · BakRep`
+    return base + seenLabel(seq)
+  }
   if (seq.annotation_source === 'aidb_db') {
     const base = seq.annotation_release
-        ? `AI-DB annotations DB · annotated ${formatAnnotationRelease(seq)}`
-        : 'AI-DB annotations DB'
+        ? `${AIDB_FAMILY_HINT} · Community, annotated ${formatAnnotationRelease(seq)}`
+        : `${AIDB_FAMILY_HINT} · Community`
     return base + seenLabel(seq)
   }
   return ''
@@ -335,10 +343,15 @@ watch(() => props.paginatedSequences, (seqs) => { validateVisibleLinks(seqs) }, 
                         :data-tooltip="sourceBadgeTitle(seq)" :aria-label="sourceBadgeTitle(seq)">
                       Bakta<template v-if="seq.annotation_release"> · {{ formatAnnotationRelease(seq) }}</template>
                     </span>
-                  <span v-else-if="seq.annotation_source === 'aidb_db'"
-                        class="db-link aidb-source has-tooltip"
+                  <span v-else-if="seq.annotation_source === 'bakrep_db'"
+                        class="db-link aidb-family bakrep-source has-tooltip"
                         :data-tooltip="sourceBadgeTitle(seq)" :aria-label="sourceBadgeTitle(seq)">
-                      AI-DB<template v-if="seq.annotation_release"> · {{ formatAnnotationRelease(seq) }}</template>
+                      {{ SOURCE_LABELS.bakrep_db }}
+                    </span>
+                  <span v-else-if="seq.annotation_source === 'aidb_db'"
+                        class="db-link aidb-family aidb-source has-tooltip"
+                        :data-tooltip="sourceBadgeTitle(seq)" :aria-label="sourceBadgeTitle(seq)">
+                      {{ SOURCE_LABELS.aidb_db }}<template v-if="seq.annotation_release"> · {{ formatAnnotationRelease(seq) }}</template>
                     </span>
                 </div>
               </template>
@@ -495,7 +508,9 @@ watch(() => props.paginatedSequences, (seqs) => { validateVisibleLinks(seqs) }, 
   .db-link.uniref  { background: rgba(0,189,126,0.12); color: hsla(160,100%,30%,1); }
   .db-link.uniparc { background: rgba(33,150,243,0.12); color: #1565c0; }
   .db-link.ncbi    { background: rgba(156,39,176,0.12); color: #6a1b9a; }
-  .db-link.aidb-source { background: rgba(224,128,0,0.12); color: #a05a00; cursor: help; }
+  /* AI-DB family (not in the Bakta DB): one colour, sub-sources told apart by border */
+  .db-link.aidb-family { background: rgba(224,128,0,0.12); color: #a05a00; cursor: help; }
+  .db-link.aidb-family.bakrep-source { box-shadow: inset 0 0 0 1px rgba(160,90,0,0.45); }
   .db-link.bakta-source { background: rgba(0,110,224,0.12); color: #0058b0; cursor: help; }
   .db-link.uniref-gone, .db-link.ncbi-gone { background: rgba(150,150,150,0.12); color: #888; cursor: help; text-decoration: line-through; }
 

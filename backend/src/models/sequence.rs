@@ -4,7 +4,7 @@
 
 //! Sequence-related data structures
 
-pub use aidb_types::sequence::{SequenceInfo, SOURCE_AIDB_DB, SOURCE_BAKTA_DB};
+pub use aidb_types::sequence::{SequenceInfo, SOURCE_AIDB_DB, SOURCE_BAKREP_DB, SOURCE_BAKTA_DB};
 use utoipa::ToSchema;
 
 /// Bakta Hash Lookup Result
@@ -50,17 +50,19 @@ impl Default for HashLookupResult {
 
 /// Filter type for sequences (match status / annotation source)
 ///
-/// Query values: `all` (default), `bakta_db`, `aidb_db`, `hash_match`
-/// (either DB), `alignment`, `none` (unmatched). Unknown values fall back to `all`.
+/// Query values: `all` (default), `bakta_db`, `bakrep_db`, `aidb_db`, `hash_match`
+/// (any DB), `alignment`, `none` (unmatched). Unknown values fall back to `all`.
 #[derive(Default, Debug, Clone, PartialEq, ToSchema)]
 pub enum SequenceFilter {
     #[default]
     All,
     /// Hash match in the official Bakta DB
     BaktaDb,
+    /// Hash match in the BakRep DB
+    BakrepDb,
     /// Hash match in the AI-DB annotations DB
     AidbDb,
-    /// Hash match in either DB (`bakta_db` or `aidb_db`)
+    /// Hash match in any DB (`bakta_db`, `bakrep_db` or `aidb_db`)
     HashMatch,
     Alignment,
     NoMatch,
@@ -70,6 +72,7 @@ impl SequenceFilter {
     pub fn from_str(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "bakta_db" | "bakta" => SequenceFilter::BaktaDb,
+            "bakrep_db" | "bakrep" => SequenceFilter::BakrepDb,
             "aidb_db" | "aidb" => SequenceFilter::AidbDb,
             "hash_match" | "hash" => SequenceFilter::HashMatch,
             "alignment" => SequenceFilter::Alignment,
@@ -83,11 +86,15 @@ impl SequenceFilter {
         match self {
             SequenceFilter::All => true,
             SequenceFilter::BaktaDb => source == Some(SOURCE_BAKTA_DB),
+            SequenceFilter::BakrepDb => source == Some(SOURCE_BAKREP_DB),
             SequenceFilter::AidbDb => source == Some(SOURCE_AIDB_DB),
             // "hash_match" is accepted as legacy source value of older jobs
             SequenceFilter::HashMatch => matches!(
                 source,
-                Some(SOURCE_BAKTA_DB) | Some(SOURCE_AIDB_DB) | Some("hash_match")
+                Some(SOURCE_BAKTA_DB)
+                    | Some(SOURCE_BAKREP_DB)
+                    | Some(SOURCE_AIDB_DB)
+                    | Some("hash_match")
             ),
             SequenceFilter::Alignment => source == Some("alignment"),
             SequenceFilter::NoMatch => source.is_none(),
@@ -98,6 +105,7 @@ impl SequenceFilter {
         match self {
             SequenceFilter::All => "all",
             SequenceFilter::BaktaDb => SOURCE_BAKTA_DB,
+            SequenceFilter::BakrepDb => SOURCE_BAKREP_DB,
             SequenceFilter::AidbDb => SOURCE_AIDB_DB,
             SequenceFilter::HashMatch => "hash_match",
             SequenceFilter::Alignment => "alignment",
@@ -258,8 +266,12 @@ mod tests {
         let f = SequenceFilter::from_str("aidb_db");
         assert!(f.matches(&aidb) && !f.matches(&bakta) && !f.matches(&none));
 
+        let bakrep = seq(Some(SOURCE_BAKREP_DB));
+        let f = SequenceFilter::from_str("bakrep_db");
+        assert!(f.matches(&bakrep) && !f.matches(&bakta) && !f.matches(&aidb));
+
         let f = SequenceFilter::from_str("hash_match");
-        assert!(f.matches(&bakta) && f.matches(&aidb) && !f.matches(&none));
+        assert!(f.matches(&bakta) && f.matches(&aidb) && f.matches(&bakrep) && !f.matches(&none));
 
         let f = SequenceFilter::from_str("none");
         assert!(f.matches(&none) && !f.matches(&bakta));
@@ -270,6 +282,7 @@ mod tests {
         for v in [
             "all",
             "bakta_db",
+            "bakrep_db",
             "aidb_db",
             "hash_match",
             "alignment",

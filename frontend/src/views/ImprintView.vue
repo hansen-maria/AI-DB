@@ -1,7 +1,7 @@
 <script setup lang="ts">
 const CONTACT_EMAIL = 'maria.hansen@computational.bio.uni-giessen.de'
 
-const LAST_EDITED = '2026-11-09'
+const LAST_EDITED = '2026-11-10'
 const lastEditedLabel = `Last edited: ${new Date(LAST_EDITED).toLocaleDateString('en-GB', {
   day: '2-digit',
   month: 'long',
@@ -96,8 +96,11 @@ const lastEditedLabel = `Last edited: ${new Date(LAST_EDITED).toLocaleDateString
         <ul>
           <li>
             <strong>Annotation lookup</strong> — sequences are matched by their MD5
-            hash against the Bakta database and the AI-DB annotations DB. This
-            lookup takes place entirely on our servers.
+            hash against the Bakta database and against AI-DB, which consists of
+            AI-DB · BakRep (annotations precomputed by us for proteins from the public
+            BakRep genome collection) and AI-DB · Community (annotations contributed by
+            users, see below). This lookup takes place entirely on our servers; no
+            sequence or hash is sent to third parties for it.
           </li>
           <li>
             <strong>External annotation services</strong> — sequences without a match
@@ -107,9 +110,9 @@ const lastEditedLabel = `Last edited: ${new Date(LAST_EDITED).toLocaleDateString
             processed according to the respective service's own terms and privacy policy.
           </li>
           <li>
-            <strong>Contribution to the AI-DB annotations DB</strong> — by default,
-            annotations obtained for previously unmatched sequences are added to the
-            AI-DB annotations DB so that future lookups by all users benefit from them.
+            <strong>Contribution to AI-DB · Community</strong> — by default,
+            annotations obtained for previously unmatched sequences are added to
+            AI-DB · Community so that future lookups by all users benefit from them.
             Only the MD5 hash of each sequence and the derived annotation are stored
             permanently — not the sequence itself and no reference to your job. You can
             disable this contribution at any time in the job view.
@@ -124,7 +127,7 @@ const lastEditedLabel = `Last edited: ${new Date(LAST_EDITED).toLocaleDateString
           in section 6. We use your browser's local storage solely to
           remember settings you have made yourself: your colour theme (light or dark),
           dismissed service notices, and whether annotations may be contributed to the
-          AI-DB annotations DB. This information never leaves your device and can be
+          AI-DB · Community. This information never leaves your device and can be
           removed at any time by clearing your browser's site data.
         </p>
       </section>
@@ -221,7 +224,7 @@ const lastEditedLabel = `Last edited: ${new Date(LAST_EDITED).toLocaleDateString
         <ul>
           <li><strong>Analysis jobs and submitted sequences</strong> — deleted automatically after 30 days.</li>
           <li><strong>Server log files</strong> — deleted after a short, defined retention period.</li>
-          <li><strong>Contributed annotations</strong> (MD5 hash and annotation only) — retained permanently as part of the AI-DB annotations DB.</li>
+          <li><strong>Contributed annotations</strong> (MD5 hash and annotation only) — retained permanently as part of AI-DB · Community.</li>
           <li><strong>Aggregated usage statistics</strong> — retained permanently; they contain no personal data.</li>
           <li><strong>Web analytics (Plausible)</strong> — IP addresses are not stored; the salt for the daily visitor identifier is deleted after 24 hours. The resulting aggregated statistics contain no personal data and are retained permanently.</li>
         </ul>

@@ -16,8 +16,15 @@ use crate::output::{print_json, print_rows, thousands};
 #[derive(Debug, Serialize)]
 struct MatchCounts {
     bakta_db: usize,
+    bakrep_db: usize,
     aidb_db: usize,
     unmatched: usize,
+}
+
+impl MatchCounts {
+    fn matched(&self) -> usize {
+        self.bakta_db + self.bakrep_db + self.aidb_db
+    }
 }
 
 /// JSON shape of `job show` and of each entry of `job wait`.
@@ -118,13 +125,18 @@ pub async fn show(client: &Client, job_id: &str, output: OutputFormat) -> Result
     let view = client.job_status(job_id).await?;
 
     let matches = if view.job.status == JobStatus::Completed {
-        let (bakta_db, aidb_db, unmatched) = tokio::try_join!(
+        // BakRep = all matches minus Bakta and AI-DB. Asking for "bakrep_db"
+        // directly would return ALL sequences on servers without BakRep
+        // support (unknown filters fall back to "all").
+        let (bakta_db, aidb_db, matched, unmatched) = tokio::try_join!(
             client.count_sequences(job_id, "bakta_db"),
             client.count_sequences(job_id, "aidb_db"),
+            client.count_sequences(job_id, "hash_match"),
             client.count_sequences(job_id, "none"),
         )?;
         Some(MatchCounts {
             bakta_db,
+            bakrep_db: matched.saturating_sub(bakta_db + aidb_db),
             aidb_db,
             unmatched,
         })
@@ -162,10 +174,11 @@ pub async fn show(client: &Client, job_id: &str, output: OutputFormat) -> Result
         rows.push((
             "Matched",
             format!(
-                "{} ({}): Bakta DB {} · AI-DB annotations DB {}",
-                count(m.bakta_db + m.aidb_db),
-                percent(m.bakta_db + m.aidb_db, job.sequence_count),
+                "{} ({}): Bakta DB {} · BakRep DB {} · AI-DB annotations DB {}",
+                count(m.matched()),
+                percent(m.matched(), job.sequence_count),
                 count(m.bakta_db),
+                count(m.bakrep_db),
                 count(m.aidb_db)
             ),
         ));

@@ -1,7 +1,7 @@
 //! `aidb status` – server health, version and compatibility with this CLI.
 
 use aidb_client::compat::{check_api_version, Compatibility};
-use aidb_client::types::{BaktaDbHealth, API_VERSION};
+use aidb_client::types::{BakrepDbHealth, BaktaDbHealth, API_VERSION};
 use aidb_client::{Client, Result};
 use serde::Serialize;
 
@@ -20,6 +20,9 @@ struct StatusReport<'a> {
     /// "compatible" | "unknown" | "server_older" | "server_newer"
     compatibility: &'static str,
     bakta_db: &'a BaktaDbHealth,
+    /// Absent for servers without BakRep support
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bakrep_db: Option<&'a BakrepDbHealth>,
 }
 
 fn compatibility_key(c: Compatibility) -> &'static str {
@@ -46,6 +49,7 @@ pub async fn run(client: &Client, output: OutputFormat) -> Result<()> {
             cli_api_version: API_VERSION,
             compatibility: compatibility_key(compatibility),
             bakta_db: &health.bakta_db,
+            bakrep_db: health.bakrep_db.as_ref(),
         }),
         OutputFormat::Human => {
             let server_version = if health.version.is_empty() {
@@ -64,6 +68,14 @@ pub async fn run(client: &Client, output: OutputFormat) -> Result<()> {
                 ("Status", health.status.clone()),
                 ("Version", server_version),
                 ("Bakta DB", health.bakta_db.status.clone()),
+                (
+                    "BakRep DB",
+                    health
+                        .bakrep_db
+                        .as_ref()
+                        .map(|b| b.status.clone())
+                        .unwrap_or_else(|| "unknown (server predates BakRep support)".to_string()),
+                ),
                 (
                     "CLI",
                     format!("{cli_version} (API v{API_VERSION}) – {compat_text}"),

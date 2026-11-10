@@ -176,11 +176,12 @@ The `/api/job/{id}/stats` endpoint computes statistics from the job's stored ann
 sequence.aa_hash (MD5)
     → Hash lookup (per sequence during job processing):
       1. MD5(seq) → hash in Bakta DB?        → Annotation, else Step 2
-      2. MD5(seq) → hash in AI-DB?           → Annotation, else Step 3
-      3. No match
+      2. MD5(seq) → hash in BakRep DB?       → Annotation, else Step 3   (optional, read-only)
+      3. MD5(seq) → hash in AI-DB?           → Annotation, else Step 4
+      4. No match
 ```
 
-`annotation_source` is `bakta_db` or `aidb_db`; matched sequences additionally carry `seen_count`
+`annotation_source` is `bakta_db`, `bakrep_db` or `aidb_db`. Matched sequences additionally carry `seen_count`
 (see [Sightings counter](#sightings-counter)).
 
 ## AI-DB Annotations DB Ingest
@@ -212,16 +213,16 @@ longer used.
 
 The `AdvancedSequenceFilter` supports (query parameters of `GET /api/job/{id}` and the download):
 
-| Filter        | Type   | Description                                                                                         |
-|---------------|--------|-----------------------------------------------------------------------------------------------------|
-| `filter`      | String | Match status: `all` (default), `bakta_db`, `aidb_db`, `hash_match` (either DB), `alignment`, `none` |
-| `search`      | String | Case-insensitive search in ID/gene/product                                                          |
-| `min_length`  | usize  | Minimum sequence length                                                                             |
-| `max_length`  | usize  | Maximum sequence length                                                                             |
-| `cog`         | String | COG category letter (A-Z)                                                                           |
-| `ec_class`    | String | EC class prefix (1-7)                                                                               |
-| `has_gene`    | bool   | Only sequences with gene annotation                                                                 |
-| `has_product` | bool   | Only sequences with product annotation                                                              |
+| Filter        | Type   | Description                                                                                                   |
+|---------------|--------|---------------------------------------------------------------------------------------------------------------|
+| `filter`      | String | Match status: `all` (default), `bakta_db`, `bakrep_db`, `aidb_db`, `hash_match` (any DB), `alignment`, `none` |
+| `search`      | String | Case-insensitive search in ID/gene/product                                                                    |
+| `min_length`  | usize  | Minimum sequence length                                                                                       |
+| `max_length`  | usize  | Maximum sequence length                                                                                       |
+| `cog`         | String | COG category letter (A-Z)                                                                                     |
+| `ec_class`    | String | EC class prefix (1-7)                                                                                         |
+| `has_gene`    | bool   | Only sequences with gene annotation                                                                           |
+| `has_product` | bool   | Only sequences with product annotation                                                                        |
 
 ## Environment Variables
 
@@ -232,6 +233,7 @@ The `AdvancedSequenceFilter` supports (query parameters of `GET /api/job/{id}` a
 | `AI_DB_TEMP_DIR`                | Directory for temporary upload files                                  | `/tmp`                             |
 | `AI_DB_JOBS_PATH`               | Path to SQLite jobs database                                          | `/data/jobs.db`                    |
 | `AI_DB_CUSTOM_ANNOTATIONS_PATH` | Path to custom AI-DB database                                         | `/custom-db/custom_annotations.db` |
+| `AI_DB_BAKREP_DB`               | Path to the optional, read-only BakRep DB (`version.json` next to it) | `/bakrep-db/bakrep.db`             |
 | `ADMIN_KPI_SECRET`              | Secret for `X-Admin-Secret` (admin routes return 503 if unset/empty)  | unset                              |
 
 ## Usage

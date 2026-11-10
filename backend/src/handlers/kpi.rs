@@ -42,6 +42,8 @@ pub struct KpiMonthEntry {
     pub hash_matches_bakta: i64,
     /// Hash matches found in the AI-DB annotations DB
     pub hash_matches_aidb: i64,
+    /// Hash matches found in the BakRep DB (0 for months before it existed)
+    pub hash_matches_bakrep: i64,
     /// Bakta annotation jobs started (V1 nucleotide + V2 protein combined)
     pub bakta_jobs_started: i64,
     /// Sequences analyzed via Psos
@@ -97,6 +99,7 @@ pub async fn get_kpi_overview(
             sequences_processed: r.sequences_processed,
             hash_matches_bakta: r.hash_matches_bakta,
             hash_matches_aidb: r.hash_matches_aidb,
+            hash_matches_bakrep: r.hash_matches_bakrep,
             bakta_jobs_started: r.bakta_jobs_started,
             psos_analyses: r.psos_analyses,
             active_owners: r.active_owners,

@@ -72,7 +72,7 @@ aidb download 3f2b8c1e-… --wait        # still running? wait first
 ```
 
 Download filters (same as the web interface's sequence table): 
-- `--only bakta-db|aidb-db|matched|unmatched`
+- `--only bakta-db|bakrep-db|aidb-db|matched|unmatched` (`bakrep-db` needs a server with BakRep support)
 - `--search TEXT`
 - `--min-length` / `--max-length`
 - `--cog CODE`

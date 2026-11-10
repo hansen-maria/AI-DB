@@ -351,7 +351,7 @@ function openBaktaConfig() {
                     <span class="action-card__title">{{ unmatchedSequences.length > 0 ? 'Annotate Unmatched' : 'Re-check AI-DB Entries' }}</span>
                     <span class="action-card__desc" v-if="(unmatchedSequences.length > 0 || recheckCandidates.length > 0) && !isOwner">Only the job owner can annotate sequences or re-check AI-DB entries.</span>
                     <span class="action-card__desc" v-else-if="unmatchedSequences.length > 0">Run Bakta on {{ unmatchedSequences.length.toLocaleString() }} sequences with no database match.</span>
-                    <span class="action-card__desc" v-else-if="recheckCandidates.length > 0">All sequences have a match. {{ recheckCandidates.length.toLocaleString() }} {{ recheckCandidates.length === 1 ? 'match comes' : 'matches come' }} from the AI-DB annotations DB; a new Bakta run can complete missing fields.</span>
+                    <span class="action-card__desc" v-else-if="recheckCandidates.length > 0">All sequences have a match. {{ recheckCandidates.length.toLocaleString() }} {{ recheckCandidates.length === 1 ? 'match comes' : 'matches come' }} from AI-DB · Community; a new Bakta run can complete missing fields.</span>
                     <span class="action-card__desc" v-else>All sequences are annotated.</span>
                     <label v-if="isOwner && recheckCandidates.length > 0" class="annotate-card-recheck" @click.stop>
                       <input type="checkbox" v-model="includeRecheck" />
@@ -377,7 +377,7 @@ function openBaktaConfig() {
                   </template>
                   <template v-else-if="bakta.baktaResult.value">
                     <span class="action-card__title">Annotation complete</span>
-                    <span class="action-card__desc">{{ bakta.baktaResult.value.featureCount ?? '?' }} features found.<span v-if="bakta.baktaIngestResult.value"> Saved to the AI-DB annotations DB: {{ bakta.baktaIngestResult.value.ingested }} new, {{ bakta.baktaIngestResult.value.updated }} existing entries completed.</span></span>
+                    <span class="action-card__desc">{{ bakta.baktaResult.value.featureCount ?? '?' }} features found.<span v-if="bakta.baktaIngestResult.value"> Saved to AI-DB · Community: {{ bakta.baktaIngestResult.value.ingested }} new, {{ bakta.baktaIngestResult.value.updated }} existing entries completed.</span></span>
                     <div class="annotate-card-actions">
                       <button v-if="detectedSequenceType === 'nucleotide'" class="annotate-card-configure" @click.stop="openBaktaConfig">View results →</button>
                     </div>

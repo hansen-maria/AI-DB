@@ -903,6 +903,7 @@ pub fn init_kpi_tables(conn: &Connection) -> Result<(), rusqlite::Error> {
             sequences_processed INTEGER NOT NULL DEFAULT 0,
             hash_matches_bakta  INTEGER NOT NULL DEFAULT 0,
             hash_matches_aidb   INTEGER NOT NULL DEFAULT 0,
+            hash_matches_bakrep INTEGER NOT NULL DEFAULT 0,
             bakta_jobs_started  INTEGER NOT NULL DEFAULT 0,
             psos_analyses       INTEGER NOT NULL DEFAULT 0,
             updated_at          TEXT NOT NULL
@@ -913,6 +914,17 @@ pub fn init_kpi_tables(conn: &Connection) -> Result<(), rusqlite::Error> {
             PRIMARY KEY (month, owner_id)
         );",
     )?;
+    // Additive migration for KPI DBs created before the BakRep source existed.
+    // `ADD COLUMN IF NOT EXISTS` is not available in older SQLite versions, so
+    // the "duplicate column name" error is treated as "already migrated".
+    match conn.execute(
+        "ALTER TABLE kpi_monthly ADD COLUMN hash_matches_bakrep INTEGER NOT NULL DEFAULT 0",
+        [],
+    ) {
+        Ok(_) => tracing::info!("KPI DB migrated: added kpi_monthly.hash_matches_bakrep"),
+        Err(e) if e.to_string().contains("duplicate column name") => {}
+        Err(e) => return Err(e),
+    }
     tracing::info!("KPI tables initialized");
     Ok(())
 }
@@ -931,13 +943,20 @@ fn ensure_month_row(conn: &Connection, month: &str) -> Result<(), rusqlite::Erro
     Ok(())
 }
 
+/// Hash matches of one job, by source DB (KPI counters).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct MatchCounts {
+    pub bakta: usize,
+    pub bakrep: usize,
+    pub aidb: usize,
+}
+
 /// Records a finalized job (Completed or Failed) in the current month's bucket.
 /// Called once per job, when it reaches its final state – not on every progress tick.
 pub fn record_job_completion(
     conn: &Connection,
     job: &JobResponse,
-    bakta_matches: usize,
-    aidb_matches: usize,
+    matches: MatchCounts,
 ) -> Result<(), rusqlite::Error> {
     let month = current_month();
     ensure_month_row(conn, &month)?;
@@ -955,14 +974,16 @@ pub fn record_job_completion(
              sequences_processed = sequences_processed + ?3,
              hash_matches_bakta  = hash_matches_bakta + ?4,
              hash_matches_aidb   = hash_matches_aidb + ?5,
-             updated_at          = ?6
+             hash_matches_bakrep = hash_matches_bakrep + ?6,
+             updated_at          = ?7
          WHERE month = ?1",
         params![
             month,
             failed_increment,
             job.processed_count as i64,
-            bakta_matches as i64,
-            aidb_matches as i64,
+            matches.bakta as i64,
+            matches.aidb as i64,
+            matches.bakrep as i64,
             Utc::now().to_rfc3339(),
         ],
     )?;
@@ -984,8 +1005,7 @@ pub fn record_job_completion(
 pub fn record_job_retry_completion(
     conn: &Connection,
     job: &JobResponse,
-    bakta_matches: usize,
-    aidb_matches: usize,
+    matches: MatchCounts,
 ) -> Result<(), rusqlite::Error> {
     let month = current_month();
     ensure_month_row(conn, &month)?;
@@ -995,13 +1015,15 @@ pub fn record_job_retry_completion(
              sequences_processed = sequences_processed + ?2,
              hash_matches_bakta  = hash_matches_bakta + ?3,
              hash_matches_aidb   = hash_matches_aidb + ?4,
-             updated_at          = ?5
+             hash_matches_bakrep = hash_matches_bakrep + ?5,
+             updated_at          = ?6
          WHERE month = ?1",
         params![
             month,
             job.processed_count as i64,
-            bakta_matches as i64,
-            aidb_matches as i64,
+            matches.bakta as i64,
+            matches.aidb as i64,
+            matches.bakrep as i64,
             Utc::now().to_rfc3339(),
         ],
     )?;
@@ -1054,6 +1076,7 @@ pub struct KpiMonthRow {
     pub sequences_processed: i64,
     pub hash_matches_bakta: i64,
     pub hash_matches_aidb: i64,
+    pub hash_matches_bakrep: i64,
     pub bakta_jobs_started: i64,
     pub psos_analyses: i64,
     pub active_owners: i64,
@@ -1064,7 +1087,8 @@ pub fn get_kpi_overview(conn: &Connection) -> Result<Vec<KpiMonthRow>, rusqlite:
     let mut stmt = conn.prepare(
         "SELECT m.month, m.jobs_created, m.jobs_failed, m.sequences_processed,
                 m.hash_matches_bakta, m.hash_matches_aidb, m.bakta_jobs_started, m.psos_analyses,
-                (SELECT COUNT(*) FROM kpi_monthly_owners o WHERE o.month = m.month) AS active_owners
+                (SELECT COUNT(*) FROM kpi_monthly_owners o WHERE o.month = m.month) AS active_owners,
+                m.hash_matches_bakrep
          FROM kpi_monthly m
          ORDER BY m.month DESC",
     )?;
@@ -1081,6 +1105,7 @@ pub fn get_kpi_overview(conn: &Connection) -> Result<Vec<KpiMonthRow>, rusqlite:
                 bakta_jobs_started: row.get(6)?,
                 psos_analyses: row.get(7)?,
                 active_owners: row.get(8)?,
+                hash_matches_bakrep: row.get(9)?,
             })
         })?
         .filter_map(|r| r.ok())
@@ -1347,5 +1372,47 @@ mod owner_migration_tests {
         // second run: nothing left to migrate
         assert_eq!(migrate_owner_ids_to_digest(&conn).unwrap(), 0);
         assert_eq!(migrate_kpi_owner_ids_to_digest(&conn).unwrap(), 0);
+    }
+}
+
+#[cfg(test)]
+mod kpi_tests {
+    use super::*;
+
+    /// KPI DBs created before the BakRep source get the new column added,
+    /// existing rows are kept, and a second init is a no-op.
+    #[test]
+    fn kpi_migration_adds_bakrep_column() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE kpi_monthly (
+                month TEXT PRIMARY KEY,
+                jobs_created INTEGER NOT NULL DEFAULT 0,
+                jobs_failed INTEGER NOT NULL DEFAULT 0,
+                sequences_processed INTEGER NOT NULL DEFAULT 0,
+                hash_matches_bakta INTEGER NOT NULL DEFAULT 0,
+                hash_matches_aidb INTEGER NOT NULL DEFAULT 0,
+                bakta_jobs_started INTEGER NOT NULL DEFAULT 0,
+                psos_analyses INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL
+             );
+             INSERT INTO kpi_monthly (month, jobs_created, hash_matches_bakta, updated_at)
+             VALUES ('2026-10', 3, 42, '2026-10-31T00:00:00Z');",
+        )
+        .unwrap();
+
+        init_kpi_tables(&conn).unwrap();
+        init_kpi_tables(&conn).unwrap(); // idempotent
+
+        conn.execute(
+            "UPDATE kpi_monthly SET hash_matches_bakrep = hash_matches_bakrep + 7 WHERE month = '2026-10'",
+            [],
+        )
+        .unwrap();
+        let rows = get_kpi_overview(&conn).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].jobs_created, 3);
+        assert_eq!(rows[0].hash_matches_bakta, 42);
+        assert_eq!(rows[0].hash_matches_bakrep, 7);
     }
 }

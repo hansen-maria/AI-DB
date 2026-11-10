@@ -50,6 +50,23 @@ pub fn get_bakta_db_release(bakta_db_dir: &Path) -> Option<String> {
     }
 }
 
+/// Reads the BakRep DB label from the `version.json` written by
+/// `scripts/bakrep/aidb_bakrep.py finalize` (`{"label": "BakRep v2", "date": "2026-11-20", ...}`).
+///
+/// Returns e.g. `"BakRep v2 (2026-11-20)"`, or `None` if the file is missing.
+pub fn get_bakrep_db_release(bakrep_db_dir: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(bakrep_db_dir.join("version.json")).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let label = value
+        .get("label")
+        .and_then(|v| v.as_str())
+        .unwrap_or("BakRep");
+    match value.get("date").and_then(|v| v.as_str()) {
+        Some(d) => Some(format!("{label} ({d})")),
+        None => Some(label.to_string()),
+    }
+}
+
 /// Performs hash lookup in a single database connection (Bakta or AI-DB annotations DB).
 /// Reads the standard ups schema (no product column).
 fn lookup_in_db(conn: &Connection, hash_bytes: &[u8], seq_length: usize) -> HashLookupResult {
@@ -102,13 +119,23 @@ fn lookup_in_db(conn: &Connection, hash_bytes: &[u8], seq_length: usize) -> Hash
     }
 }
 
-/// Performs hash lookup in the AI-DB annotations DB.
-/// Reads the extended ups schema which includes a direct `product` column.
+/// Performs hash lookup in a database with the *extended* ups schema
+/// (`ups` with an additional `product` column, plus `ips`/`psc`).
+///
+/// Used for two databases that share this schema:
+///   - the AI-DB annotations DB (`custom_annotations.db`, read-write)
+///   - the BakRep DB (`bakrep.db`, read-only`)
+///
 /// When uniref100_id is set the ips/psc chain is followed as usual.
 /// When uniref100_id is null the product column is used directly (hypothetical proteins).
-fn lookup_in_aidb(conn: &Connection, hash_bytes: &[u8], seq_length: usize) -> HashLookupResult {
+fn lookup_in_extended_db(
+    conn: &Connection,
+    hash_bytes: &[u8],
+    seq_length: usize,
+) -> HashLookupResult {
     // `updated_at` reflects when this entry was last (re-)annotated via a Bakta ingest –
     // used as the per-row "release" timestamp shown to the user for AI-DB matches.
+    // In the BakRep DB it is NULL; the caller sets the release from version.json.
     let query = "SELECT length, uniparc_id, ncbi_nrp_id, uniref100_id, product, updated_at \
                  FROM ups WHERE hash = ?";
 
@@ -165,14 +192,17 @@ pub fn lookup_hash_in_bakta(
     lookup_in_db(conn, hash_bytes, seq_length)
 }
 
-/// Performs hash lookup: checks Bakta DB first, then falls back to AI-DB annotations DB.
+/// Performs hash lookup: Bakta DB first, then the BakRep DB, then the AI-DB
+/// annotations DB.
 ///
 /// Returns `(result, source)` where `source` is:
 ///   - `"bakta_db"`  – found in the official Bakta database
+///   - `"bakrep_db"` – found in the BakRep DB (BakRep proteins missing from Bakta)
 ///   - `"aidb_db"`   – found in the local AI-DB annotations database
-///   - `""`          – not found in either database (unmatched)
+///   - `""`          – not found in any database (unmatched)
 pub fn lookup_hash(
     bakta_conn: Option<&Connection>,
+    bakrep_conn: Option<&Connection>,
     aidb_conn: Option<&Connection>,
     hash_bytes: &[u8],
     seq_length: usize,
@@ -184,9 +214,19 @@ pub fn lookup_hash(
             return (result, "bakta_db");
         }
     }
-    // 2. Fall back to AI-DB annotations DB (extended schema with ups.product)
+    // 2. BakRep DB – same extended schema as the AI-DB annotations DB. Its
+    //    release label comes from version.json, so `updated_at` (NULL there)
+    //    is not used as release.
+    if let Some(conn) = bakrep_conn {
+        let mut result = lookup_in_extended_db(conn, hash_bytes, seq_length);
+        if result.found {
+            result.annotation_release = None;
+            return (result, "bakrep_db");
+        }
+    }
+    // 3. Fall back to AI-DB annotations DB (extended schema with ups.product)
     if let Some(conn) = aidb_conn {
-        let result = lookup_in_aidb(conn, hash_bytes, seq_length);
+        let result = lookup_in_extended_db(conn, hash_bytes, seq_length);
         if result.found {
             return (result, "aidb_db");
         }
@@ -378,8 +418,20 @@ pub fn process_job_from_file(state: &AppState, job_id: &str, file_path: &Path, i
 
     // Try to open database connections
     let db_conn = state.open_db_connection();
+    let bakrep_conn = state.open_bakrep_db();
     let aidb_conn = state.open_custom_annotations_db();
     let _db_available = db_conn.is_some() || aidb_conn.is_some();
+    let bakrep_release = state
+        .bakrep_db_path()
+        .and_then(|p| p.parent())
+        .and_then(get_bakrep_db_release);
+    if bakrep_conn.is_some() {
+        tracing::info!(
+            "Job {}: BakRep DB ✓ ({})",
+            job_id,
+            bakrep_release.as_deref().unwrap_or("no version.json")
+        );
+    }
 
     // Read the Bakta DB release/version once for the whole job (cheap, avoids
     // re-reading version.json for every single sequence).
@@ -391,17 +443,29 @@ pub fn process_job_from_file(state: &AppState, job_id: &str, file_path: &Path, i
         tracing::info!("Job {}: Bakta DB release = {}", job_id, release);
     }
 
-    match (db_conn.is_some(), aidb_conn.is_some()) {
-        (true,  true)  => tracing::info!(
-            "Job {}: Bakta DB ✓  AI-DB annotations DB ✓  (two-tier lookup active)", job_id
+    match (db_conn.is_some(), aidb_conn.is_some(), bakrep_conn.is_some()) {
+        (true,  true,  true)  => tracing::info!(
+            "Job {}: Bakta DB ✓  AI-DB annotations DB ✓  BakRep DB ✓  (three-tier lookup active)", job_id
         ),
-        (true,  false) => tracing::info!(
-            "Job {}: Bakta DB ✓  AI-DB annotations DB –  (custom_annotations.db not found, run setup script)", job_id
+        (true,  true,  false) => tracing::info!(
+            "Job {}: Bakta DB ✓  AI-DB annotations DB ✓  BakRep DB –  (BakRep DB not found, two-tier lookup active)", job_id
         ),
-        (false, true)  => tracing::warn!(
-            "Job {}: Bakta DB –  AI-DB annotations DB ✓  (Bakta DB unavailable, using AI-DB annotations DB only)", job_id
+        (true,  false, true)  => tracing::info!(
+            "Job {}: Bakta DB ✓  AI-DB annotations DB –  BakRep DB ✓  (AI-DB annotations DB not found, two-tier lookup active)", job_id
         ),
-        (false, false) => tracing::warn!(
+        (true,  false, false) => tracing::info!(
+            "Job {}: Bakta DB ✓  AI-DB annotations DB –  BakRep DB –  (only Bakta DB available)", job_id
+        ),
+        (false, true,  true)  => tracing::info!(
+            "Job {}: Bakta DB –  AI-DB annotations DB ✓  BakRep DB ✓  (Bakta DB not found, two-tier lookup active)", job_id
+        ),
+        (false, true, false) => tracing::warn!(
+            "Job {}: Bakta DB –  AI-DB annotations DB ✓  BakRep DB –  (Bakta DB and BakRep DB unavailable, using AI-DB annotations DB only)", job_id
+        ),
+        (false, false, true) => tracing::warn!(
+            "Job {}: Bakta DB –  AI-DB annotations DB –  BakRep DB ✓  (Bakta DB and AI-DB annotations DB unavailable, using BakRep DB only)", job_id
+        ),
+        (false, false, false) => tracing::warn!(
             "Job {}: Bakta DB –  AI-DB annotations DB –  (no database available, all sequences will be unmatched)", job_id
         ),
     }
@@ -433,6 +497,7 @@ pub fn process_job_from_file(state: &AppState, job_id: &str, file_path: &Path, i
     // Process without pre-allocation (we don't know the count)
     let mut sequence_infos = Vec::new();
     let mut bakta_db_matches: usize = 0;
+    let mut bakrep_db_matches: usize = 0;
     let mut aidb_db_matches: usize = 0;
     let alignment_matches = 0;
     let mut processed_count = 0;
@@ -449,6 +514,7 @@ pub fn process_job_from_file(state: &AppState, job_id: &str, file_path: &Path, i
         // Sequences not found in either DB are listed as unmatched.
         let (lookup_result, lookup_source) = lookup_hash(
             db_conn.as_ref(),
+            bakrep_conn.as_ref(),
             aidb_conn.as_ref(),
             &hash_bytes,
             seq_length,
@@ -461,6 +527,14 @@ pub fn process_job_from_file(state: &AppState, job_id: &str, file_path: &Path, i
                     format_annotation(&lookup_result),
                     Some("bakta_db".to_string()),
                     bakta_release.clone(),
+                )
+            }
+            "bakrep_db" => {
+                bakrep_db_matches += 1;
+                (
+                    format_annotation(&lookup_result),
+                    Some("bakrep_db".to_string()),
+                    bakrep_release.clone(),
                 )
             }
             "aidb_db" => {
@@ -509,7 +583,7 @@ pub fn process_job_from_file(state: &AppState, job_id: &str, file_path: &Path, i
         // Update progress every BATCH_SIZE sequences
         if batch_count >= BATCH_SIZE {
             batch_count = 0;
-            let total_matches = bakta_db_matches + aidb_db_matches;
+            let total_matches = bakta_db_matches + bakrep_db_matches + aidb_db_matches;
             {
                 let mut jobs = state.jobs_mut();
                 if let Some(job) = jobs.get_mut(job_id) {
@@ -535,7 +609,7 @@ pub fn process_job_from_file(state: &AppState, job_id: &str, file_path: &Path, i
 
     apply_sightings(aidb_conn.as_ref(), job_id, sighted, &mut sequence_infos);
 
-    let total_matches = bakta_db_matches + aidb_db_matches;
+    let total_matches = bakta_db_matches + bakrep_db_matches + aidb_db_matches;
     let unmatched = processed_count.saturating_sub(total_matches);
 
     // Final update with results
@@ -573,14 +647,22 @@ pub fn process_job_from_file(state: &AppState, job_id: &str, file_path: &Path, i
     // Persist final results to database
     if let Some(job) = final_job {
         state.save_job(&job);
-        state.record_job_kpi(&job, bakta_db_matches, aidb_db_matches);
+        state.record_job_kpi(
+            &job,
+            storage::MatchCounts {
+                bakta: bakta_db_matches,
+                bakrep: bakrep_db_matches,
+                aidb: aidb_db_matches,
+            },
+        );
     }
 
     tracing::info!(
-        "Job {} completed: {} sequences | {} Bakta DB | {} AI-DB annotations DB | {} unmatched ({:.1}% matched)",
+        "Job {} completed: {} sequences | {} Bakta DB | {} BakRep DB | {} AI-DB annotations DB | {} unmatched ({:.1}% matched)",
         job_id,
         processed_count,
         bakta_db_matches,
+        bakrep_db_matches,
         aidb_db_matches,
         unmatched,
         if processed_count > 0 {
@@ -647,15 +729,21 @@ pub fn reannotate_sequences(state: &AppState, job_id: &str, sequences: Vec<Seque
     );
 
     let db_conn = state.open_db_connection();
+    let bakrep_conn = state.open_bakrep_db();
     let aidb_conn = state.open_custom_annotations_db();
     let bakta_release = state
         .bakta_db_path()
         .and_then(|p| p.parent())
         .and_then(get_bakta_db_release);
+    let bakrep_release = state
+        .bakrep_db_path()
+        .and_then(|p| p.parent())
+        .and_then(get_bakrep_db_release);
 
     let total = sequences.len();
     let mut updated = Vec::with_capacity(total);
     let mut bakta_matches = 0usize;
+    let mut bakrep_matches = 0usize;
     let mut aidb_matches = 0usize;
     let mut batch_count = 0usize;
     let mut sighted: Vec<(Option<usize>, Vec<u8>)> = Vec::new();
@@ -683,10 +771,16 @@ pub fn reannotate_sequences(state: &AppState, job_id: &str, sequences: Vec<Seque
             });
 
         let updated_seq = if let Some(ref hb) = hash_bytes {
-            let (result, source) =
-                lookup_hash(db_conn.as_ref(), aidb_conn.as_ref(), hb, seq.length);
+            let (result, source) = lookup_hash(
+                db_conn.as_ref(),
+                bakrep_conn.as_ref(),
+                aidb_conn.as_ref(),
+                hb,
+                seq.length,
+            );
             match source {
                 "bakta_db" => bakta_matches += 1,
+                "bakrep_db" => bakrep_matches += 1,
                 "aidb_db" => aidb_matches += 1,
                 _ => {}
             }
@@ -694,6 +788,7 @@ pub fn reannotate_sequences(state: &AppState, job_id: &str, sequences: Vec<Seque
                 sighted.push((Some(i), hb.clone()));
                 let annotation_release = match source {
                     "bakta_db" => bakta_release.clone(),
+                    "bakrep_db" => bakrep_release.clone(),
                     "aidb_db" => result.annotation_release.clone(),
                     _ => None,
                 };
@@ -742,7 +837,7 @@ pub fn reannotate_sequences(state: &AppState, job_id: &str, sequences: Vec<Seque
 
         if batch_count >= BATCH_SIZE {
             batch_count = 0;
-            let matches = bakta_matches + aidb_matches;
+            let matches = bakta_matches + bakrep_matches + aidb_matches;
             let mut jobs = state.jobs_mut();
             if let Some(job) = jobs.get_mut(job_id) {
                 job.processed_count = i + 1;
@@ -752,7 +847,7 @@ pub fn reannotate_sequences(state: &AppState, job_id: &str, sequences: Vec<Seque
         }
     }
 
-    let total_matches = bakta_matches + aidb_matches;
+    let total_matches = bakta_matches + bakrep_matches + aidb_matches;
 
     apply_sightings(aidb_conn.as_ref(), job_id, sighted, &mut updated);
 
@@ -775,13 +870,21 @@ pub fn reannotate_sequences(state: &AppState, job_id: &str, sequences: Vec<Seque
 
     if let Some(job) = final_job {
         state.save_job(&job);
-        state.record_job_retry_kpi(&job, bakta_matches, aidb_matches);
+        state.record_job_retry_kpi(
+            &job,
+            storage::MatchCounts {
+                bakta: bakta_matches,
+                bakrep: bakrep_matches,
+                aidb: aidb_matches,
+            },
+        );
     }
 
     tracing::info!(
-        "Job {}: retry complete – {} Bakta DB, {} AI-DB annotations DB ({:.1}% matched)",
+        "Job {}: retry complete – {} Bakta DB, {} BakRep DB, {} AI-DB annotations DB ({:.1}% matched)",
         job_id,
         bakta_matches,
+        bakrep_matches,
         aidb_matches,
         if total > 0 {
             total_matches as f64 / total as f64 * 100.0

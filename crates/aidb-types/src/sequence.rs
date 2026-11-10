@@ -65,3 +65,6 @@ pub struct SequenceInfo {
 pub const SOURCE_BAKTA_DB: &str = "bakta_db";
 /// `annotation_source` value of matches from the AI-DB annotations DB
 pub const SOURCE_AIDB_DB: &str = "aidb_db";
+/// `annotation_source` value of matches from the BakRep DB
+/// (BakRep proteins not contained in the Bakta DB, annotated with bakta_proteins)
+pub const SOURCE_BAKREP_DB: &str = "bakrep_db";

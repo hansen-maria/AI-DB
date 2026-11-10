@@ -39,6 +39,24 @@ pub async fn info(client: &Client, output: OutputFormat) -> Result<()> {
     }
 
     println!();
+    println!("BakRep DB");
+    match &info.bakrep_db {
+        Some(b) if b.available => print_rows(&[
+            ("  Status", "available".to_string()),
+            (
+                "  Release",
+                b.release.clone().unwrap_or_else(|| "unknown".to_string()),
+            ),
+            ("  Entries", entries(b.ups_entries)),
+        ]),
+        Some(_) => print_rows(&[("  Status", "not installed".to_string())]),
+        None => print_rows(&[(
+            "  Status",
+            "unknown (server predates BakRep support)".to_string(),
+        )]),
+    }
+
+    println!();
     println!("AI-DB annotations DB");
     if info.aidb_db.available {
         print_rows(&[

@@ -19,6 +19,21 @@ pub struct HealthCheckResponse {
     #[serde(default)]
     pub api_version: u32,
     pub bakta_db: BaktaDbHealth,
+    /// Status of the optional BakRep DB.
+    /// `None` when talking to a server that predates this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bakrep_db: Option<BakrepDbHealth>,
+}
+
+/// BakRep DB Health Check Response
+#[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct BakrepDbHealth {
+    /// Database status
+    /// Possible values: connected, error, not_installed
+    pub status: String,
+    /// Filesystem path to the BakRep database (if installed)
+    pub path: Option<String>,
 }
 
 /// Bakta Database Health Check Response
@@ -54,6 +69,24 @@ pub struct DbInfoResponse {
     pub error: Option<String>,
     /// Status of the AI-DB annotations DB
     pub aidb_db: AidbDbInfo,
+    /// Status of the BakRep DB.
+    /// `None` when talking to a server that predates this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bakrep_db: Option<BakrepDbInfo>,
+}
+
+/// BakRep DB status (part of `DbInfoResponse`)
+#[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct BakrepDbInfo {
+    /// Indicates whether the BakRep DB is installed and accessible
+    pub available: bool,
+    /// Number of entries (from `version.json`; omitted if unknown)
+    #[serde(default)]
+    pub ups_entries: Option<i64>,
+    /// Release label, e.g. "BakRep v2 (2026-11-20)" (omitted if unknown)
+    #[serde(default)]
+    pub release: Option<String>,
 }
 
 /// AI-DB annotations DB status (part of `DbInfoResponse`)

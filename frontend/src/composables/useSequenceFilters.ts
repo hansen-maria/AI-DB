@@ -46,6 +46,8 @@ export function useSequenceFilters(
         if (!seq.annotation_source) return false
       } else if (currentFilter.value === 'bakta_db') {
         if (seq.annotation_source !== 'bakta_db') return false
+      } else if (currentFilter.value === 'bakrep_db') {
+        if (seq.annotation_source !== 'bakrep_db') return false
       } else if (currentFilter.value === 'aidb_db') {
         if (seq.annotation_source !== 'aidb_db') return false
       } else if (currentFilter.value === 'none') {

@@ -37,7 +37,9 @@ pub use custom_db::{
     CustomAnnotationEntry, IngestCustomAnnotationsRequest, IngestCustomAnnotationsResponse,
 };
 pub use error::ErrorResponse;
-pub use health::{AidbDbInfo, BaktaDbHealth, DbInfoResponse, HealthCheckResponse};
+pub use health::{
+    AidbDbInfo, BakrepDbHealth, BakrepDbInfo, BaktaDbHealth, DbInfoResponse, HealthCheckResponse,
+};
 pub use job::{
     BulkDeleteRequest, BulkDeleteResponse, JobCreateResponse, JobResponse, JobStatus, JobSummary,
     RenameJobRequest,
@@ -48,7 +50,7 @@ pub use pagination::{
     PaginationInfo, SequenceFilterQuery, DEFAULT_PER_PAGE, MAX_PER_PAGE,
 };
 pub use psos::{PsosResult, PsosResultsResponse, SavePsosResultsRequest, SavePsosResultsResponse};
-pub use sequence::{SequenceInfo, SOURCE_AIDB_DB, SOURCE_BAKTA_DB};
+pub use sequence::{SequenceInfo, SOURCE_AIDB_DB, SOURCE_BAKREP_DB, SOURCE_BAKTA_DB};
 pub use stats::{
     cog_category_name, ec_class_name, CogCategory, CountItem, FunctionalStats, GoTermStats,
 };

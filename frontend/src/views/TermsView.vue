@@ -1,7 +1,7 @@
 <script setup lang="ts">
 const REPO_URL = 'https://github.com/hansen-maria/AI-DB'
 
-const LAST_EDITED = '2026-10-19'
+const LAST_EDITED = '2026-11-10'
 const lastEditedLabel = `Last edited: ${new Date(LAST_EDITED).toLocaleDateString('en-GB', {
   day: '2-digit',
   month: 'long',
@@ -58,7 +58,7 @@ const lastEditedLabel = `Last edited: ${new Date(LAST_EDITED).toLocaleDateString
           <li>submit data other than protein sequences intended for annotation, in particular data containing personally identifiable information (PII) or human genetic data;</li>
           <li>attempt to circumvent rate limits, upload limits, or access controls;</li>
           <li>use the service in a manner that disrupts or degrades performance for other users, for example through automated mass submissions;</li>
-          <li>deliberately submit sequences or trigger annotations intended to corrupt or manipulate the AI-DB annotations DB;</li>
+          <li>deliberately submit sequences or trigger annotations intended to corrupt or manipulate AI-DB · Community;</li>
           <li>submit data whose processing would violate applicable law or third-party rights.</li>
         </ul>
       </section>
@@ -77,9 +77,9 @@ const lastEditedLabel = `Last edited: ${new Date(LAST_EDITED).toLocaleDateString
       <section class="legal-section">
         <h3>External Annotation Services</h3>
         <p>
-          Sequences without a match in the Bakta database or the AI-DB annotations DB can
-          optionally be forwarded to external annotation services (Bakta Web API, including
-          Baktfold, and Psos). Forwarding is triggered only by you. The use of these services
+          Sequences without a match in the Bakta database or in AI-DB (AI-DB · BakRep or
+          AI-DB · Community) can optionally be forwarded to external annotation services
+          (Bakta Web API, including Baktfold, and Psos). Forwarding is triggered only by you. The use of these services
           is additionally subject to their respective terms of service. The Operator has no
           influence on their availability, processing times, or results.
         </p>
@@ -90,7 +90,10 @@ const lastEditedLabel = `Last edited: ${new Date(LAST_EDITED).toLocaleDateString
         <p>
           AI-DB is intended as a fast first step in an annotation pipeline. Annotations are
           assigned on the basis of exact sequence identity and may be incomplete, outdated,
-          or incorrect, in particular annotations contributed by the community. Results are
+          or incorrect, in particular annotations contributed by the community. Annotations
+          in AI-DB · BakRep were computed automatically with Bakta for proteins from the
+          public BakRep genome collection that are not contained in the Bakta database;
+          they have not been curated manually. Results are
           provided for research purposes only and should be verified before being used as
           the basis for further scientific conclusions or publications.
         </p>
@@ -112,17 +115,17 @@ const lastEditedLabel = `Last edited: ${new Date(LAST_EDITED).toLocaleDateString
       </section>
 
       <section class="legal-section">
-        <h3>Contribution to the AI-DB Annotations DB</h3>
+        <h3>Contribution to AI-DB · Community</h3>
         <p>
           By default, annotations obtained for previously unmatched sequences are added to
-          the AI-DB annotations DB and made available to all users for future lookups. Only
+          AI-DB · Community and made available to all users for future lookups. Only
           the MD5 hash of each sequence and the derived annotation are stored — not the
           sequence itself and no reference to your job. You can disable this contribution at
           any time in the job view before starting an external analysis.
         </p>
         <p>
           By leaving the contribution enabled, you agree that the contributed annotations may
-          be stored permanently, used, and made available as part of the AI-DB annotations DB
+          be stored permanently, used, and made available as part of AI-DB · Community
           without restriction. Contributed entries cannot be assigned to individual users and
           therefore cannot be withdrawn retrospectively.
         </p>

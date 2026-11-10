@@ -24,6 +24,9 @@ const DEFAULT_JOBS_DB: &str = "/data/jobs.db";
 /// distinct from jobs.db, which is only retained for 30 days)
 const DEFAULT_KPI_DB: &str = "/kpi-db/kpi.db";
 
+/// Default path for the BakRep DB (read-only)
+const DEFAULT_BAKREP_DB: &str = "/bakrep-db/bakrep.db";
+
 /// Application state shared across all handlers
 #[derive(Clone)]
 pub struct AppState {
@@ -42,6 +45,9 @@ pub struct AppState {
     kpi_db_path: PathBuf,
     /// Path to AI-DB annotations DB (read-write, same schema as Bakta DB)
     custom_annotations_db_path: PathBuf,
+    /// Path to the BakRep DB (read-only, same schema as the AI-DB annotations DB).
+    /// `None` when not configured / not present – lookups then skip it.
+    bakrep_db_path: Option<PathBuf>,
     /// Set once the provenance/status schema was ensured on the annotations DB
     custom_schema_ready: Arc<AtomicBool>,
 }
@@ -98,6 +104,20 @@ impl AppState {
                     .unwrap_or(std::path::Path::new("/data"))
                     .join("custom_annotations.db")
             });
+
+        // BakRep DB (optional, read-only). Missing file = feature off, no error.
+        let bakrep_db_path = {
+            let path = env::var("AI_DB_BAKREP_DB")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| PathBuf::from(DEFAULT_BAKREP_DB));
+            if path.exists() {
+                tracing::info!("BakRep DB found at {:?}", path);
+                Some(path)
+            } else {
+                tracing::info!("No BakRep DB at {:?} – BakRep lookups disabled", path);
+                None
+            }
+        };
 
         // Ensure parent directories exist
         if let Some(parent) = jobs_db_path.parent() {
@@ -200,6 +220,7 @@ impl AppState {
             jobs_db_path,
             kpi_db_path,
             custom_annotations_db_path,
+            bakrep_db_path,
             custom_schema_ready: Arc::new(AtomicBool::new(false)),
         };
 
@@ -309,6 +330,23 @@ impl AppState {
                 })
                 .ok()
         })
+    }
+
+    /// Opens a read-only connection to the BakRep DB, if one is installed.
+    pub fn open_bakrep_db(&self) -> Option<Connection> {
+        self.bakrep_db_path.as_ref().and_then(|path| {
+            Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .map_err(|e| {
+                    tracing::error!("Failed to open BakRep DB: {}", e);
+                    e
+                })
+                .ok()
+        })
+    }
+
+    /// Returns the BakRep DB path if installed
+    pub fn bakrep_db_path(&self) -> Option<&PathBuf> {
+        self.bakrep_db_path.as_ref()
     }
 
     /// Opens a read-write connection to the AI-DB annotations DB.
@@ -506,17 +544,12 @@ impl AppState {
 
     /// Records a finalized job (Completed or Failed) for monthly KPI tracking.
     /// Call exactly once per job, when it reaches its final state.
-    pub fn record_job_kpi(
-        &self,
-        job: &crate::models::JobResponse,
-        bakta_matches: usize,
-        aidb_matches: usize,
-    ) {
+    pub fn record_job_kpi(&self, job: &crate::models::JobResponse, matches: storage::MatchCounts) {
         let Some(conn) = self.open_kpi_db() else {
             tracing::warn!("Failed to open KPI database for recording");
             return;
         };
-        if let Err(e) = storage::record_job_completion(&conn, job, bakta_matches, aidb_matches) {
+        if let Err(e) = storage::record_job_completion(&conn, job, matches) {
             tracing::warn!("Failed to record job KPI for {}: {}", job.job_id, e);
         }
     }
@@ -525,16 +558,13 @@ impl AppState {
     pub fn record_job_retry_kpi(
         &self,
         job: &crate::models::JobResponse,
-        bakta_matches: usize,
-        aidb_matches: usize,
+        matches: storage::MatchCounts,
     ) {
         let Some(conn) = self.open_kpi_db() else {
             tracing::warn!("Failed to open KPI database for recording");
             return;
         };
-        if let Err(e) =
-            storage::record_job_retry_completion(&conn, job, bakta_matches, aidb_matches)
-        {
+        if let Err(e) = storage::record_job_retry_completion(&conn, job, matches) {
             tracing::warn!("Failed to record job retry KPI for {}: {}", job.job_id, e);
         }
     }

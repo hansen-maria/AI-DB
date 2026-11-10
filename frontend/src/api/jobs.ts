@@ -12,7 +12,7 @@ const API_BASE = '/api';
 // ============================================================================
 
 export type JobStatus = 'pending' | 'processing' | 'completed' | 'failed';
-export type SequenceFilter = 'all' | 'hash_match' | 'bakta_db' | 'aidb_db' | 'alignment' | 'none';
+export type SequenceFilter = 'all' | 'hash_match' | 'bakta_db' | 'bakrep_db' | 'aidb_db' | 'alignment' | 'none';
 
 /** Advanced filter options for sequence search */
 export interface AdvancedFilterOptions {
@@ -41,7 +41,7 @@ export interface SequenceInfo {
     sequence?: string | null;  // Amino acid sequence (for Psos analysis)
     annotation?: string | null;  // Legacy field
     annotation_source?: string | null;  // Used for filtering
-    /** Release/version of the source DB (bakta_db) or ingestion timestamp (aidb_db) */
+    /** Release/version of the source DB (bakta_db, bakrep_db) or ingestion timestamp (aidb_db) */
     annotation_release?: string | null;
     /** In how many jobs AI-DB has seen this hash (at most once per job), incl. this one */
     seen_count?: number | null;
@@ -179,6 +179,11 @@ export interface HealthCheckResponse {
         status: 'connected' | 'error' | 'not_found' | 'not_configured';
         path: string | null;
     };
+    /** Optional BakRep DB (absent on servers without BakRep support) */
+    bakrep_db?: {
+        status: 'connected' | 'error' | 'not_installed';
+        path: string | null;
+    };
 }
 
 export interface DbInfoResponse {
@@ -195,6 +200,14 @@ export interface DbInfoResponse {
         ups_entries?: number | null;
         /** ISO-8601 timestamp of the most recently (re-)annotated entry */
         last_updated?: string | null;
+    };
+    /** BakRep DB info (absent on servers without BakRep support) */
+    bakrep_db?: {
+        available: boolean;
+        /** Entry count from version.json */
+        ups_entries?: number | null;
+        /** e.g. "BakRep v2 (2026-11-20)" */
+        release?: string | null;
     };
 }
 

@@ -13,7 +13,6 @@
 //! | 8    | input rejected (too large, not protein FASTA)   |
 //! | 9    | partially successful batch                      |
 
-
 use aidb_client::Error;
 
 pub const GENERAL: u8 = 1;
