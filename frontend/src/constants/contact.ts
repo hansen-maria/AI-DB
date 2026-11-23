@@ -1,5 +1,5 @@
 // Central contact details, used by Contact, About, Imprint and the footer.
-export const SUPPORT_EMAIL = 'ai-db@computational.bio.uni-giessen.de'
+export const SUPPORT_EMAIL = 'ai-db@computational.bio'
 
 export const REPO_URL = 'https://github.com/hansen-maria/AI-DB'
 export const ISSUES_URL = `${REPO_URL}/issues`

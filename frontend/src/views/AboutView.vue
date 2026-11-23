@@ -134,7 +134,7 @@ const copy = async (key: string, text: string) => {
       <div class="help-grid">
         <a :href="`mailto:${SUPPORT_EMAIL}`" class="help-card">
           <span class="help-card__title">Email support</span>
-          <span class="help-card__text">Questions about results, data deletion requests or collaboration inquiries.</span>
+          <span class="help-card__text">Questions about results or collaboration inquiries.</span>
           <span class="help-card__value">{{ SUPPORT_EMAIL }}</span>
         </a>
         <a :href="ISSUES_URL" target="_blank" rel="noopener noreferrer" class="help-card">
