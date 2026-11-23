@@ -48,6 +48,7 @@ frontend/
     │       ├── PsosPanel.vue      # Collapsible Psos analysis section
     │       └── BaktaPanel.vue     # Collapsible Bakta annotation section
     ├── views/
+    │   ├── AboutView.vue      # Help, FAQ, manual, how to cite
     │   ├── ContactView.vue    # Contact page
     │   ├── HomeView.vue       # Landing page
     │   ├── JobDetailView.vue  # Job results orchestrator (tabs + composables)
@@ -170,6 +171,24 @@ Orchestrates four composables and renders three tabs:
 
 Job history with paginated list, status indicators, and quick delete.
 
+### AboutView (`/about`)
+
+One page with four anchored sections (`#help`, `#faq`, `#manual`, `#cite`):
+- **Help** — support email, GitHub issues, API documentation
+- **FAQ** — collapsible questions on input, matching, data sources, privacy, retention and sharing
+- **Manual** — step-by-step guide from submission to download, API and CLI usage
+- **How to Cite** — AI-DB reference (text and BibTeX, copy buttons) plus Bakta, BakRep and Psos
+
+### ContactView (`/contact`)
+
+Support contact, profile links and the research group logo (`cbio-logo-left.svg`, linked to the group website).
+The footer shows the centered variant (`cbio-logo-centered.svg`).
+
+## Contact Constants
+
+`src/constants/contact.ts` holds the support email, repository URL and research group link. Contact,
+About, Imprint and the footer read from it, so changes are made in one place.
+
 ## API Client
 
 The API client (`src/api/jobs.ts`) provides:
@@ -227,6 +246,7 @@ the client sends it automatically (credentials included). Scripts using the REST
 | `/submit`  | SubmitJobView | Job submission                     |
 | `/job/:id` | JobDetailView | Job results (tabs, search, charts) |
 | `/jobs`    | JobListView   | Job history                        |
+| `/about`   | AboutView     | Help, FAQ, manual, how to cite     |
 | `/contact` | ContactView   | Contact Page                       |
 | `/docs`    | -             | Redirect to Swagger UI             |
 
@@ -301,6 +321,13 @@ Edit CSS variables in `src/assets/main.css` and the palette arrays in `src/const
 - Edge (latest)
 
 Requires ES2020+ support (async/await, optional chaining).
+
+## Support
+
+Questions and collaboration inquiries:
+[ai-db@computational.bio.uni-giessen.de](mailto:ai-db@computational.bio.uni-giessen.de).
+Bug reports and feature requests: [GitHub Issues](https://github.com/hansen-maria/AI-DB/issues).
+Help, FAQ, user manual and citation notes: [ai-db.computational.bio/about](https://ai-db.computational.bio/about).
 
 ## License
 

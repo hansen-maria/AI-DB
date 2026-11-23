@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { RouterLink, RouterView, useRoute } from 'vue-router'
+import { SUPPORT_EMAIL, REPO_URL, GROUP_NAME, GROUP_URL } from '@/constants/contact'
 
 const isDarkMode = ref(false)
 const route = useRoute()
@@ -93,6 +94,7 @@ onMounted(() => {
           <RouterLink to="/submit" :class="{ active: route.name === 'submit' }">Submit Job</RouterLink>
           <RouterLink to="/jobs" :class="{ active: route.name === 'jobs' }">Jobs</RouterLink>
           <a href="/api/docs" target="_blank" rel="noopener">API Docs</a>
+          <RouterLink to="/about" :class="{ active: route.name === 'about' }">About</RouterLink>
           <RouterLink to="/contact" :class="{ active: route.name === 'contact' }">Contact</RouterLink>
         </nav>
 
@@ -135,6 +137,7 @@ onMounted(() => {
         <RouterLink to="/submit" @click="closeMobileMenu" :class="{ active: route.name === 'submit' }">Submit Job</RouterLink>
         <RouterLink to="/jobs" @click="closeMobileMenu" :class="{ active: route.name === 'jobs' }">Jobs</RouterLink>
         <a href="/api/docs" target="_blank" rel="noopener" @click="closeMobileMenu">API Docs</a>
+        <RouterLink to="/about" @click="closeMobileMenu" :class="{ active: route.name === 'about' }">About</RouterLink>
         <RouterLink to="/contact" @click="closeMobileMenu" :class="{ active: route.name === 'contact' }">Contact</RouterLink>
       </nav>
     </header>
@@ -146,13 +149,19 @@ onMounted(() => {
 
     <!-- Footer -->
     <footer class="global-footer">
+      <a :href="GROUP_URL" target="_blank" rel="noopener noreferrer" class="footer-group-logo"
+         :title="GROUP_NAME">
+        <img src="./assets/cbio-logo-centered.svg" :alt="`${GROUP_NAME} (computational.bio)`" />
+      </a>
       <p>&copy; 2026 AI-DB Project. Built for the genomics research community.</p>
       <nav class="footer-links" aria-label="Legal">
         <RouterLink to="/imprint" :class="{ active: route.name === 'imprint' }">Imprint &amp; Privacy</RouterLink>
         <span class="footer-sep" aria-hidden="true">·</span>
         <RouterLink to="/terms" :class="{ active: route.name === 'terms' }">Terms of Service</RouterLink>
         <span class="footer-sep" aria-hidden="true">·</span>
-        <a href="https://github.com/hansen-maria/AI-DB" target="_blank" rel="noopener">GitHub</a>
+        <a :href="REPO_URL" target="_blank" rel="noopener">GitHub</a>
+        <span class="footer-sep" aria-hidden="true">·</span>
+        <a :href="`mailto:${SUPPORT_EMAIL}`">Support</a>
       </nav>
     </footer>
   </div>
@@ -399,6 +408,28 @@ html.dark .alert-banner--error {
 
 .global-footer p {
   margin: 0;
+}
+
+.footer-group-logo {
+  display: inline-block;
+  margin-bottom: 1rem;
+  opacity: 0.85;
+  transition: opacity 0.2s;
+}
+
+.footer-group-logo:hover {
+  opacity: 1;
+}
+
+.footer-group-logo img {
+  display: block;
+  height: 56px;
+  width: auto;
+}
+
+/* Grey logo parts need more contrast on dark backgrounds */
+html.dark .footer-group-logo img {
+  filter: brightness(1.6);
 }
 
 .footer-links {

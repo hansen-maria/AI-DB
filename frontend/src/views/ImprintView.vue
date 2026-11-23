@@ -1,7 +1,9 @@
 <script setup lang="ts">
-const CONTACT_EMAIL = 'maria.hansen@computational.bio.uni-giessen.de'
+import { SUPPORT_EMAIL } from '@/constants/contact'
 
-const LAST_EDITED = '2026-11-10'
+const CONTACT_EMAIL = SUPPORT_EMAIL
+
+const LAST_EDITED = '2026-11-23'
 const lastEditedLabel = `Last edited: ${new Date(LAST_EDITED).toLocaleDateString('en-GB', {
   day: '2-digit',
   month: 'long',

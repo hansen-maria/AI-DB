@@ -1,15 +1,15 @@
 <script setup lang="ts">
+import { RouterLink } from 'vue-router'
+import { SUPPORT_EMAIL, ISSUES_URL, GROUP_NAME, GROUP_URL } from '@/constants/contact'
+
 const contact = {
   name: 'Maria Hansen',
   title: 'Research Assistant',
   institution: 'Bioinformatics & Systems Biology at Justus Liebig University, Giessen',
-  email: 'maria.hansen@computational.bio.uni-giessen.de',
+  email: SUPPORT_EMAIL,
   github: 'https://github.com/hansen-maria',
   orcid: 'https://orcid.org/0009-0001-3265-8654',
   linkedin: 'https://www.linkedin.com/in/maria-hansen-3aab551a9',
-}
-const github_refs = {
-  ai_db_repository: 'https://github.com/hansen-maria/AI-DB',
 }
 </script>
 
@@ -19,6 +19,8 @@ const github_refs = {
       <h2>Contact</h2>
       <p class="contact-subtitle">
         Questions, bug reports, or collaboration inquiries — feel free to reach out.
+        Many questions are already answered in the
+        <RouterLink :to="{ path: '/about', hash: '#faq' }">FAQ</RouterLink>.
       </p>
     </div>
 
@@ -49,7 +51,7 @@ const github_refs = {
                 <polyline points="22,6 12,13 2,6"/>
               </svg>
             </span>
-            <span class="contact-link__label">Email</span>
+            <span class="contact-link__label">Support</span>
             <span class="contact-link__value">{{ contact.email }}</span>
           </a>
         </li>
@@ -98,6 +100,16 @@ const github_refs = {
           </a>
         </li>
       </ul>
+
+      <hr class="divider" />
+
+      <!-- Research group -->
+      <a :href="GROUP_URL" target="_blank" rel="noopener noreferrer" class="contact-group">
+        <img src="../assets/cbio-logo-left.svg" :alt="`${GROUP_NAME} (computational.bio)`" class="contact-group__logo" />
+        <span class="contact-group__text">
+          AI-DB is developed and operated by the Bioinformatics &amp; Systems Biology group at Justus Liebig University Giessen.
+        </span>
+      </a>
     </div>
 
     <!-- Bug reports hint -->
@@ -109,7 +121,7 @@ const github_refs = {
         <line x1="12" y1="16" x2="12.01" y2="16"/>
       </svg>
       For bug reports and feature requests, please open an issue on
-      <a :href="github_refs.ai_db_repository + '/issues'" target="_blank" rel="noopener noreferrer">GitHub</a>.
+      <a :href="ISSUES_URL" target="_blank" rel="noopener noreferrer">GitHub</a>.
     </div>
   </div>
 </template>
@@ -252,6 +264,47 @@ const github_refs = {
   word-break: break-all;
 }
 
+/* Research group */
+.contact-group {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  text-decoration: none;
+  color: var(--color-text);
+  transition: background 0.18s;
+}
+
+.contact-group:hover {
+  background: hsla(160, 100%, 37%, 0.08);
+}
+
+.contact-group__logo {
+  height: 64px;
+  width: auto;
+  flex-shrink: 0;
+}
+
+html.dark .contact-group__logo {
+  filter: brightness(1.6);
+}
+
+.contact-group__text {
+  font-size: 0.875rem;
+  opacity: 0.8;
+  line-height: 1.5;
+}
+
+.contact-subtitle a {
+  color: hsla(160, 100%, 37%, 1);
+  text-decoration: none;
+}
+
+.contact-subtitle a:hover {
+  text-decoration: underline;
+}
+
 /* Note */
 .contact-note {
   display: flex;
@@ -299,6 +352,12 @@ const github_refs = {
 
   .contact-link__label {
     min-width: 60px;
+  }
+
+  .contact-group {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.75rem;
   }
 }
 </style>

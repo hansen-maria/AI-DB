@@ -119,3 +119,10 @@ for parsing.
 | 7    | server not reachable or temporarily failing   |
 | 8    | input rejected                                |
 | 9    | partially successful batch                    |
+
+## Support
+
+Questions and collaboration inquiries:
+[ai-db@computational.bio.uni-giessen.de](mailto:ai-db@computational.bio.uni-giessen.de).
+Bug reports and feature requests: [GitHub Issues](https://github.com/hansen-maria/AI-DB/issues).
+Help, FAQ, user manual and citation notes: [ai-db.computational.bio/about](https://ai-db.computational.bio/about).

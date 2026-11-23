@@ -65,6 +65,7 @@ ai-db/
 │   │   │       └── BaktaPanel.vue      # Collapsible Bakta annotation section
 │   │   ├── views/
 │   │   │   ├── HomeView.vue            # Landing page
+│   │   │   ├── AboutView.vue           # Help, FAQ, manual, how to cite
 │   │   │   ├── ContactView.vue         # Contact page
 │   │   │   ├── SubmitJobView.vue       # FASTA upload
 │   │   │   ├── JobDetailView.vue       # Job details with tabs, search, analysis & ingestion
@@ -271,6 +272,13 @@ Update `nginx.conf` to set your domain and backend address before deploying.
 - Non-root container user
 - Memory-safe Rust backend
 - Read-only Bakta database mount
+
+## Support
+
+Questions, data deletion requests and collaboration inquiries:
+[ai-db@computational.bio.uni-giessen.de](mailto:ai-db@computational.bio.uni-giessen.de).
+Bug reports and feature requests: [GitHub Issues](https://github.com/hansen-maria/AI-DB/issues).
+Help, FAQ, user manual and citation notes: [ai-db.computational.bio/about](https://ai-db.computational.bio/about).
 
 ## License
 
