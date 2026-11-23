@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { RouterLink } from 'vue-router'
 import { SUPPORT_EMAIL, REPO_URL, ISSUES_URL } from '@/constants/contact'
 
@@ -58,6 +58,31 @@ const faq: FaqItem[] = [
     a: 'Yes. AI-DB has a documented REST API (<a href="/api/docs" target="_blank" rel="noopener">Swagger UI</a>) that authenticates with an access token instead of cookies, and a command-line client <code>aidb</code>. See the Manual below.',
   },
 ]
+
+// ── FAQ as schema.org structured data (search engine rich results) ──
+const FAQ_LD_ID = 'aidb-faq-jsonld'
+const stripHtml = (html: string) => html.replace(/<[^>]+>/g, '')
+
+onMounted(() => {
+  document.getElementById(FAQ_LD_ID)?.remove()
+  const script = document.createElement('script')
+  script.type = 'application/ld+json'
+  script.id = FAQ_LD_ID
+  script.textContent = JSON.stringify({
+    '@context': 'https://schema.org',
+    '@type': 'FAQPage',
+    mainEntity: faq.map((item) => ({
+      '@type': 'Question',
+      name: item.q,
+      acceptedAnswer: { '@type': 'Answer', text: stripHtml(item.a) },
+    })),
+  })
+  document.head.appendChild(script)
+})
+
+onBeforeUnmount(() => {
+  document.getElementById(FAQ_LD_ID)?.remove()
+})
 
 const openFaq = ref<Set<number>>(new Set())
 const toggleFaq = (i: number) => {

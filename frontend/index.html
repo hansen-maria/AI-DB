@@ -1,10 +1,48 @@
 <!DOCTYPE html>
-<html lang="">
+<html lang="en">
   <head>
     <meta charset="UTF-8">
     <link rel="icon" href="/favicon.ico">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI-DB</title>
+
+    <!-- SEO defaults; the router updates title, description, canonical and robots per page -->
+    <title>AI-DB – Rapid Bacterial Protein Identification and Annotation Lookup</title>
+    <meta name="description" content="Identify bacterial proteins in seconds by exact, alignment-free hash lookup against Bakta, BakRep and community annotations. Free web service and REST API, no installation.">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://ai-db.computational.bio/">
+
+    <!-- Link previews (Open Graph / Twitter) -->
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="AI-DB">
+    <meta property="og:locale" content="en_US">
+    <meta property="og:title" content="AI-DB – Rapid Bacterial Protein Identification and Annotation Lookup">
+    <meta property="og:description" content="Alignment-free lookup of known bacterial proteins and their annotations (gene, product, COG, EC, GO terms).">
+    <meta property="og:url" content="https://ai-db.computational.bio/">
+    <meta name="twitter:card" content="summary">
+
+    <!-- Structured data (schema.org) -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "AI-DB",
+        "alternateName": "Already Identified Database",
+        "url": "https://ai-db.computational.bio/",
+        "description": "Web service for rapid, alignment-free identification of bacterial proteins by hash-based lookup of existing annotations from the Bakta reference database, BakRep and community contributions.",
+        "applicationCategory": "ScientificApplication",
+        "operatingSystem": "Any (web browser)",
+        "isAccessibleForFree": true,
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "EUR" },
+        "keywords": "bacterial protein identification, protein annotation, alignment-free, hash-based lookup, MD5, Bakta, BakRep, GO terms, COG, EC numbers, FASTA",
+        "license": ["https://opensource.org/licenses/Apache-2.0", "https://opensource.org/licenses/MIT"],
+        "codeRepository": "https://github.com/hansen-maria/AI-DB",
+        "creator": {
+          "@type": "Organization",
+          "name": "Bioinformatics & Systems Biology, Justus Liebig University Giessen",
+          "url": "https://www.uni-giessen.de/de/fbz/fb08/Inst/bioinformatik/compbio"
+        }
+      }
+    </script>
 
     <!-- Privacy-friendly analytics by Plausible -->
     <!-- Served via the first-party proxy in nginx.conf (/pl/…), see there -->
