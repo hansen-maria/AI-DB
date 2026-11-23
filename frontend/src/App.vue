@@ -153,16 +153,18 @@ onMounted(() => {
          :title="GROUP_NAME">
         <img src="./assets/cbio-logo-centered.svg" :alt="`${GROUP_NAME} (computational.bio)`" />
       </a>
-      <p>&copy; 2026 AI-DB Project. Built for the genomics research community.</p>
-      <nav class="footer-links" aria-label="Legal">
-        <RouterLink to="/imprint" :class="{ active: route.name === 'imprint' }">Imprint &amp; Privacy</RouterLink>
-        <span class="footer-sep" aria-hidden="true">·</span>
-        <RouterLink to="/terms" :class="{ active: route.name === 'terms' }">Terms of Service</RouterLink>
-        <span class="footer-sep" aria-hidden="true">·</span>
-        <a :href="REPO_URL" target="_blank" rel="noopener">GitHub</a>
-        <span class="footer-sep" aria-hidden="true">·</span>
-        <a :href="`mailto:${SUPPORT_EMAIL}`">Support</a>
-      </nav>
+      <div class="footer-info">
+        <p>&copy; 2026 AI-DB Project. Built for the genomics research community.</p>
+        <nav class="footer-links" aria-label="Legal">
+          <RouterLink to="/imprint" :class="{ active: route.name === 'imprint' }">Imprint &amp; Privacy</RouterLink>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <RouterLink to="/terms" :class="{ active: route.name === 'terms' }">Terms of Service</RouterLink>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a :href="REPO_URL" target="_blank" rel="noopener">GitHub</a>
+          <span class="footer-sep" aria-hidden="true">·</span>
+          <a :href="`mailto:${SUPPORT_EMAIL}`">Support</a>
+        </nav>
+      </div>
     </footer>
   </div>
 </template>
@@ -399,11 +401,18 @@ html.dark .alert-banner--error {
 /* Footer */
 .global-footer {
   border-top: 1px solid var(--color-border);
-  padding: 2rem;
-  text-align: center;
+  padding: 1.5rem 2rem;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 2rem;
   color: var(--color-text);
   opacity: 0.7;
   font-size: 0.9rem;
+}
+
+.footer-info {
+  text-align: left;
 }
 
 .global-footer p {
@@ -411,8 +420,8 @@ html.dark .alert-banner--error {
 }
 
 .footer-group-logo {
-  display: inline-block;
-  margin-bottom: 1rem;
+  display: block;
+  flex-shrink: 0;
   opacity: 0.85;
   transition: opacity 0.2s;
 }
@@ -435,7 +444,7 @@ html.dark .footer-group-logo img {
 .footer-links {
   display: flex;
   flex-wrap: wrap;
-  justify-content: center;
+  justify-content: flex-start;
   align-items: center;
   gap: 0.5rem;
   margin-top: 0.5rem;
@@ -454,6 +463,22 @@ html.dark .footer-group-logo img {
 
 .footer-sep {
   opacity: 0.6;
+}
+
+/* Small screens: logo above the text, everything centered */
+@media (max-width: 640px) {
+  .global-footer {
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .footer-info {
+    text-align: center;
+  }
+
+  .footer-links {
+    justify-content: center;
+  }
 }
 
 /* Responsive */
