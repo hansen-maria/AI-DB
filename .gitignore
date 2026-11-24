@@ -47,4 +47,6 @@ __screenshots__/
 /setup-temp-volume.sh
 
 # Internal Docs
-/docs/
+/docs/!/backend/target/
+!/frontend/dist/
+!/target/
