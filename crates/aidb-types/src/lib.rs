@@ -23,12 +23,33 @@ pub mod psos;
 pub mod sequence;
 pub mod stats;
 
-/// Version of the HTTP API contract, reported by `GET /api/health`.
+/// Version of the HTTP API contract with external clients (CLI, scripts),
+/// reported by `GET /api/health`. Clients compare it with their own
+/// compiled-in value to detect incompatible servers.
 ///
-/// Bump this when a change is incompatible for existing clients (a removed or
-/// renamed route or field, a changed meaning). Additive changes (new routes,
-/// new optional fields) do not require a bump. Clients compare it with their
-/// own compiled-in value to detect incompatible servers.
+/// The contract covers `/api/health`, `/api/db/info`, `POST /api/job/`,
+/// `/api/job/{id}` (GET, PATCH, DELETE), `/api/job/{id}/retry`,
+/// `/download/{format}`, `/stats`, `/stats/export`, `/sequence/{seq_id}` and
+/// `/api/jobs/` (GET, DELETE).
+///
+/// Bump it for incompatible changes to these routes:
+/// * a route is removed or renamed;
+/// * a required response field is removed, renamed or changes type or meaning;
+/// * a new required request parameter;
+/// * an existing value changes its meaning;
+/// * a new value in a closed set, e.g. another `JobStatus`.
+///
+/// Do not bump it for:
+/// * new routes, fields or optional parameters;
+/// * new values in open string fields (`annotation_source`, filters such as
+///   `bakrep_db`);
+/// * removing optional response fields (e.g. `annotation_status`);
+/// * routes used only by the web frontend, which is deployed together with
+///   the backend (`/bakta*`, `/psos*`, `/api/auth/token`) – once the CLI uses
+///   Bakta/Psos routes, they become part of the contract;
+/// * admin routes (`/api/admin/*`).
+///
+/// Clients ignore unknown fields and read optional fields with defaults.
 pub const API_VERSION: u32 = 1;
 
 pub use auth::AuthTokenResponse;
