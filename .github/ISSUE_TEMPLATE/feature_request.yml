@@ -1,0 +1,75 @@
+name: Feature request
+description: Suggest an idea or improvement for AI-DB.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping to improve AI-DB! Please check existing issues first to avoid duplicates.
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      multiple: true
+      options:
+        - Web interface
+        - REST API
+        - aidb CLI
+        - Annotation sources / databases
+        - Bakta / Psos integration
+        - Export formats
+        - Functional analysis / charts
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What are you trying to do, and what makes it hard today?
+      placeholder: When I annotate several genomes, I have to ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: How would you like AI-DB to support this?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds or other tools you have tried.
+
+  - type: dropdown
+    id: role
+    attributes:
+      label: How do you use AI-DB?
+      options:
+        - Web interface (biologist / wet lab)
+        - API or CLI in scripts / pipelines
+        - Both
+        - Self-hosting
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Contribution
+      options:
+        - label: I would be willing to help implement this feature.
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Mockups, references to papers or other tools, example data.

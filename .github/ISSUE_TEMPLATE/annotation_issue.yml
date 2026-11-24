@@ -1,0 +1,63 @@
+name: Annotation issue
+description: Report a wrong, outdated, or incomplete annotation returned by AI-DB.
+title: "[Annotation]: "
+labels: ["annotation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form if a sequence received an annotation you believe is incorrect or incomplete.
+        Annotations from the **Bakta DB** are taken unchanged from Bakta; for systematic issues there,
+        please also consider reporting to [Bakta](https://github.com/oschwengers/bakta/issues).
+
+  - type: dropdown
+    id: source
+    attributes:
+      label: Annotation source
+      description: Shown as a badge in the Sequences tab (`annotation_source`).
+      options:
+        - Bakta DB (bakta_db)
+        - AI-DB · BakRep (bakrep_db)
+        - AI-DB · Community (aidb_db)
+        - Bakta / Baktfold run started from AI-DB
+        - Psos run started from AI-DB
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: hash
+    attributes:
+      label: Sequence MD5 hash or Job ID
+      description: The MD5 hash identifies the sequence without sharing it. A Job ID plus sequence ID also works.
+    validations:
+      required: true
+
+  - type: textarea
+    id: current
+    attributes:
+      label: Current annotation
+      description: Gene, product, EC, GO, COG, UniRef IDs, ... as shown in AI-DB.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected annotation
+      description: What you believe is correct.
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Literature, database entries (UniProt, NCBI, InterPro), experimental results, or other annotation tools.
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context

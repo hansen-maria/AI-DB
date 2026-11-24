@@ -1,0 +1,14 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/hansen-maria/AI-DB/security/advisories/new
+    about: Please report security issues privately, not as a public issue.
+  - name: Questions and support
+    url: mailto:ai-db@computational.bio
+    about: For general questions about using AI-DB, contact the AI-DB team by email.
+  - name: Documentation and FAQ
+    url: https://ai-db.computational.bio/about
+    about: Manual, FAQ, and how to cite AI-DB.
+  - name: API documentation
+    url: https://ai-db.computational.bio/api/docs/
+    about: Swagger UI for the AI-DB REST API.
