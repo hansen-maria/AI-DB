@@ -1,6 +1,6 @@
 [package]
 name = "aidb-cli"
-version = "0.1.0-rc.2"
+version = "0.1.0"
 description = "Command-line client for AI-DB, hash-based annotation of bacterial proteins"
 edition.workspace = true
 license.workspace = true
