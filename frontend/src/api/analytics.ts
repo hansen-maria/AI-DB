@@ -82,3 +82,9 @@ export const trackExport = (kind: ExportKind, format: string) =>
 
 export const trackNotFound = (path: string) =>
   track('404', { path })
+
+export type SurveyPlacement = 'footer' | 'about' | 'contact'
+
+/** Outbound clicks on the de.NBI user survey link (needed for de.NBI service reporting). */
+export const trackSurveyClick = (placement: SurveyPlacement) =>
+  track('Survey click', { placement })

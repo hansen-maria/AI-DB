@@ -3,7 +3,7 @@ import { SUPPORT_EMAIL } from '@/constants/contact'
 
 const CONTACT_EMAIL = SUPPORT_EMAIL
 
-const LAST_EDITED = '2026-11-23'
+const LAST_EDITED = '2026-11-24'
 const lastEditedLabel = `Last edited: ${new Date(LAST_EDITED).toLocaleDateString('en-GB', {
   day: '2-digit',
   month: 'long',
@@ -158,6 +158,13 @@ const lastEditedLabel = `Last edited: ${new Date(LAST_EDITED).toLocaleDateString
         <p>
           The United Kingdom is covered by an adequacy decision of the European
           Commission (Art. 45 GDPR).
+        </p>
+        <p>
+          <strong>de.NBI user survey:</strong> AI-DB links to a user survey of the
+          German Network for Bioinformatics Infrastructure (de.NBI), hosted by
+          SurveyMonkey. The survey is not embedded in AI-DB; no data is transmitted
+          to SurveyMonkey unless you follow the link. Participation is voluntary.
+          The privacy policies of de.NBI and SurveyMonkey apply to the survey.
         </p>
       </section>
 

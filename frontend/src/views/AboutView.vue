@@ -1,13 +1,16 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { RouterLink } from 'vue-router'
-import { SUPPORT_EMAIL, REPO_URL, ISSUES_URL } from '@/constants/contact'
+import { SUPPORT_EMAIL, REPO_URL, ISSUES_URL, DENBI_SURVEY_URL } from '@/constants/contact'
+import { trackSurveyClick } from '@/api/analytics'
+import DenbiLogo from '@/components/DenbiLogo.vue'
 
 const sections = [
   { id: 'help', label: 'Help' },
   { id: 'faq', label: 'FAQ' },
   { id: 'manual', label: 'Manual' },
   { id: 'cite', label: 'How to Cite' },
+  { id: 'feedback', label: 'Feedback' },
 ]
 
 interface FaqItem {
@@ -138,7 +141,7 @@ const copy = async (key: string, text: string) => {
   <div class="about-page">
     <div class="page-header">
       <h2>About AI-DB</h2>
-      <p>Help, frequently asked questions, the user manual and how to cite AI-DB.</p>
+      <p>Help, frequently asked questions, the user manual, how to cite AI-DB and how to give feedback.</p>
     </div>
 
     <!-- Section navigation -->
@@ -171,6 +174,12 @@ const copy = async (key: string, text: string) => {
           <span class="help-card__title">API documentation</span>
           <span class="help-card__text">All REST endpoints with request and response schemas (Swagger UI).</span>
           <span class="help-card__value">/api/docs</span>
+        </a>
+        <a :href="DENBI_SURVEY_URL" target="_blank" rel="noopener noreferrer" class="help-card"
+           @click="trackSurveyClick('about')">
+          <span class="help-card__title">Give feedback</span>
+          <span class="help-card__text">Tell us what works and what is missing in the short de.NBI user survey.</span>
+          <span class="help-card__value">de.NBI User Survey</span>
         </a>
       </div>
       <p class="about-note">
@@ -346,6 +355,25 @@ aidb annotate proteins.faa -f tsv,gff3 -d results/</code></pre>
         </li>
       </ul>
     </section>
+
+    <!-- ── Feedback / de.NBI User Survey ── -->
+    <section id="feedback" class="about-section">
+      <h3 class="about-section__title">Feedback / de.NBI User Survey</h3>
+      <div class="feedback-box">
+        <DenbiLogo :height="48" />
+        <div class="feedback-box__body">
+          <p>
+            AI-DB is an approved service of de.NBI, the German Network for Bioinformatics Infrastructure.
+            Please help us improve by taking our short user survey. It takes only a few minutes, and your
+            answers help us and de.NBI to further develop the service.
+          </p>
+          <a :href="DENBI_SURVEY_URL" target="_blank" rel="noopener noreferrer" class="survey-btn"
+             @click="trackSurveyClick('about')">
+            Take the user survey
+          </a>
+        </div>
+      </div>
+    </section>
   </div>
 </template>
 
@@ -442,7 +470,7 @@ code,
 /* Help */
 .help-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1rem;
 }
 
@@ -677,6 +705,39 @@ code,
   font-size: 0.9rem;
 }
 
+/* Feedback */
+.feedback-box {
+  display: flex;
+  align-items: center;
+  gap: 1.75rem;
+  padding: 1.25rem 1.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-background-soft);
+}
+
+.feedback-box__body p {
+  margin: 0 0 1rem;
+  line-height: 1.65;
+}
+
+.about-section .survey-btn {
+  display: inline-block;
+  padding: 0.6rem 1.25rem;
+  border-radius: 6px;
+  background: hsla(160, 100%, 37%, 1);
+  color: white;
+  font-weight: 500;
+  font-size: 0.95rem;
+  text-decoration: none;
+  transition: background 0.2s;
+}
+
+.about-section .survey-btn:hover {
+  background: hsla(160, 100%, 32%, 1);
+  text-decoration: none;
+}
+
 @media (max-width: 640px) {
   .about-page {
     margin: 1rem auto 2rem;
@@ -684,6 +745,16 @@ code,
 
   .cite-box {
     flex-direction: column;
+  }
+
+  .help-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .feedback-box {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1rem;
   }
 
   .cite-box--code {

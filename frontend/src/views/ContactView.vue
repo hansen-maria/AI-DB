@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { RouterLink } from 'vue-router'
 import { SUPPORT_EMAIL, ISSUES_URL, GROUP_NAME, GROUP_URL } from '@/constants/contact'
+import DenbiSurveyLink from '@/components/DenbiSurveyLink.vue'
 
 const contact = {
   name: 'Maria Hansen',
@@ -122,6 +123,18 @@ const contact = {
       </svg>
       For bug reports and feature requests, please open an issue on
       <a :href="ISSUES_URL" target="_blank" rel="noopener noreferrer">GitHub</a>.
+    </div>
+
+    <!-- de.NBI user survey -->
+    <div class="contact-note contact-note--survey">
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
+           fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+      </svg>
+      <span>
+        General feedback on AI-DB? Please take the
+        <DenbiSurveyLink placement="contact">de.NBI user survey</DenbiSurveyLink>.
+      </span>
     </div>
   </div>
 </template>
@@ -318,6 +331,10 @@ html.dark .contact-group__logo {
   border-radius: 8px;
   background: var(--color-background-mute);
   line-height: 1.5;
+}
+
+.contact-note--survey {
+  margin-top: 0.75rem;
 }
 
 .contact-note svg {

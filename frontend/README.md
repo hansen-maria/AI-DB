@@ -329,6 +329,11 @@ Questions and collaboration inquiries:
 Bug reports and feature requests: [GitHub Issues](https://github.com/hansen-maria/AI-DB/issues).
 Help, FAQ, user manual and citation notes: [ai-db.computational.bio/about](https://ai-db.computational.bio/about).
 
+## Feedback / de.NBI User Survey
+
+AI-DB is an approved [de.NBI](https://www.denbi.de) service. Please help us improve by taking our
+[short user survey](https://www.surveymonkey.de/r/denbi-service?sc=bigi&tool=aidb).
+
 ## License
 
 This project is licensed under either of

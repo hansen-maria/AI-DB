@@ -2,6 +2,8 @@
 import { ref, onMounted } from 'vue'
 import { RouterLink, RouterView, useRoute } from 'vue-router'
 import { SUPPORT_EMAIL, REPO_URL, GROUP_NAME, GROUP_URL } from '@/constants/contact'
+import DenbiLogo from '@/components/DenbiLogo.vue'
+import DenbiSurveyLink from '@/components/DenbiSurveyLink.vue'
 
 const isDarkMode = ref(false)
 const route = useRoute()
@@ -149,10 +151,13 @@ onMounted(() => {
 
     <!-- Footer -->
     <footer class="global-footer">
-      <a :href="GROUP_URL" target="_blank" rel="noopener noreferrer" class="footer-group-logo"
-         :title="GROUP_NAME">
-        <img src="./assets/cbio-logo-centered.svg" :alt="`${GROUP_NAME} (computational.bio)`" />
-      </a>
+      <div class="footer-logos">
+        <a :href="GROUP_URL" target="_blank" rel="noopener noreferrer" class="footer-group-logo"
+           :title="GROUP_NAME">
+          <img src="./assets/cbio-logo-centered.svg" :alt="`${GROUP_NAME} (computational.bio)`" />
+        </a>
+        <DenbiLogo :height="36" class="footer-denbi-logo" />
+      </div>
       <div class="footer-info">
         <p>&copy; 2026 AI-DB Project. Built for the genomics research community.</p>
         <nav class="footer-links" aria-label="Legal">
@@ -164,6 +169,10 @@ onMounted(() => {
           <span class="footer-sep" aria-hidden="true">·</span>
           <a :href="`mailto:${SUPPORT_EMAIL}`">Support</a>
         </nav>
+        <p class="footer-survey">
+          This is an approved de.NBI service. Please help us improve by taking our
+          <DenbiSurveyLink placement="footer" />.
+        </p>
       </div>
     </footer>
   </div>
@@ -413,6 +422,35 @@ html.dark .alert-banner--error {
 
 .footer-info {
   text-align: left;
+}
+
+.footer-logos {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  flex-shrink: 0;
+}
+
+.footer-denbi-logo {
+  opacity: 0.85;
+  transition: opacity 0.2s;
+}
+
+.footer-denbi-logo:hover {
+  opacity: 1;
+}
+
+.global-footer .footer-survey {
+  margin-top: 0.35rem;
+}
+
+.footer-survey a {
+  color: hsla(160, 100%, 37%, 1);
+  text-decoration: none;
+}
+
+.footer-survey a:hover {
+  text-decoration: underline;
 }
 
 .global-footer p {
