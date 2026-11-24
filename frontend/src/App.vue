@@ -416,12 +416,13 @@ html.dark .alert-banner--error {
   align-items: center;
   gap: 2rem;
   color: var(--color-text);
-  opacity: 0.7;
   font-size: 0.9rem;
 }
 
+/* Only the text is muted; logos keep their original colours in light mode */
 .footer-info {
   text-align: left;
+  opacity: 0.7;
 }
 
 .footer-logos {
@@ -432,7 +433,6 @@ html.dark .alert-banner--error {
 }
 
 .footer-denbi-logo {
-  opacity: 0.85;
   transition: opacity 0.2s;
 }
 
@@ -460,8 +460,18 @@ html.dark .alert-banner--error {
 .footer-group-logo {
   display: block;
   flex-shrink: 0;
-  opacity: 0.85;
   transition: opacity 0.2s;
+}
+
+/* Dark mode: keep the logos slightly muted as before */
+html.dark .footer-group-logo,
+html.dark .footer-denbi-logo {
+  opacity: 0.6;
+}
+
+html.dark .footer-group-logo:hover,
+html.dark .footer-denbi-logo:hover {
+  opacity: 1;
 }
 
 .footer-group-logo:hover {
