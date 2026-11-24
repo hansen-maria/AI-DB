@@ -50,3 +50,4 @@ __screenshots__/
 
 # Rust build output (Cargo workspace)
 /target/
+/.local-data/
