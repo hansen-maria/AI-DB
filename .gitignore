@@ -46,7 +46,7 @@ __screenshots__/
 /setup-kpi-volume.sh
 /setup-temp-volume.sh
 
-# Internal Docs
-/docs/!/backend/target/
-!/frontend/dist/
-!/target/
+/docs/
+
+# Rust build output (Cargo workspace)
+/target/
