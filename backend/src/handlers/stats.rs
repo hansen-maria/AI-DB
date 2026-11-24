@@ -122,7 +122,7 @@ pub fn compute_stats(job_id: &str, sequences: &[SequenceInfo]) -> FunctionalStat
                 count,
             })
             .collect();
-        items.sort_by(|a, b| b.count.cmp(&a.count));
+        items.sort_by_key(|a| std::cmp::Reverse(a.count));
         items.truncate(MAX_ITEMS);
         items
     };
@@ -135,7 +135,7 @@ pub fn compute_stats(job_id: &str, sequences: &[SequenceInfo]) -> FunctionalStat
                 count,
             })
             .collect();
-        items.sort_by(|a, b| b.count.cmp(&a.count));
+        items.sort_by_key(|a| std::cmp::Reverse(a.count));
         items.truncate(MAX_ITEMS);
         items
     };
@@ -437,7 +437,7 @@ fn sorted_count_items(counts: HashMap<String, usize>, max_items: usize) -> Vec<C
         .into_iter()
         .map(|(name, count)| CountItem { name, count })
         .collect();
-    items.sort_by(|a, b| b.count.cmp(&a.count));
+    items.sort_by_key(|a| std::cmp::Reverse(a.count));
     items.truncate(max_items);
     items
 }

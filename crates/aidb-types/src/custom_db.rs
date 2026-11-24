@@ -7,6 +7,7 @@
 //!   * New hashes are inserted; existing entries are never overwritten, only
 //!     empty fields are filled in.
 //!   * Every hash carries a `seen_count`: in how many jobs AI-DB has seen it.
+//!
 //! ============================================================================
 
 use serde::{Deserialize, Serialize};

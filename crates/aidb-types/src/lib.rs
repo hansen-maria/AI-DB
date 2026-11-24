@@ -9,6 +9,7 @@
 //! Features:
 //!   * `openapi` – derives `utoipa::ToSchema` for the OpenAPI documentation
 //!     (server only; clients do not need utoipa).
+//!
 //! ============================================================================
 
 pub mod auth;

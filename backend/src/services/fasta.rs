@@ -62,9 +62,9 @@ impl<R: BufRead> Iterator for FastaIterator<R> {
                         continue;
                     }
 
-                    if line.starts_with('>') {
+                    if let Some(header_line) = line.strip_prefix('>') {
                         // New sequence header
-                        let new_header = line[1..]
+                        let new_header = header_line
                             .split_whitespace()
                             .next()
                             .unwrap_or("")

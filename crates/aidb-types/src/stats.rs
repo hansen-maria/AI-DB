@@ -44,7 +44,7 @@ pub struct CogCategory {
 }
 
 /// GO terms grouped by ontology
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct GoTermStats {
     /// Biological Process (GO:0008150)
@@ -53,16 +53,6 @@ pub struct GoTermStats {
     pub molecular_function: Vec<CountItem>,
     /// Cellular Component (GO:0005575)
     pub cellular_component: Vec<CountItem>,
-}
-
-impl Default for GoTermStats {
-    fn default() -> Self {
-        Self {
-            biological_process: Vec::new(),
-            molecular_function: Vec::new(),
-            cellular_component: Vec::new(),
-        }
-    }
 }
 
 /// COG category code to name mapping

@@ -96,7 +96,7 @@ pub async fn get_job(
         basic: query
             .filter
             .as_deref()
-            .map(SequenceFilter::from_str)
+            .map(SequenceFilter::parse)
             .unwrap_or(SequenceFilter::All),
         search: query.search.clone().filter(|s| !s.is_empty()),
         min_length: query.min_length,
@@ -510,7 +510,7 @@ pub async fn list_jobs(
         .collect();
 
     // Sort by created_at descending
-    job_list.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    job_list.sort_by_key(|a| std::cmp::Reverse(a.created_at));
 
     // Calculate pagination
     let total_items = job_list.len();

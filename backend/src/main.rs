@@ -411,7 +411,8 @@ mod tests {
     #[test]
     fn admin_routes_accept_only_admin_secret() {
         let doc = ApiDoc::openapi();
-        for (path, method) in [("/api/admin/kpis", "GET")] {
+        {
+            let (path, method) = ("/api/admin/kpis", "GET");
             assert_eq!(
                 schemes(op(&doc, path, method)),
                 vec![SCHEME_ADMIN],

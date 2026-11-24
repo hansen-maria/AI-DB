@@ -10,6 +10,7 @@
 //!   * only the cookie is read – a Bearer token is never echoed back;
 //!   * only same-origin requests are answered (`auth::is_same_origin_request`);
 //!   * responses carry `Cache-Control: no-store`.
+//!
 //! ============================================================================
 
 use axum::{

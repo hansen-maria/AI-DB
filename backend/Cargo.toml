@@ -34,7 +34,6 @@ flate2 = "1"
 
 # Hashing
 md5 = "0.8.0"
-hex = "0.4"
 
 # Logging
 tracing = "0.1"

@@ -265,8 +265,8 @@ mod tests {
         std::fs::write(&existing, "x").unwrap();
         let fresh = dir.path().join("b_annotations.tsv");
 
-        assert!(check_targets(&[fresh.clone()], false).is_ok());
-        assert!(check_targets(&[existing.clone()], false).is_err());
+        assert!(check_targets(std::slice::from_ref(&fresh), false).is_ok());
+        assert!(check_targets(std::slice::from_ref(&existing), false).is_err());
         assert!(check_targets(&[existing], true).is_ok());
         assert!(check_targets(&[fresh.clone(), fresh], true).is_err());
     }

@@ -8,7 +8,7 @@ pub use aidb_types::sequence::{SequenceInfo, SOURCE_AIDB_DB, SOURCE_BAKREP_DB, S
 use utoipa::ToSchema;
 
 /// Bakta Hash Lookup Result
-#[derive(Debug, Clone, ToSchema)]
+#[derive(Debug, Clone, Default, ToSchema)]
 pub struct HashLookupResult {
     pub found: bool,
     pub db_length: Option<i64>,
@@ -28,24 +28,6 @@ pub struct HashLookupResult {
     /// Release/version of the source database, or ingestion timestamp for AI-DB matches.
     /// See `SequenceInfo::annotation_release` for details.
     pub annotation_release: Option<String>,
-}
-
-impl Default for HashLookupResult {
-    fn default() -> Self {
-        Self {
-            found: false,
-            db_length: None,
-            uniparc_id: None,
-            ncbi_nrp_id: None,
-            uniref100_id: None,
-            product: None,
-            gene: None,
-            cog_category: None,
-            ec_ids: None,
-            go_ids: None,
-            annotation_release: None,
-        }
-    }
 }
 
 /// Filter type for sequences (match status / annotation source)
@@ -69,7 +51,7 @@ pub enum SequenceFilter {
 }
 
 impl SequenceFilter {
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "bakta_db" | "bakta" => SequenceFilter::BaktaDb,
             "bakrep_db" | "bakrep" => SequenceFilter::BakrepDb,
@@ -260,20 +242,20 @@ mod tests {
         let aidb = seq(Some(SOURCE_AIDB_DB));
         let none = seq(None);
 
-        let f = SequenceFilter::from_str("bakta_db");
+        let f = SequenceFilter::parse("bakta_db");
         assert!(f.matches(&bakta) && !f.matches(&aidb) && !f.matches(&none));
 
-        let f = SequenceFilter::from_str("aidb_db");
+        let f = SequenceFilter::parse("aidb_db");
         assert!(f.matches(&aidb) && !f.matches(&bakta) && !f.matches(&none));
 
         let bakrep = seq(Some(SOURCE_BAKREP_DB));
-        let f = SequenceFilter::from_str("bakrep_db");
+        let f = SequenceFilter::parse("bakrep_db");
         assert!(f.matches(&bakrep) && !f.matches(&bakta) && !f.matches(&aidb));
 
-        let f = SequenceFilter::from_str("hash_match");
+        let f = SequenceFilter::parse("hash_match");
         assert!(f.matches(&bakta) && f.matches(&aidb) && f.matches(&bakrep) && !f.matches(&none));
 
-        let f = SequenceFilter::from_str("none");
+        let f = SequenceFilter::parse("none");
         assert!(f.matches(&none) && !f.matches(&bakta));
     }
 
@@ -288,8 +270,8 @@ mod tests {
             "alignment",
             "none",
         ] {
-            assert_eq!(SequenceFilter::from_str(v).as_str(), v);
+            assert_eq!(SequenceFilter::parse(v).as_str(), v);
         }
-        assert_eq!(SequenceFilter::from_str("unknown"), SequenceFilter::All);
+        assert_eq!(SequenceFilter::parse("unknown"), SequenceFilter::All);
     }
 }

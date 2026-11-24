@@ -378,7 +378,7 @@ fn count_sequences(file_path: &Path, is_gzip: bool) -> usize {
     };
 
     let mut count = 0;
-    for line in reader.lines().flatten() {
+    for line in reader.lines().map_while(Result::ok) {
         if line.starts_with('>') {
             count += 1;
         }

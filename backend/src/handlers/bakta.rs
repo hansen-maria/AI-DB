@@ -188,10 +188,7 @@ pub async fn ingest_bakta_results(
             .and_then(|job| job.sequences.as_ref())
             .map(|seqs| {
                 seqs.iter()
-                    .filter(|s| match s.annotation_source.as_deref() {
-                        None | Some("aidb_db") => true,
-                        _ => false,
-                    })
+                    .filter(|s| matches!(s.annotation_source.as_deref(), None | Some("aidb_db")))
                     .filter_map(|s| s.md5_hash.as_ref().map(|h| (h.to_lowercase(), s.length)))
                     .collect()
             })

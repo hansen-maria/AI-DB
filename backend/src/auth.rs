@@ -6,9 +6,9 @@
 //!   1. Cookie `ai_db_user` (browsers; HttpOnly, set automatically on first job
 //!      submission).
 //!   2. API token (scripts, workflow systems, pipelines):
-//!        Authorization: Bearer <uuid-v4>
+//!      `Authorization: Bearer <uuid-v4>`
 //!      or
-//!        X-API-Key: <uuid-v4>
+//!      `X-API-Key: <uuid-v4>`
 //!      API clients generate the token themselves (any random UUIDv4, e.g.
 //!      `uuidgen`) and send it with every request. No cookie handling needed.
 //!

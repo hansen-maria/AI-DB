@@ -50,7 +50,7 @@ pub async fn download_job(
     Query(filter_query): Query<SequenceFilterQuery>,
 ) -> impl IntoResponse {
     // Parse format
-    let format = match DownloadFormat::from_str(&format_str) {
+    let format = match DownloadFormat::parse(&format_str) {
         Some(f) => f,
         None => {
             return (
@@ -69,7 +69,7 @@ pub async fn download_job(
         basic: filter_query
             .filter
             .as_deref()
-            .map(SequenceFilter::from_str)
+            .map(SequenceFilter::parse)
             .unwrap_or(SequenceFilter::All),
         search: filter_query.search.filter(|s| !s.is_empty()),
         min_length: filter_query.min_length,

@@ -630,7 +630,7 @@ pub fn ensure_annotations_schema(conn: &Connection) -> Result<(), rusqlite::Erro
     // first connections (several jobs starting at once) do not both try to
     // create and seed the table; the loser sees it and returns.
     let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?;
-    if table_exists(&*tx, "hash_sightings")? {
+    if table_exists(&tx, "hash_sightings")? {
         return Ok(());
     }
     tx.execute_batch(
@@ -644,7 +644,7 @@ pub fn ensure_annotations_schema(conn: &Connection) -> Result<(), rusqlite::Erro
     )?;
 
     let now = Utc::now().to_rfc3339();
-    let seeded = if table_exists(&*tx, "annotation_submissions")? {
+    let seeded = if table_exists(&tx, "annotation_submissions")? {
         tx.execute(
             "INSERT OR IGNORE INTO hash_sightings (hash, seen_count, first_seen_at, last_seen_at)
              SELECT u.hash,
@@ -1250,9 +1250,9 @@ mod annotations_db_tests {
     fn counter_increments_once_per_job() {
         let conn = db();
         let e = entry(H, Some("dnaK"), "chaperone");
-        ingest_custom_annotations(&conn, &[e.clone()], "j1").unwrap();
+        ingest_custom_annotations(&conn, std::slice::from_ref(&e), "j1").unwrap();
         // same job again (e.g. auto-save + manual save): not counted twice
-        ingest_custom_annotations(&conn, &[e.clone()], "j1").unwrap();
+        ingest_custom_annotations(&conn, std::slice::from_ref(&e), "j1").unwrap();
         assert_eq!(seen_count(&conn), 1);
         // lookup hits of other jobs, duplicates within one job count once
         let counts = record_sightings(&conn, &[hash(), hash()], "j2").unwrap();
