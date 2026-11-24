@@ -145,6 +145,19 @@ pub enum Command {
         #[arg(long, value_name = "DURATION", value_parser = parse_duration)]
         max_wait: Option<Duration>,
     },
+
+    /// Print a shell completion script
+    ///
+    /// bash:        aidb completions bash > ~/.local/share/bash-completion/completions/aidb
+    /// zsh:         aidb completions zsh > ~/.zfunc/_aidb   (with fpath+=~/.zfunc in ~/.zshrc)
+    /// fish:        aidb completions fish > ~/.config/fish/completions/aidb.fish
+    /// PowerShell:  aidb completions powershell >> $PROFILE
+    #[command(verbatim_doc_comment)]
+    Completions {
+        /// Shell to generate the script for
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
 }
 
 /// Where and in which formats results are saved.
@@ -596,6 +609,21 @@ mod tests {
         assert!(Cli::try_parse_from(["aidb", "download", job, "--ec-class", "9"]).is_err());
         assert!(Cli::try_parse_from(["aidb", "jobs", "--all", "--limit", "5"]).is_err());
         assert!(Cli::try_parse_from(["aidb", "annotate"]).is_err());
+    }
+
+    #[test]
+    fn completions_are_generated_for_every_shell() {
+        use clap_complete::Shell;
+        for shell in [Shell::Bash, Shell::Zsh, Shell::Fish, Shell::PowerShell] {
+            let cli = Cli::try_parse_from(["aidb", "completions", &shell.to_string()]).unwrap();
+            assert!(matches!(cli.command, Command::Completions { shell: s } if s == shell));
+            let mut script = Vec::new();
+            clap_complete::generate(shell, &mut Cli::command(), "aidb", &mut script);
+            let script = String::from_utf8(script).unwrap();
+            assert!(script.contains("aidb"), "{shell}");
+            assert!(script.contains("annotate"), "{shell}");
+        }
+        assert!(Cli::try_parse_from(["aidb", "completions", "tcsh"]).is_err());
     }
 
     #[test]

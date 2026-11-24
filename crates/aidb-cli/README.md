@@ -3,7 +3,34 @@
 Command-line client for [AI-DB](https://ai-db.computational.bio), the hash-based,
 alignment-free annotation service for bacterial proteins.
 
-> Work in progress (currently: v0.1). 
+> Work in progress (currently: v0.1).
+
+## Installation
+
+Prebuilt binaries for Linux (static, also for HPC nodes), macOS and Windows are
+attached to the [GitHub releases](https://github.com/hansen-maria/AI-DB/releases)
+(tags `aidb-cli-v…`), each with a one-line installer:
+
+```bash
+# Linux / macOS – the exact command is shown in the release notes
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/hansen-maria/AI-DB/releases/download/aidb-cli-v0.1.0/aidb-cli-installer.sh | sh
+```
+
+From source (Rust toolchain required):
+
+```bash
+cargo install --locked --git https://github.com/hansen-maria/AI-DB aidb-cli
+```
+
+### Shell completions
+
+```bash
+aidb completions bash > ~/.local/share/bash-completion/completions/aidb
+aidb completions zsh  > ~/.zfunc/_aidb        # with fpath+=~/.zfunc in ~/.zshrc
+aidb completions fish > ~/.config/fish/completions/aidb.fish
+aidb completions powershell >> $PROFILE
+```
 
 ## Access token
 

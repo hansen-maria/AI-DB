@@ -46,3 +46,8 @@ time = "0.3"
 # OpenAPI documentation
 utoipa = { version = "5.4.0", features = ["axum_extras", "chrono"] }
 utoipa-swagger-ui = { version = "9.0.2", features = ["axum"] }
+
+# The web service is deployed with Docker, not released as a binary:
+# keep it out of the `dist` (cargo-dist) GitHub releases of the CLI
+[package.metadata.dist]
+dist = false

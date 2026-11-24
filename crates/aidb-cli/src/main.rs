@@ -22,7 +22,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use aidb_client::Client;
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 
 use crate::cli::{AuthCommand, Cli, Command, DbCommand, JobCommand};
 use crate::commands::annotate::AnnotateArgs;
@@ -54,6 +54,13 @@ async fn run(cli: Cli) -> Result<()> {
         quiet,
         command,
     } = cli;
+
+    // Needs neither a server nor a token
+    if let Command::Completions { shell } = command {
+        clap_complete::generate(shell, &mut Cli::command(), "aidb", &mut std::io::stdout());
+        return Ok(());
+    }
+
     // Canonical form: the key for saved tokens and the base for all requests
     let server = aidb_client::normalize_server_url(&server)?.to_string();
 
@@ -67,6 +74,7 @@ async fn run(cli: Cli) -> Result<()> {
     };
 
     match command {
+        Command::Completions { .. } => {} // handled above
         Command::Status => commands::status::run(&client(None)?, output).await?,
         Command::Db(DbCommand::Info) => commands::db::info(&client(None)?, output).await?,
         Command::Auth(auth) => {

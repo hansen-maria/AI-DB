@@ -5,6 +5,8 @@ description = "Command-line client for AI-DB, hash-based annotation of bacterial
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage = "https://ai-db.computational.bio"
+readme = "README.md"
 
 [[bin]]
 name = "aidb"
@@ -13,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 aidb-client = { workspace = true }
 clap = { workspace = true }
+clap_complete = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
