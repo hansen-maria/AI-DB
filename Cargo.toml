@@ -16,7 +16,7 @@ repository = "https://github.com/hansen-maria/AI-DB"
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
-utoipa = { version = "5.4.0", features = ["chrono"] }
+utoipa = { version = "6.0.0", features = ["chrono"] }
 aidb-types = { path = "crates/aidb-types" }
 aidb-client = { path = "crates/aidb-client" }
 
