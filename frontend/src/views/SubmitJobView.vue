@@ -325,10 +325,11 @@ MRYILAAVLLPMFAQSYKVDQTGSGPKNTFFINSNQTGVPEQYGDL"
     <div class="info-box">
       <h4>How it works</h4>
       <ol>
-        <li>Upload your FASTA file or paste sequences directly</li>
-        <li>Sequences are converted to MD5 hashes for privacy</li>
-        <li>Hashes are matched against our annotation database</li>
-        <li>Unmatched sequences fall back to Diamond alignment</li>
+        <li>Upload a FASTA file or paste <strong>protein</strong> sequences. DNA/RNA input is accepted, but won't produce hash matches.</li>
+        <li>Each sequence is reduced to an MD5 digest of its full length, following the identification scheme of Bakta.</li>
+        <li>Digests are looked up in a fixed order: first the Bakta reference database, then AI-DB's own index (AI-DB · BakRep and AI-DB · Community). No alignment is computed.</li>
+        <li>Identified proteins are returned with their existing annotations. The source of each match is shown in the results.</li>
+        <li>Unmatched sequences are listed separately. You decide whether to pass them on to Bakta or Psos. AI-DB never does this automatically.</li>
       </ol>
     </div>
   </div>
